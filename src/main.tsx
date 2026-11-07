@@ -4,6 +4,7 @@ import { App } from "./App";
 import { DesktopWidget } from "./DesktopWidget";
 import { AttentionWidget } from "./AttentionWidget";
 import { installClickSounds } from "./soundEffects";
+import { installDiagnostics, reportDiagnostic } from "./diagnostics";
 import "./styles.css";
 
 function Root() {
@@ -28,7 +29,13 @@ function Root() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(
+installDiagnostics();
+
+createRoot(document.getElementById("root")!, {
+  onUncaughtError: (error) => reportDiagnostic("react_error", error),
+  onCaughtError: (error) => reportDiagnostic("react_error", error),
+  onRecoverableError: (error) => reportDiagnostic("react_error", error),
+}).render(
   <StrictMode>
     <Root />
   </StrictMode>,

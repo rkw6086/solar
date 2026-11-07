@@ -27,6 +27,17 @@ struct RunContext {
     model_origin: Option<HistoryOrigin>,
 }
 
+// Keep diagnostics independent of model context: identifiers and outcomes only.
+// In particular, never pass prompts, arguments, results, or rendered task summaries.
+fn task_event(task: &Task, level: &str, event: &str, message: &str, details: Value) {
+    let mut context = details.as_object().cloned().unwrap_or_default();
+    context.insert("task_id".into(), json!(task.id));
+    context.insert("conversation_id".into(), json!(task.conversation_id));
+    context.insert("orbit_id".into(), json!(task.orbit_id));
+    context.insert("provider_run_id".into(), json!(task.id));
+    crate::remote_logging::event(level, event, message, Value::Object(context));
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct HistoryOrigin {
     provider_id: String,
@@ -64,6 +75,13 @@ impl Drop for TaskGuard {
             task.status = "cancelled".into();
             task.summary = "Stopped".into();
             let _ = self.engine.store.put("tasks", &task.id, &task);
+            task_event(
+                &task,
+                "info",
+                "task_cancelled",
+                "Task cancelled during cleanup",
+                json!({"status": task.status}),
+            );
             self.engine.changed();
         }
     }
@@ -176,12 +194,18 @@ impl Engine {
             .get(task_id)
         {
             token.cancel();
+            crate::remote_logging::event(
+                "info",
+                "task_cancel_requested",
+                "Task cancellation requested",
+                json!({"task_id": task_id}),
+            );
         }
         Ok(())
     }
 
     pub fn resolve_approval(&self, approval_id: &str, allow: bool) -> Result<(), String> {
-        let (_, sender) = self
+        let (approval, sender) = self
             .approvals
             .lock()
             .map_err(|_| "Approval lock unavailable")?
@@ -190,12 +214,27 @@ impl Engine {
         sender
             .send(allow)
             .map_err(|_| "This task is no longer waiting")?;
+        crate::remote_logging::event(
+            "info",
+            "approval_decided",
+            "User answered a tool approval",
+            json!({
+                "task_id": approval.task_id,
+                "orbit_id": approval.orbit_id,
+                "approval_id": approval.id,
+                "tool_name": approval.tool,
+                "allowed": allow,
+            }),
+        );
         self.changed();
         Ok(())
     }
 
     fn update_task(&self, task: &Task) -> Result<(), String> {
         self.store.put("tasks", &task.id, task)?;
+        if task.status == "queued" {
+            task_event(task, "info", "task_queued", "Task queued", json!({}));
+        }
         if task.status != "waiting" {
             self.clear_approval_attention(&task.id);
         }
@@ -279,6 +318,7 @@ impl Engine {
         mut ctx: RunContext,
     ) -> BoxFuture<'static, Result<String, String>> {
         Box::pin(async move {
+            let started = Instant::now();
             let _cleanup = TaskGuard {
                 engine: self.clone(),
                 task_id: ctx.task.id.clone(),
@@ -295,9 +335,18 @@ impl Engine {
                 ctx.task.status = "running".into();
                 if let Some(user_id) = &ctx.user_message_id { ctx.history = self.history_for(&ctx.conversation, &ctx.task.orbit_id, user_id)?; }
                 self.update_task(&ctx.task)?;
+                task_event(&ctx.task, "info", "task_started", "Task started", json!({
+                    "delegation_depth": ctx.ancestry.len().saturating_sub(1),
+                    "origin_orbit_id": ctx.origin,
+                }));
                 self.clone().drive_run(&mut ctx).await
             }.await;
-            self.finish_task(&mut ctx.task, result, ctx.ancestry.len() == 1)
+            self.finish_task(
+                &mut ctx.task,
+                result,
+                ctx.ancestry.len() == 1,
+                started.elapsed(),
+            )
         })
     }
 
@@ -306,6 +355,7 @@ impl Engine {
         task: &mut Task,
         result: Result<String, String>,
         notify_completion: bool,
+        duration: Duration,
     ) -> Result<String, String> {
         match &result {
             Ok(_) => {
@@ -335,6 +385,17 @@ impl Engine {
             }
         }
         self.update_task(task)?;
+        task_event(
+            task,
+            if task.status == "failed" {
+                "error"
+            } else {
+                "info"
+            },
+            "task_finished",
+            "Task finished",
+            json!({"status": task.status, "duration_ms": duration.as_millis()}),
+        );
         if task.status == "failed" || (task.status == "completed" && notify_completion) {
             let _ = self.request_attention(AttentionItem {
                 id: format!("task:{}", task.id),
@@ -424,9 +485,45 @@ impl Engine {
                     request.system_prompt = Some(self.system_prompt(&orbit, &ctx.conversation)?);
                     request.tools = tools.clone();
                     request.conversation_id = Some(ctx.conversation.id.clone());
+                    let started = Instant::now();
+                    task_event(
+                        &ctx.task,
+                        "info",
+                        "model_call_started",
+                        "Model call started",
+                        json!({
+                            "work_id": call.work_id,
+                            "provider_id": orbit.provider_id,
+                            "model": orbit.model,
+                            "retry_attempt": call.retry_attempt,
+                            "tool_count": tools.len(),
+                        }),
+                    );
                     let completed = self.model_turn(ctx, runtime.clone(), request).await;
                     match completed {
                         Ok(turn) => {
+                            task_event(
+                                &ctx.task,
+                                "info",
+                                "model_call_finished",
+                                "Model call finished",
+                                json!({
+                                    "work_id": call.work_id,
+                                    "retry_attempt": call.retry_attempt,
+                                    "duration_ms": started.elapsed().as_millis(),
+                                    "tool_call_count": turn.tool_calls.len(),
+                                    "usage": turn.usage,
+                                    "stop_reason": match &turn.stop_reason {
+                                        StopReason::Completed => "completed",
+                                        StopReason::Cancelled => "cancelled",
+                                        StopReason::MaxTokens => "max_tokens",
+                                        StopReason::ContextWindowExceeded => "context_window_exceeded",
+                                        StopReason::Refusal => "refusal",
+                                        StopReason::ToolLoopLimit => "tool_loop_limit",
+                                        StopReason::Other(_) => "other",
+                                    },
+                                }),
+                            );
                             final_text = turn
                                 .assistant_content
                                 .iter()
@@ -443,10 +540,34 @@ impl Engine {
                                 .map_err(|e| e.to_string())?;
                         }
                         Err(error) => {
+                            task_event(
+                                &ctx.task,
+                                "warn",
+                                "model_call_failed",
+                                "Model call failed",
+                                json!({
+                                    "work_id": call.work_id,
+                                    "retry_attempt": call.retry_attempt,
+                                    "duration_ms": started.elapsed().as_millis(),
+                                    "error_kind": error.kind,
+                                    "recoverable": error.recoverable,
+                                }),
+                            );
                             let disposition = run
                                 .register_model_failure(&call.work_id, error)
                                 .map_err(|e| e.to_string())?;
                             if matches!(disposition, ModelFailureDisposition::RetryScheduled) {
+                                task_event(
+                                    &ctx.task,
+                                    "info",
+                                    "model_retry_scheduled",
+                                    "Model retry scheduled",
+                                    json!({
+                                        "work_id": call.work_id,
+                                        "retry_attempt": call.retry_attempt + 1,
+                                        "delay_seconds": 2u64.pow(call.retry_attempt.min(4)),
+                                    }),
+                                );
                                 tokio::select! { _ = ctx.token.cancelled() => return Err("Cancelled".into()), _ = tokio::time::sleep(Duration::from_secs(2u64.pow(call.retry_attempt.min(4)))) => {} }
                             }
                         }
@@ -464,14 +585,43 @@ impl Engine {
                         if ctx.token.is_cancelled() {
                             return Err("Cancelled".into());
                         }
+                        let started = Instant::now();
                         let result = if allowed {
                             run.start_tool(&batch.work_id, &call.id)
                                 .map_err(|e| e.to_string())?;
                             self.checkpoint(ctx, run)?;
+                            task_event(
+                                &ctx.task,
+                                "info",
+                                "tool_started",
+                                "Tool execution started",
+                                json!({
+                                    "work_id": batch.work_id,
+                                    "tool_call_id": call.id,
+                                    "tool_name": call.name,
+                                }),
+                            );
                             self.execute_tool(ctx, call).await
                         } else {
                             Err("Permission denied for this tool or task scope".into())
                         };
+                        task_event(
+                            &ctx.task,
+                            if result.is_err() && allowed {
+                                "warn"
+                            } else {
+                                "info"
+                            },
+                            "tool_finished",
+                            "Tool execution finished",
+                            json!({
+                                "work_id": batch.work_id,
+                                "tool_call_id": call.id,
+                                "tool_name": call.name,
+                                "status": if !allowed { "denied" } else if result.is_ok() { "success" } else { "error" },
+                                "duration_ms": started.elapsed().as_millis(),
+                            }),
+                        );
                         let (content, images, status) = match result {
                             Ok(output) => {
                                 failures = 0;
@@ -895,6 +1045,18 @@ impl Engine {
             created_at: now(),
         });
         self.changed();
+        let started = Instant::now();
+        task_event(
+            &ctx.task,
+            "info",
+            "approval_requested",
+            "Tool approval requested",
+            json!({
+                "approval_id": approval.id,
+                "tool_call_id": call.id,
+                "tool_name": call.name,
+            }),
+        );
         let allowed = tokio::select! { _ = ctx.token.cancelled() => false, response = rx => response.unwrap_or(false) };
         self.approvals
             .lock()
@@ -904,11 +1066,26 @@ impl Engine {
         self.update_task(&ctx.task)?;
         self.changed();
         // Revocations made while an approval was open take precedence over that approval.
-        Ok(allowed
+        let allowed = allowed
             && self
                 .scope_orbits(ctx)?
                 .iter()
-                .all(|orbit| granted(orbit, &call.name)))
+                .all(|orbit| granted(orbit, &call.name));
+        task_event(
+            &ctx.task,
+            "info",
+            "approval_resolved",
+            "Tool approval resolved",
+            json!({
+                "approval_id": approval.id,
+                "tool_call_id": call.id,
+                "tool_name": call.name,
+                "allowed": allowed,
+                "cancelled": ctx.token.is_cancelled(),
+                "duration_ms": started.elapsed().as_millis(),
+            }),
+        );
+        Ok(allowed)
     }
 
     async fn execute_tool(

@@ -1,8 +1,12 @@
 mod attention;
 pub mod engine;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod logging_credentials;
 pub mod model;
 mod onboarding;
 mod profile_config;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod remote_logging;
 #[cfg(any(feature = "desktop", test))]
 mod reset;
 mod routines;
@@ -21,6 +25,8 @@ mod desktop;
 mod desktop_attention;
 #[cfg(feature = "desktop")]
 mod desktop_intro;
+#[cfg(feature = "desktop")]
+mod desktop_logging;
 #[cfg(feature = "desktop")]
 mod desktop_onboarding;
 #[cfg(any(feature = "desktop", test))]

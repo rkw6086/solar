@@ -59,7 +59,22 @@ This build presents a Solar-owned overlay, including on Golden Gate. Apple's nat
 - **ChatGPT subscription** uses native Rust/Rig streaming with Solar-owned OAuth and credential refresh, adapted from Galaxy.
 - **Claude subscription** uses Galaxy's native Rig Messages compatibility path. It is experimental and unsupported by Anthropic for third-party subscription use. The application requires explicit enablement and displays the possible account/access restriction warning.
 
-API keys and OAuth tokens stay in macOS Keychain. They are excluded from TOML configuration, profile exports, SQLite records, and diagnostic error text. Linux development uses session-only credential storage. No model connection is automatically replaced with a paid alternative.
+Provider API keys and OAuth tokens stay in macOS Keychain. They are excluded from TOML configuration, profile exports, SQLite records, and diagnostic error text. Linux development uses session-only credential storage. No model connection is automatically replaced with a paid alternative.
+
+## Remote diagnostics
+
+The desktop app sends operational diagnostics to `https://logging.ryserve.net/api/logs`, using Galaxy's `x-api-key` protocol and the `solar` service name. This includes startup/shutdown, frontend errors, task/model/tool outcomes, approval decisions, durations, usage counts, and correlation IDs. Each event identifies the build and process session. Chat messages, prompts, tool arguments/results, and provider credentials are excluded; errors are bounded and credential-like values are redacted.
+
+For this development build, the shared RyServe logging credential is bundled in the Rust code. Set `RYSERVE_LOGGING_KEY` in the app process's environment to override it; explicitly setting it to an empty string disables remote logging. A Finder-launched app uses the bundled fallback unless that environment variable is supplied to the app process.
+
+```sh
+export RYSERVE_LOGGING_KEY='your-logging-key'
+corepack pnpm tauri dev
+# Or disable remote logging for this launch:
+RYSERVE_LOGGING_KEY='' corepack pnpm tauri dev
+```
+
+Delivery runs on a separate worker with a bounded in-memory queue, short timeouts, and limited retries. An unavailable logging service does not block the UI or tasks, and undelivered events are not written to disk. Transport tests use a local mock server, without sending development test data to RyServe.
 
 ## Tools and permissions
 

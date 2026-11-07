@@ -351,6 +351,12 @@ fn set_desktop_expanded(
                     .unwrap_or(false);
                 if !ready {
                     eprintln!("Desktop widget did not become ready: {}", window.label());
+                    crate::remote_logging::event(
+                        "warn",
+                        "widget_ready_timeout",
+                        "A desktop widget did not become ready",
+                        serde_json::json!({"window": window.label()}),
+                    );
                 }
                 ready
             });
@@ -599,6 +605,13 @@ pub(crate) fn restart_after_reset(app: &tauri::AppHandle) {
 }
 
 pub fn run() {
+    crate::remote_logging::init();
+    crate::remote_logging::event(
+        "info",
+        "app_starting",
+        "Solar is starting",
+        serde_json::json!({}),
+    );
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -611,6 +624,12 @@ pub fn run() {
                 crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
             }
             let engine = Engine::open(data_dir).map_err(std::io::Error::other)?;
+            crate::remote_logging::event(
+                "info",
+                "app_ready",
+                "Solar storage and engine are ready",
+                serde_json::json!({}),
+            );
             let mut events = engine.subscribe();
             app.manage(engine.clone());
             let app_handle = app.handle().clone();
@@ -755,6 +774,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::desktop_logging::report_frontend_event,
             crate::desktop_onboarding::reset_solar,
             crate::desktop_onboarding::save_onboarding_progress,
             crate::desktop_onboarding::complete_onboarding,
@@ -813,6 +833,13 @@ pub fn run() {
                     tauri::async_runtime::spawn(async move {
                         let _ =
                             tokio::time::timeout(Duration::from_secs(5), engine.shutdown()).await;
+                        crate::remote_logging::event(
+                            "info",
+                            "app_stopped",
+                            "Solar shut down",
+                            serde_json::json!({}),
+                        );
+                        crate::remote_logging::flush(Duration::from_secs(2)).await;
                         app.exit(0);
                     });
                 }

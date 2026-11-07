@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { reportDiagnostic } from "./diagnostics";
 import type {
   AttentionItem,
   AttentionState,
@@ -411,7 +412,14 @@ export async function api<T = void>(
   command: string,
   args: Record<string, unknown> = {},
 ): Promise<T> {
-  if (native) return invoke<T>(command, args);
+  if (native) {
+    try {
+      return await invoke<T>(command, args);
+    } catch (error) {
+      reportDiagnostic("command_failed", error, { command });
+      throw error;
+    }
+  }
   return previewCommand(command, args) as Promise<T>;
 }
 
