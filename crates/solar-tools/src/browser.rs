@@ -1,6 +1,7 @@
 use crate::shell::ProcessGroup;
 use crate::{
-    ToolContext, ToolDefinition, ToolImage, ToolOutput, definition, http_url, required_str,
+    ToolContext, ToolDefinition, ToolImage, ToolOutput, definition, http_url, managed_environment,
+    managed_subdirectory, required_str,
 };
 use base64::Engine;
 use futures::{SinkExt, StreamExt};
@@ -54,7 +55,6 @@ pub fn definitions() -> Vec<ToolDefinition> {
 }
 
 pub struct BrowserManager {
-    directory: PathBuf,
     sessions: HashMap<String, BrowserSession>,
 }
 
@@ -63,9 +63,8 @@ impl BrowserManager {
         self.sessions.clear();
     }
 
-    pub fn new(directory: PathBuf) -> Self {
+    pub fn new() -> Self {
         Self {
-            directory,
             sessions: HashMap::new(),
         }
     }
@@ -79,19 +78,16 @@ impl BrowserManager {
         if !context.allow_host_execution {
             return Err("Browser automation launches a host browser and requires this Orbit's explicit host-execution grant".into());
         }
+        let directory = profile_directory(context)?;
+        if self
+            .sessions
+            .get(&context.orbit_id)
+            .is_some_and(|session| session.directory != directory)
+        {
+            self.sessions.remove(&context.orbit_id);
+        }
         if !self.sessions.contains_key(&context.orbit_id) {
-            // Stable per-Orbit identity without permitting path components from a profile id.
-            let encoded_id = context
-                .orbit_id
-                .as_bytes()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            if encoded_id.len() > 200 {
-                return Err("Orbit identifier is too long for a browser profile".into());
-            }
-            let directory = self.directory.join(encoded_id);
-            let session = BrowserSession::launch(&directory).await?;
+            let session = BrowserSession::launch(&directory, &context.data_directory).await?;
             self.sessions.insert(context.orbit_id.clone(), session);
         }
         let session = self
@@ -172,7 +168,12 @@ impl BrowserManager {
     }
 }
 
+fn profile_directory(context: &ToolContext) -> Result<PathBuf, String> {
+    managed_subdirectory(&context.data_directory, "browser")
+}
+
 struct BrowserSession {
+    directory: PathBuf,
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     session_id: String,
     next_id: u64,
@@ -182,15 +183,14 @@ struct BrowserSession {
 }
 
 impl BrowserSession {
-    async fn launch(directory: &Path) -> Result<Self, String> {
-        tokio::fs::create_dir_all(directory)
-            .await
-            .map_err(|e| e.to_string())?;
+    async fn launch(directory: &Path, data_directory: &Path) -> Result<Self, String> {
+        let environment = managed_environment(data_directory)?;
         let active_port = directory.join("DevToolsActivePort");
         let _ = tokio::fs::remove_file(&active_port).await;
         let executable = browser_executable().ok_or("A compatible Chrome or Chromium installation is required. Set SOLAR_BROWSER_EXECUTABLE to its executable path if detection fails.")?;
         let mut command = tokio::process::Command::new(executable);
         command
+            .envs(environment)
             .arg(format!("--user-data-dir={}", directory.display()))
             .args([
                 "--remote-debugging-port=0",
@@ -232,6 +232,7 @@ impl BrowserSession {
             .await
             .map_err(|e| e.to_string())?;
         let mut browser = Self {
+            directory: directory.to_owned(),
             socket,
             session_id: String::new(),
             next_id: 0,
@@ -371,4 +372,59 @@ fn browser_executable() -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(root: &Path, id: &str) -> ToolContext {
+        ToolContext {
+            orbit_id: id.into(),
+            data_directory: root.into(),
+            workspace: root.join("workspace"),
+            allowed_roots: Vec::new(),
+            allow_host_execution: false,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+        }
+    }
+
+    #[test]
+    fn browser_profiles_live_beneath_each_orbit_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let first = context(&root.path().join("sol"), "first");
+        let second = context(&root.path().join("lyra"), "second");
+        let first_profile = profile_directory(&first).unwrap();
+        let second_profile = profile_directory(&second).unwrap();
+        assert_eq!(first_profile, first.data_directory.join("browser"));
+        assert_eq!(second_profile, second.data_directory.join("browser"));
+        assert_ne!(first_profile, second_profile);
+    }
+
+    #[tokio::test]
+    async fn denied_browser_use_does_not_create_a_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let orbit = context(&root.path().join("sol"), "first");
+        let result = BrowserManager::new()
+            .execute(
+                "browser_open",
+                &json!({"url":"https://example.com"}),
+                &orbit,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(!orbit.data_directory.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn browser_profile_cannot_redirect_through_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let orbit = context(root.path(), "first");
+        std::os::unix::fs::symlink(outside.path(), root.path().join("browser")).unwrap();
+        assert!(profile_directory(&orbit).is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
 }

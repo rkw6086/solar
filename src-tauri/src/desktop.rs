@@ -422,6 +422,7 @@ pub(crate) fn open_orbit_chat(
         WebviewUrl::App(format!("index.html#chat/{orbit_id}").into()),
     )
     .title(format!("{} · Solar", orbit.name))
+    .incognito(true)
     .background_color(tauri::webview::Color(22, 31, 36, 255))
     .inner_size(410.0, 560.0)
     .min_inner_size(320.0, 400.0)
@@ -486,6 +487,7 @@ fn create_companion(
         WebviewUrl::App(format!("index.html#{route}").into()),
     )
     .title("Solar")
+    .incognito(true)
     .inner_size(size, size)
     .position(x, y)
     .transparent(true)
@@ -601,8 +603,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
-            crate::reset::apply_pending_reset(&data_dir).map_err(std::io::Error::other)?;
+            let home_dir = app.path().home_dir()?;
+            let data_dir =
+                crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
+            if crate::reset::apply_pending_reset(&data_dir).map_err(std::io::Error::other)? {
+                crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
+            }
             let engine = Engine::open(data_dir).map_err(std::io::Error::other)?;
             let mut events = engine.subscribe();
             app.manage(engine.clone());

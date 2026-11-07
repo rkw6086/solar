@@ -223,6 +223,7 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
             WebviewUrl::App("index.html#attention".into()),
         )
         .title("Solar · Orbit attention")
+        .incognito(true)
         .inner_size(geometry.width, geometry.height)
         .position(geometry.x, geometry.y)
         .transparent(true)

@@ -1064,6 +1064,7 @@ impl Engine {
                     .map_err(|_| "Sharing lock unavailable")?
                     .contains(&orbit.id);
                 let context = ToolContext {
+                    data_directory: self.store.orbit_dir(&orbit.id)?,
                     orbit_id: orbit.id,
                     workspace,
                     allowed_roots: roots,

@@ -10,6 +10,13 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "appDirectoriesOverride": {
+      "config": "$HOME/.solar",
+      "data": "$HOME/.solar",
+      "localData": "$HOME/.solar/webview",
+      "cache": "$HOME/.solar/cache",
+      "log": "$HOME/.solar/logs"
+    },
     "windows": [{
       "label": "main",
       "title": "Solar",
@@ -18,6 +25,7 @@
       "minWidth": 850,
       "minHeight": 600,
       "backgroundColor": "#000000",
+      "incognito": true,
       "center": true
     }],
     "security": {

@@ -88,12 +88,12 @@ pub(crate) fn validate_text(value: &str, name: &str, max: usize) -> Result<(), S
 impl Engine {
     pub fn open(data_dir: PathBuf) -> Result<Arc<Self>, String> {
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-        let settings_store = Store::open(&data_dir.join("solar.sqlite"))?;
+        let settings_store = Store::open_profile(&data_dir)?;
         let (events, _) = broadcast::channel(256);
         let engine = Arc::new(Self {
             store: settings_store,
             providers: ProviderService::new(),
-            tools: ToolBroker::new(data_dir.join("tools"))?,
+            tools: ToolBroker::new(data_dir.clone())?,
             data_dir,
             events,
             active: Mutex::new(HashMap::new()),
@@ -118,6 +118,9 @@ impl Engine {
     fn seed(&self) -> Result<(), String> {
         if self.store.get::<bool>("meta", "initialized")?.is_some() {
             return Ok(());
+        }
+        if !self.store.list::<Orbit>("orbits")?.is_empty() {
+            return self.store.put("meta", "initialized", &true);
         }
         let tools = ["files", "web", "memory", "collaboration"];
         for (key, name, role, personality, color) in [
@@ -161,7 +164,9 @@ impl Engine {
             };
             self.store.put("orbits", key, &orbit)?;
         }
-        self.store.put("settings", "app", &Settings::default())?;
+        if self.store.get::<Settings>("settings", "app")?.is_none() {
+            self.store.put("settings", "app", &Settings::default())?;
+        }
         self.store.put("meta", "initialized", &true)
     }
 
@@ -295,8 +300,8 @@ impl Engine {
         {
             self.cancel_orbit_tasks(&orbit.id)?;
         }
-        std::fs::create_dir_all(self.workspace(&orbit.id)?).map_err(|e| e.to_string())?;
         self.store.put("orbits", &orbit.id, &orbit)?;
+        std::fs::create_dir_all(self.workspace(&orbit.id)?).map_err(|e| e.to_string())?;
         if !orbit.enabled {
             self.clear_orbit_attention(&orbit.id);
         }
@@ -352,7 +357,7 @@ impl Engine {
     }
     pub(crate) fn workspace(&self, orbit_id: &str) -> Result<PathBuf, String> {
         validate_id(orbit_id)?;
-        Ok(self.data_dir.join("workspaces").join(orbit_id))
+        Ok(self.store.orbit_dir(orbit_id)?.join("workspace"))
     }
 
     pub fn save_provider(&self, mut draft: ProviderDraft) -> Result<ProviderView, String> {

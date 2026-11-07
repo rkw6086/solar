@@ -59,7 +59,7 @@ This build presents a Solar-owned overlay, including on Golden Gate. Apple's nat
 - **ChatGPT subscription** uses native Rust/Rig streaming with Solar-owned OAuth and credential refresh, adapted from Galaxy.
 - **Claude subscription** uses Galaxy's native Rig Messages compatibility path. It is experimental and unsupported by Anthropic for third-party subscription use. The application requires explicit enablement and displays the possible account/access restriction warning.
 
-API keys and OAuth tokens stay in macOS Keychain. They are excluded from profile exports, SQLite records, and diagnostic error text. Linux development uses session-only credential storage. No model connection is automatically replaced with a paid alternative.
+API keys and OAuth tokens stay in macOS Keychain. They are excluded from TOML configuration, profile exports, SQLite records, and diagnostic error text. Linux development uses session-only credential storage. No model connection is automatically replaced with a paid alternative.
 
 ## Tools and permissions
 
@@ -75,7 +75,32 @@ MCP supports local stdio and remote Streamable HTTP. Add the server in Connectio
 
 ## Local data and task recovery
 
-Tauri's application-data directory contains `solar.sqlite`, private Orbit workspaces, and dedicated browser profiles. SQLite stores conversations, profiles, permissions, routines, and durable task checkpoints. Shared project memory is visible only to explicitly granted project members.
+Solar stores its managed files in `~/.solar`:
+
+```text
+~/.solar/
+  config.toml                 # Master settings, connections, MCP, projects, routines
+  solar.sqlite                # Shared conversations, project memory, task indexes
+  skills/                     # Shared skill files
+  mcp/<server-id>/             # Each local MCP server's home, cache, data and temp files
+  projects/                   # Managed shared-project data
+  cache/                      # Application cache
+  logs/                       # Application logs
+  orbits/<orbit-name>/
+    config.toml               # Role, personality, model, permissions, project grants
+    orbit.sqlite              # Private chat, memory, model history and run journals
+    workspace/                # Agent-created working files
+    skills/                   # Orbit-specific skill files
+    memory/                   # Additional local memory files
+    browser/                  # Dedicated browser profile
+    cache/                    # Tool caches (config/data/state/tmp are created as needed)
+```
+
+The master TOML contains `[settings]` and `[[providers]]`, `[[projects]]`, `[[mcp]]`, `[[routines]]`, and `[[orbits]]` entries. Each master Orbit entry maps its stable `id` to a directory; the corresponding `config.toml` contains `version = 1` and an `[orbit]` table. Configuration files are authoritative on startup, and settings changes made in Solar update them atomically. Close Solar before editing them directly, then restart to load changes. Invalid configuration is reported rather than overwritten.
+
+Orbit folder names come from their names, normalized to safe lowercase names; collisions receive a suffix. Changing an Orbit's display name keeps its directory stable so files, database handles, and browser sessions stay together. Shared conversations and project memory remain in the master database; private conversations, memories, and provider transcripts live in each Orbit's database. Shared project memory is visible only to explicitly granted project members. Directories use owner-only permissions on Unix. Connection secrets remain in Keychain as described above.
+
+Tauri cache/log paths also point beneath `~/.solar`. Launcher and widget webviews use nonpersistent browser storage; their actual state is saved by Rust. Shell and local MCP process home/cache/config/temp locations stay in the managed directories. This redirects normal storage paths, and does not sandbox host executables or move files in external project folders. Skill folders provide file storage; this change does not add automatic skill loading.
 
 Scheduled, folder-change, and task-completion routines run while Solar is running and the computer is awake. Missed intervals coalesce into one due run. Folder polling checks nested paths, skips symlinks, and supports up to 50,000 entries per watched project.
 

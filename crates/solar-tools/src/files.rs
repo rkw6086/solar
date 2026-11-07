@@ -253,6 +253,7 @@ mod tests {
         ToolContext {
             orbit_id: "test".into(),
             workspace: root.into(),
+            data_directory: root.into(),
             allowed_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,

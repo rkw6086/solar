@@ -13,7 +13,7 @@ mod shell;
 pub use mcp::{McpConfig, McpServerInfo, McpTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 pub use tokio_util::sync::CancellationToken;
 
@@ -27,6 +27,8 @@ pub struct ToolDefinition {
 #[derive(Clone, Debug)]
 pub struct ToolContext {
     pub orbit_id: String,
+    /// Trusted Solar-owned Orbit directory, separate from its file-tool workspace.
+    pub data_directory: PathBuf,
     pub workspace: PathBuf,
     pub allowed_roots: Vec<PathBuf>,
     pub allow_host_execution: bool,
@@ -68,15 +70,15 @@ pub struct ToolBroker {
 
 impl ToolBroker {
     pub fn new(data_dir: PathBuf) -> Result<Self, String> {
-        std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+        let data_dir = managed_directory(&data_dir)?;
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(45))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            browser: Mutex::new(browser::BrowserManager::new(data_dir.join("browsers"))),
-            mcp: mcp::McpManager::new(http.clone()),
+            browser: Mutex::new(browser::BrowserManager::new()),
+            mcp: mcp::McpManager::new(http.clone(), data_dir.join("mcp")),
             native: Mutex::new(native::NativeBridge::new()),
             http,
         })
@@ -201,6 +203,72 @@ impl ToolBroker {
         self.browser.lock().await.shutdown();
         self.native.lock().await.shutdown().await;
     }
+}
+
+/// Create a private owned directory without accepting a symlink at its root.
+/// The parent is supplied by Solar, never by tool arguments.
+pub(crate) fn managed_directory(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("Solar tool storage must use an absolute path".into());
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err("Solar tool storage must be a real directory".into());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(path).map_err(|error| error.to_string())?;
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    // Recheck after creation rather than trusting an existing path implicitly.
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Solar tool storage must be a real directory".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| error.to_string())?;
+    }
+    std::fs::canonicalize(path).map_err(|error| error.to_string())
+}
+
+pub(crate) fn managed_subdirectory(root: &Path, name: &str) -> Result<PathBuf, String> {
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("Invalid Solar tool storage name".into());
+    }
+    let root = managed_directory(root)?;
+    managed_directory(&root.join(name))
+}
+
+/// Storage locations for executables managed by Solar. These redirect normal
+/// app caches and preferences; they are not an OS sandbox for host tools.
+pub(crate) fn managed_environment(root: &Path) -> Result<Vec<(&'static str, PathBuf)>, String> {
+    let root = managed_directory(root)?;
+    let cache = managed_subdirectory(&root, "cache")?;
+    let config = managed_subdirectory(&root, "config")?;
+    let data = managed_subdirectory(&root, "data")?;
+    let state = managed_subdirectory(&root, "state")?;
+    let temporary = managed_subdirectory(&root, "tmp")?;
+    Ok(vec![
+        ("HOME", root.clone()),
+        ("XDG_CACHE_HOME", cache.clone()),
+        ("XDG_CONFIG_HOME", config.clone()),
+        ("XDG_DATA_HOME", data.clone()),
+        ("XDG_STATE_HOME", state),
+        ("TMPDIR", temporary.clone()),
+        ("TMP", temporary.clone()),
+        ("TEMP", temporary),
+        ("USERPROFILE", root),
+        ("APPDATA", config),
+        ("LOCALAPPDATA", data),
+    ])
 }
 
 pub(crate) fn definition(

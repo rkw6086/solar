@@ -1,10 +1,14 @@
 use crate::shell::ProcessGroup;
-use crate::{ToolContext, ToolDefinition, ToolImage, ToolOutput, http_url};
+use crate::{
+    ToolContext, ToolDefinition, ToolImage, ToolOutput, http_url, managed_environment,
+    managed_subdirectory,
+};
 use base64::Engine;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +65,7 @@ pub struct McpServerInfo {
 
 pub struct McpManager {
     http: reqwest::Client,
+    directory: PathBuf,
     clients: Mutex<HashMap<String, Arc<Mutex<McpClient>>>>,
 }
 
@@ -73,9 +78,10 @@ impl McpManager {
         }
     }
 
-    pub fn new(http: reqwest::Client) -> Self {
+    pub fn new(http: reqwest::Client, directory: PathBuf) -> Self {
         Self {
             http,
+            directory,
             clients: Mutex::new(HashMap::new()),
         }
     }
@@ -103,8 +109,13 @@ impl McpManager {
         {
             return Err("This MCP id collides with an existing server's tool namespace".into());
         }
-        let mut client =
-            McpClient::connect(config.clone(), self.http.clone(), allow_host_execution).await?;
+        let mut client = McpClient::connect(
+            config.clone(),
+            self.http.clone(),
+            allow_host_execution,
+            &self.directory,
+        )
+        .await?;
         client.load_tools().await?;
         let definitions = client.definitions();
         self.clients
@@ -244,6 +255,7 @@ impl McpClient {
         config: McpConfig,
         http: reqwest::Client,
         allow_host: bool,
+        directory: &Path,
     ) -> Result<Self, String> {
         let transport = match &config.transport {
             McpTransport::Stdio { command, args, env } => {
@@ -253,12 +265,17 @@ impl McpClient {
                             .into(),
                     );
                 }
+                let home = managed_subdirectory(directory, &config.id)?;
+                let environment = managed_environment(&home)?;
                 let mut command_builder = tokio::process::Command::new(command);
                 command_builder
                     .args(args)
+                    .current_dir(&home)
                     .env_clear()
                     .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                     .envs(env)
+                    // Storage roots cannot be redirected by a server's secret environment.
+                    .envs(environment)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null())
@@ -831,8 +848,12 @@ mod tests {
 
     #[tokio::test]
     async fn stdio_tool_round_trip_requires_host_grant() {
-        let manager = McpManager::new(reqwest::Client::new());
-        let script = r#"while IFS= read -r line; do
+        let storage = tempfile::tempdir().unwrap();
+        let manager = McpManager::new(reqwest::Client::new(), storage.path().join("mcp"));
+        let script = r#"test "$PWD" = "$HOME" || exit 10
+test -d "$XDG_CACHE_HOME" && test -d "$TMPDIR" || exit 11
+case "$XDG_CACHE_HOME" in "$HOME"/*) ;; *) exit 12 ;; esac
+while IFS= read -r line; do
 case "$line" in
 *'"method":"initialize"'*) printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}' ;;
 *'"method":"tools/list"'*) printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","description":"fixture","inputSchema":{"type":"object"}}]}}' ;;
@@ -845,7 +866,10 @@ done"#;
             transport: McpTransport::Stdio {
                 command: "/bin/sh".into(),
                 args: vec!["-c".into(), script.into()],
-                env: BTreeMap::new(),
+                env: BTreeMap::from([
+                    ("HOME".into(), "/unmanaged-home".into()),
+                    ("XDG_CACHE_HOME".into(), "/unmanaged-cache".into()),
+                ]),
             },
         };
         assert!(manager.connect(config.clone(), false).await.is_err());
@@ -855,6 +879,7 @@ done"#;
         let context = ToolContext {
             orbit_id: "test".into(),
             workspace: root.path().into(),
+            data_directory: root.path().into(),
             allowed_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -915,7 +940,8 @@ done"#;
                 }
             }
         });
-        let manager = McpManager::new(reqwest::Client::new());
+        let storage = tempfile::tempdir().unwrap();
+        let manager = McpManager::new(reqwest::Client::new(), storage.path().join("mcp"));
         manager
             .connect(
                 McpConfig {
@@ -934,6 +960,7 @@ done"#;
         let context = ToolContext {
             orbit_id: "test".into(),
             workspace: root.path().into(),
+            data_directory: root.path().into(),
             allowed_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,

@@ -45,6 +45,7 @@ impl Engine {
                 }
                 let context = solar_tools::ToolContext {
                     orbit_id: String::new(),
+                    data_directory: engine.data_dir.clone(),
                     workspace: engine.data_dir.clone(),
                     allowed_roots: Vec::new(),
                     allow_host_execution: false,

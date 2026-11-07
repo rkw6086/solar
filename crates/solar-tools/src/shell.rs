@@ -1,4 +1,6 @@
-use crate::{ToolContext, ToolDefinition, ToolOutput, definition, required_str};
+use crate::{
+    ToolContext, ToolDefinition, ToolOutput, definition, managed_environment, required_str,
+};
 use serde_json::{Value, json};
 use std::process::Stdio;
 use std::time::Duration;
@@ -32,6 +34,7 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
             .clamp(1, 300),
     );
     let workspace = std::fs::canonicalize(&context.workspace).map_err(|e| e.to_string())?;
+    let environment = managed_environment(&context.data_directory)?;
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg("-c")
         .arg(command)
@@ -41,6 +44,7 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
             "PATH",
             std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into()),
         )
+        .envs(environment)
         .env("HOME", &workspace)
         .env("LANG", "en_US.UTF-8")
         .env("TERM", "dumb")
@@ -114,12 +118,42 @@ async fn read_bounded(mut reader: impl AsyncRead + Unpin) -> Result<(String, boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shell_uses_orbit_storage_for_preferences_cache_and_temporary_files() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let context = ToolContext {
+            orbit_id: "test".into(),
+            data_directory: root.path().into(),
+            workspace: workspace.clone(),
+            allowed_roots: vec![],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+        };
+        let output = execute(
+            &json!({"command":"printf '%s\\n' \"$HOME\" \"$XDG_CACHE_HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$TMPDIR\""}),
+            &context,
+        ).await.unwrap();
+        let value: Value = serde_json::from_str(&output.content).unwrap();
+        let paths: Vec<_> = value["stdout"].as_str().unwrap().lines().collect();
+        assert_eq!(std::path::Path::new(paths[0]), workspace);
+        for path in &paths[1..] {
+            let path = std::path::Path::new(path);
+            assert!(path.starts_with(root.path()));
+            assert!(path.is_dir());
+        }
+    }
+
     #[tokio::test]
     async fn grants_output_and_timeout() {
         let root = tempfile::tempdir().unwrap();
         let mut ctx = ToolContext {
             orbit_id: "test".into(),
             workspace: root.path().into(),
+            data_directory: root.path().into(),
             allowed_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
@@ -154,6 +188,7 @@ mod tests {
         let ctx = ToolContext {
             orbit_id: "test".into(),
             workspace: root.path().into(),
+            data_directory: root.path().into(),
             allowed_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
