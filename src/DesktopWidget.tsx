@@ -62,6 +62,10 @@ export function DesktopWidget({
   const orbit = data.orbits.find((item) => item.id === orbitId);
 
   useEffect(() => {
+    document.documentElement.dataset.motion = data.settings.reducedMotion ? "reduced" : "full";
+  }, [data.settings.reducedMotion]);
+
+  useEffect(() => {
     if (!native || loading || error || type === "chat" || (type === "orbit" && !orbit)) return;
     void api("widget_ready").catch((reason) => setFailure(errorText(reason)));
   }, [loading, error, type, orbit?.id]);
@@ -184,11 +188,14 @@ export function DesktopWidget({
   const busy = data.tasks.some(
     (task) => task.orbitId === orbit.id && activeTask(task),
   );
+  const needsAttention =
+    Boolean(data.attentionItems?.some((item) => item.orbitId === orbit.id)) ||
+    data.approvals.some((approval) => approval.orbitId === orbit.id);
   return (
-    <div className="orbit-widget">
+    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`}>
       <button
         className="character-button"
-        aria-label={`Chat with ${orbit.name}`}
+        aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
         onPointerDown={drag.onPointerDown}
         onPointerMove={drag.onPointerMove}
         onClick={(event) => {
@@ -201,7 +208,9 @@ export function DesktopWidget({
         <Planet color={orbit.color} size={88} name={orbit.name} busy={busy} />
         <span className="orbit-widget-name">
           {orbit.name}
-          {busy && <span className="working-pip" />}
+          {needsAttention ? (
+            <span className="orbit-attention-pip" />
+          ) : busy && <span className="working-pip" />}
         </span>
       </button>
       {failure && <span className="widget-error">{failure}</span>}

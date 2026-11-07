@@ -71,6 +71,24 @@ export interface Approval {
   arguments: unknown;
 }
 
+export interface AttentionItem {
+  id: string;
+  orbitId: string;
+  taskId: string;
+  conversationId: string;
+  kind: "approval" | "failed" | "message";
+  title: string;
+  createdAt: string;
+}
+
+export interface AttentionState {
+  items: AttentionItem[];
+  current?: AttentionItem;
+  geometry: { width: number; height: number; notchWidth: number; notchHeight: number; mode: "notch" | "edge" };
+  reducedMotion: boolean;
+  soundEnabled: boolean;
+}
+
 export interface Memory {
   id: string;
   orbitId?: string;
@@ -94,6 +112,8 @@ export interface Routine {
 export interface Settings {
   reducedMotion?: boolean;
   desktopEnabled?: boolean;
+  attentionSound?: boolean;
+  attentionVolume?: number;
   [key: string]: unknown;
 }
 
@@ -121,6 +141,7 @@ export interface Bootstrap {
   mcpServers?: McpServer[];
   sharingOrbitIds?: string[];
   desktopExpanded?: boolean;
+  attentionItems?: AttentionItem[];
 }
 
 export const emptyBootstrap: Bootstrap = {

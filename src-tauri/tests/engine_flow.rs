@@ -129,7 +129,13 @@ async fn normal_entrypoint_waits_for_approval_executes_tool_and_preserves_follow
         .unwrap();
     let approval = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Some(approval) = engine.bootstrap().unwrap().approvals.first().cloned() {
+            if let Some(approval) = engine.bootstrap().unwrap().approvals.first().cloned()
+                && engine
+                    .attention_items()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item.id == format!("approval:{}", approval.id))
+            {
                 break approval;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -139,6 +145,14 @@ async fn normal_entrypoint_waits_for_approval_executes_tool_and_preserves_follow
     .unwrap();
     assert!(engine.memories(Some("assistant"), None).unwrap().is_empty());
     assert_eq!(approval.tool, "memory_save");
+    let alert = engine.attention_items().unwrap().remove(0);
+    assert_eq!(alert.kind, "approval");
+    assert_eq!(alert.task_id, first.id);
+    assert_eq!(alert.conversation_id, chat.id);
+    engine.dismiss_attention(&alert.id).unwrap();
+    assert!(engine.attention_items().unwrap().is_empty());
+    assert_eq!(engine.bootstrap().unwrap().approvals.len(), 1);
+    assert!(engine.memories(Some("assistant"), None).unwrap().is_empty());
     engine.resolve_approval(&approval.id, true).unwrap();
     finished(&engine, &first.id).await;
     assert_eq!(engine.memories(Some("assistant"), None).unwrap().len(), 1);
@@ -219,6 +233,68 @@ async fn cancelling_an_approval_preserves_tool_pairs_for_queued_followup() {
     );
     assert!(engine.memories(Some("assistant"), None).unwrap().is_empty());
     assert!(engine.bootstrap().unwrap().approvals.is_empty());
+    assert!(
+        engine
+            .attention_items()
+            .unwrap()
+            .iter()
+            .all(|item| item.task_id != first.id),
+        "cancelled tasks must not leave approval or completion alerts"
+    );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn disabled_and_deleted_orbits_do_not_leave_failure_alerts() {
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Missing connection".into(),
+            None,
+        )
+        .unwrap();
+
+    for remove in [false, true] {
+        let task = engine
+            .send_message(&chat.id, "A task without a model".into())
+            .unwrap();
+        let alert = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(alert) = engine
+                    .attention_items()
+                    .unwrap()
+                    .into_iter()
+                    .find(|item| item.task_id == task.id)
+                {
+                    break alert;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a model configuration failure should request attention");
+        assert_eq!(alert.kind, "failed");
+        assert_eq!(alert.conversation_id, chat.id);
+        if remove {
+            engine.delete_orbit("assistant").unwrap();
+        } else {
+            let mut orbit = engine.orbit("assistant").unwrap();
+            orbit.enabled = false;
+            engine.save_orbit(orbit.clone()).unwrap();
+            assert!(engine.attention_items().unwrap().is_empty());
+            assert!(
+                engine
+                    .send_message(&chat.id, "Still disabled".into())
+                    .is_err()
+            );
+            orbit.enabled = true;
+            engine.save_orbit(orbit).unwrap();
+        }
+        assert!(engine.attention_items().unwrap().is_empty());
+    }
     engine.shutdown().await;
 }
 

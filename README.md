@@ -6,19 +6,23 @@ Solar is a local Rust and Tauri application with a React/TypeScript interface. E
 
 ## Develop
 
-The primary target is Apple Silicon running macOS 14.2 or later. Install Rust, Node.js 22 or later, and Xcode command-line tools.
+The primary target is Apple Silicon running macOS 14.2 or later. Install Rust, Node.js 22.22.2+ or 24.15+ (LTS), and Xcode command-line tools.
+
+Use [Corepack](https://github.com/nodejs/corepack) to download and cache the exact pnpm version declared in `package.json`. If Corepack is missing or outdated, install it once with `npm install -g corepack@0.36.0` (Node.js 25+ no longer bundles Corepack).
 
 ```sh
-npm ci
-npm run tauri dev
+corepack pnpm install --frozen-lockfile
+corepack pnpm tauri dev
 ```
+
+`packageManager` pins pnpm with an integrity hash; `pnpm-lock.yaml` pins dependencies. Corepack selects the same pnpm release on every machine. The `corepack pnpm` commands work without installing pnpm globally or enabling command shims. If you prefer plain `pnpm` commands, run `corepack enable` once.
 
 The native preparation hook builds the Swift screen/accessibility helper and stages it as a Tauri sidecar. The helper is bundled with the application for distribution.
 
 For the browser-only UI preview, run the following and open the URL Vite prints.
 
 ```sh
-npm run dev
+corepack pnpm run dev
 ```
 
 The browser preview uses clearly labeled, isolated local sample data. Model calls and operating-system tools execute in the desktop application.
@@ -32,6 +36,12 @@ The browser preview uses clearly labeled, isolated local sample data. Model call
 5. Use **Bring Orbits to desktop**, or click the sun. Drag characters to place them and click one to open a mini-chat.
 
 The launcher closes into the menu bar. Quit from the menu-bar menu to stop Solar and its owned tool processes.
+
+When an Orbit needs permission, encounters a task problem, or finishes your request, it peeks down from the top of the display. Solar uses the built-in display when available, reads the actual camera-housing safe area, and keeps the character and controls below the notch. Displays without a notch use a top-center panel below the menu bar. Opening the alert takes you to the relevant conversation; dismissing it never approves a tool. Multiple alerts queue, with permission requests first.
+
+While the Orbits are collapsed, each Orbit plays its own stable, synthesized five-note signature. Every chime lasts **800 milliseconds**, including its release tail. **Settings → Attention sound** controls sound and volume, and the Orbit picker previews each character's alert. Reduced motion also applies to the peek animation. Sound playback uses macOS; browser/Linux previews show the animation without native audio playback.
+
+This build presents a Solar-owned overlay, including on Golden Gate. Apple's native [ActivityKit](https://developer.apple.com/documentation/activitykit) integration on macOS 27.3+ requires a separate WidgetKit extension; Solar does not currently ship that extension or control the system Dynamic Island.
 
 ## Connections
 
@@ -66,7 +76,7 @@ Orbit exports use versioned JSON. Imports receive a fresh identity, require new 
 ## Validate
 
 ```sh
-npm run build
+corepack pnpm run build
 cargo fmt --all -- --check
 cargo test --workspace --no-default-features
 cargo check -p solar
@@ -74,12 +84,12 @@ cargo check -p solar
 
 On Linux with Homebrew first in PATH, system GTK/WebKit discovery may need `PKG_CONFIG=/usr/bin/pkg-config`. The Rust application tests use loopback fixtures and dummy credentials.
 
-Native acceptance needs an actual Mac. Verify screen-picker cancellation/revocation, Accessibility controls, keyboard focus, transparent hit regions, expand/collapse animation, Spaces/fullscreen behavior, and mixed-scale displays before distributing a build. The Swift helper and macOS Keychain paths cannot be exercised on Linux.
+Native acceptance needs an actual Mac. Verify screen-picker cancellation/revocation, Accessibility controls, keyboard focus, transparent hit regions, expand/collapse animation, attention chimes and camera-housing placement, Spaces/fullscreen behavior, and mixed-scale displays before distributing a build. The Swift helper and macOS Keychain paths cannot be exercised on Linux.
 
 ## Package for macOS
 
 ```sh
-npm run tauri build -- --target aarch64-apple-darwin
+corepack pnpm tauri build --target aarch64-apple-darwin
 ```
 
 Configure Developer ID signing and Apple notarization credentials using Tauri's macOS distribution documentation. Release artifacts are produced under the target's `release/bundle` directory. Signing credentials are intentionally supplied by the developer's release environment.

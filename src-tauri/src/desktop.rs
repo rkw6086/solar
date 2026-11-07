@@ -191,6 +191,7 @@ fn save_settings(
         }
     }
     engine.changed();
+    crate::desktop_attention::refresh(&app);
     Ok(settings)
 }
 #[tauri::command]
@@ -235,7 +236,7 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn open_full_chat(app: tauri::AppHandle, conversation_id: String) -> Result<(), String> {
+pub(crate) fn open_full_chat(app: tauri::AppHandle, conversation_id: String) -> Result<(), String> {
     show_launcher(&app)?;
     app.emit_to(
         "main",
@@ -396,7 +397,7 @@ fn set_desktop_expanded(
 }
 
 #[tauri::command]
-fn open_orbit_chat(
+pub(crate) fn open_orbit_chat(
     app: tauri::AppHandle,
     engine: AppState<'_>,
     orbit_id: String,
@@ -606,8 +607,12 @@ pub fn run() {
                         Ok(AppEvent::Approval(approval)) => {
                             let _ = app_handle.emit("solar://approval", approval);
                         }
+                        Ok(AppEvent::Attention) => {
+                            crate::desktop_attention::refresh(&app_handle);
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             let _ = app_handle.emit("solar://state", ());
+                            crate::desktop_attention::refresh(&app_handle);
                         }
                         Err(_) => break,
                     }
@@ -662,9 +667,14 @@ pub fn run() {
             // Mouse transparency follows the visible circular character region. This keeps
             // the transparent corners from intercepting clicks in other applications.
             tauri::async_runtime::spawn(async move {
+                let mut attention_ticks = 0u32;
                 loop {
                     tokio::time::sleep(Duration::from_millis(40)).await;
                     for (label, window) in app_handle.webview_windows() {
+                        if label == "attention" {
+                            crate::desktop_attention::update_hit_region(&window);
+                            continue;
+                        }
                         if label != "sun" && !label.starts_with("orbit-") {
                             continue;
                         }
@@ -692,6 +702,16 @@ pub fn run() {
                             );
                         }
                     }
+                    attention_ticks += 1;
+                    if attention_ticks == 50 {
+                        attention_ticks = 0;
+                        if app_handle
+                            .get_webview_window("attention")
+                            .is_some_and(|window| window.is_visible().unwrap_or(false))
+                        {
+                            crate::desktop_attention::refresh(&app_handle);
+                        }
+                    }
                 }
             });
             Ok(())
@@ -705,6 +725,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::desktop_attention::get_attention_state,
+            crate::desktop_attention::attention_ready,
+            crate::desktop_attention::attention_bounds,
+            crate::desktop_attention::dismiss_attention,
+            crate::desktop_attention::open_attention,
+            crate::desktop_attention::preview_attention,
             widget_ready,
             get_bootstrap,
             save_orbit,

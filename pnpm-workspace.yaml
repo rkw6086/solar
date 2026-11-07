@@ -1,0 +1,6 @@
+# Prepare the native helper for both development and packaged builds.
+enablePrePostScripts: true
+
+# esbuild verifies its platform binary during installation.
+allowBuilds:
+  esbuild: true

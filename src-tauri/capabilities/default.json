@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "solar-ui",
   "description": "Bundled Solar views can control their own windows and call brokered application commands.",
-  "windows": ["main", "sun", "orbit-*", "chat-*"],
+  "windows": ["main", "sun", "orbit-*", "chat-*", "attention"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

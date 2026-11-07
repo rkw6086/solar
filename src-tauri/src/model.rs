@@ -83,6 +83,18 @@ pub struct Approval {
     pub arguments: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttentionItem {
+    pub id: String,
+    pub orbit_id: String,
+    pub task_id: String,
+    pub conversation_id: String,
+    pub kind: String,
+    pub title: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Memory {
@@ -116,6 +128,8 @@ pub struct Settings {
     pub reduced_motion: bool,
     pub max_concurrent: usize,
     pub experimental_claude: bool,
+    pub attention_sound: bool,
+    pub attention_volume: f32,
 }
 
 impl Default for Settings {
@@ -125,6 +139,8 @@ impl Default for Settings {
             reduced_motion: false,
             max_concurrent: 2,
             experimental_claude: false,
+            attention_sound: true,
+            attention_volume: 0.35,
         }
     }
 }
@@ -170,6 +186,7 @@ pub struct Bootstrap {
     pub mcp_servers: Vec<McpServer>,
     pub sharing_orbit_ids: Vec<String>,
     pub desktop_expanded: bool,
+    pub attention_items: Vec<AttentionItem>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -178,4 +195,5 @@ pub enum AppEvent {
     Message(Message),
     Task(Task),
     Approval(Approval),
+    Attention,
 }

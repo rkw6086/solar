@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { DesktopWidget } from "./DesktopWidget";
+import { AttentionWidget } from "./AttentionWidget";
 import "./styles.css";
 
 function Root() {
@@ -12,11 +13,13 @@ function Root() {
     return () => window.removeEventListener("hashchange", update);
   }, []);
   const [type, id] = route.split("/");
-  const widget = type === "sun" || type === "orbit" || type === "chat";
+  const widget = ["sun", "orbit", "chat", "attention"].includes(type);
   useEffect(() => {
     document.documentElement.classList.toggle("widget-root", widget);
   }, [widget]);
-  return widget ? (
+  return type === "attention" ? (
+    <AttentionWidget />
+  ) : widget ? (
     <DesktopWidget type={type as "sun" | "orbit" | "chat"} orbitId={id} />
   ) : (
     <App />

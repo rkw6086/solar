@@ -26,6 +26,7 @@ pub struct Engine {
     conversation_creation: Mutex<()>,
     mcp_connected: Mutex<HashSet<String>>,
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
+    pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
 }
 
 #[derive(Deserialize)]
@@ -101,6 +102,7 @@ impl Engine {
             conversation_creation: Mutex::new(()),
             mcp_connected: Mutex::new(HashSet::new()),
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
+            attention: Mutex::new(crate::attention::AttentionQueue::default()),
         });
         engine.seed()?;
         engine.recover()?;
@@ -232,6 +234,7 @@ impl Engine {
             desktop_expanded: self
                 .desktop_expanded
                 .load(std::sync::atomic::Ordering::SeqCst),
+            attention_items: self.attention_items()?,
         })
     }
 
@@ -280,6 +283,9 @@ impl Engine {
         }
         std::fs::create_dir_all(self.workspace(&orbit.id)?).map_err(|e| e.to_string())?;
         self.store.put("orbits", &orbit.id, &orbit)?;
+        if !orbit.enabled {
+            self.clear_orbit_attention(&orbit.id);
+        }
         self.changed();
         Ok(orbit)
     }
@@ -292,6 +298,7 @@ impl Engine {
             }
         }
         self.store.remove("orbits", orbit_id)?;
+        self.clear_orbit_attention(orbit_id);
         self.changed();
         Ok(())
     }
@@ -601,6 +608,11 @@ impl Engine {
 
     pub fn save_settings(&self, mut settings: Settings) -> Result<Settings, String> {
         settings.max_concurrent = settings.max_concurrent.clamp(1, 8);
+        settings.attention_volume = if settings.attention_volume.is_finite() {
+            settings.attention_volume.clamp(0.0, 1.0)
+        } else {
+            0.35
+        };
         let previous = self.settings()?;
         if previous.experimental_claude && !settings.experimental_claude {
             for profile in self.store.list::<ProviderProfile>("providers")? {

@@ -140,6 +140,7 @@ export function App() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
+  const [previewOrbitId, setPreviewOrbitId] = useState("");
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryOwner, setMemoryOwner] = useState("");
   const [logins, setLogins] = useState<
@@ -1551,6 +1552,78 @@ export function App() {
                     >
                       <span />
                     </button>
+                  </SettingsRow>
+                  <SettingsRow
+                    title="Orbit chimes"
+                    description="A short, distinct melody when an Orbit needs you while companions are collapsed."
+                  >
+                    <button
+                      className={`switch ${data.settings.attentionSound !== false ? "on" : ""}`}
+                      role="switch"
+                      aria-checked={data.settings.attentionSound !== false}
+                      aria-label="Orbit chimes"
+                      onClick={() =>
+                        void action("save_settings", {
+                          settings: {
+                            ...data.settings,
+                            attentionSound: data.settings.attentionSound === false,
+                          },
+                        })
+                      }
+                    >
+                      <span />
+                    </button>
+                  </SettingsRow>
+                  <SettingsRow
+                    title="Chime volume"
+                    description="A gentle nudge. Your Mac’s system volume still applies."
+                  >
+                    <label className="attention-volume">
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        aria-label="Chime volume"
+                        value={Number(data.settings.attentionVolume ?? 0.35)}
+                        onChange={(event) =>
+                          void action("save_settings", {
+                            settings: {
+                              ...data.settings,
+                              attentionVolume: Number(event.target.value),
+                            },
+                          })
+                        }
+                      />
+                      <output>{Math.round(Number(data.settings.attentionVolume ?? 0.35) * 100)}%</output>
+                    </label>
+                  </SettingsRow>
+                  <SettingsRow
+                    title="Preview an Orbit’s nudge"
+                    description={native ? "See the top-of-screen peek and hear its generated melody." : "Preview the top-of-screen peek. Chimes play in the desktop app."}
+                  >
+                    <div className="attention-preview-control">
+                      <select
+                        aria-label="Orbit to preview"
+                        value={data.orbits.some((orbit) => orbit.id === previewOrbitId && orbit.enabled) ? previewOrbitId : data.orbits.find((orbit) => orbit.enabled)?.id ?? ""}
+                        onChange={(event) => setPreviewOrbitId(event.target.value)}
+                        disabled={!data.orbits.some((orbit) => orbit.enabled)}
+                      >
+                        {data.orbits.filter((orbit) => orbit.enabled).map((orbit) => (
+                          <option key={orbit.id} value={orbit.id}>{orbit.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        className="button button-secondary"
+                        disabled={!data.orbits.some((orbit) => orbit.enabled)}
+                        onClick={() => {
+                          const orbit = data.orbits.find((item) => item.id === previewOrbitId && item.enabled) ?? data.orbits.find((item) => item.enabled);
+                          if (orbit) void action("preview_attention", { orbitId: orbit.id });
+                        }}
+                      >
+                        <Bell size={14} /> Preview
+                      </button>
+                    </div>
                   </SettingsRow>
                   <SettingsRow
                     title="Reduce motion"

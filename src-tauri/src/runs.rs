@@ -57,6 +57,7 @@ impl Drop for TaskGuard {
         if let Ok(mut approvals) = self.engine.approvals.lock() {
             approvals.retain(|_, (approval, _)| approval.task_id != self.task_id);
         }
+        self.engine.clear_approval_attention(&self.task_id);
         if let Ok(Some(mut task)) = self.engine.store.get::<Task>("tasks", &self.task_id)
             && ["queued", "running", "waiting"].contains(&task.status.as_str())
         {
@@ -195,6 +196,9 @@ impl Engine {
 
     fn update_task(&self, task: &Task) -> Result<(), String> {
         self.store.put("tasks", &task.id, task)?;
+        if task.status != "waiting" {
+            self.clear_approval_attention(&task.id);
+        }
         let _ = self.events.send(AppEvent::Task(task.clone()));
         Ok(())
     }
@@ -293,7 +297,7 @@ impl Engine {
                 self.update_task(&ctx.task)?;
                 self.clone().drive_run(&mut ctx).await
             }.await;
-            self.finish_task(&mut ctx.task, result)
+            self.finish_task(&mut ctx.task, result, ctx.ancestry.len() == 1)
         })
     }
 
@@ -301,6 +305,7 @@ impl Engine {
         &self,
         task: &mut Task,
         result: Result<String, String>,
+        notify_completion: bool,
     ) -> Result<String, String> {
         match &result {
             Ok(_) => {
@@ -330,6 +335,27 @@ impl Engine {
             }
         }
         self.update_task(task)?;
+        if task.status == "failed" || (task.status == "completed" && notify_completion) {
+            let _ = self.request_attention(AttentionItem {
+                id: format!("task:{}", task.id),
+                orbit_id: task.orbit_id.clone(),
+                task_id: task.id.clone(),
+                conversation_id: task.conversation_id.clone(),
+                kind: if task.status == "failed" {
+                    "failed"
+                } else {
+                    "message"
+                }
+                .into(),
+                title: if task.status == "failed" {
+                    "A task needs your attention"
+                } else {
+                    "Your update is ready"
+                }
+                .into(),
+                created_at: now(),
+            });
+        }
         self.changed();
         result
     }
@@ -859,6 +885,15 @@ impl Engine {
         ctx.task.status = "waiting".into();
         self.update_task(&ctx.task)?;
         let _ = self.events.send(AppEvent::Approval(approval.clone()));
+        let _ = self.request_attention(AttentionItem {
+            id: format!("approval:{}", approval.id),
+            orbit_id: approval.orbit_id.clone(),
+            task_id: ctx.task.id.clone(),
+            conversation_id: ctx.task.conversation_id.clone(),
+            kind: "approval".into(),
+            title: "Permission needed to continue".into(),
+            created_at: now(),
+        });
         self.changed();
         let allowed = tokio::select! { _ = ctx.token.cancelled() => false, response = rx => response.unwrap_or(false) };
         self.approvals

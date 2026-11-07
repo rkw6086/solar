@@ -1,6 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AttentionItem,
+  AttentionState,
   Bootstrap,
   Conversation,
   Memory,
@@ -97,6 +99,24 @@ function readPreview(): PreviewState {
 }
 
 let preview = readPreview();
+let previewAttention: AttentionItem[] = [];
+
+function previewAttentionState(): AttentionState {
+  return {
+    items: structuredClone(previewAttention),
+    current: previewAttention[0] ? structuredClone(previewAttention[0]) : undefined,
+    geometry: { width: 454, height: 230, notchWidth: 0, notchHeight: 0, mode: "edge" },
+    reducedMotion: Boolean(preview.settings.reducedMotion),
+    soundEnabled: false,
+  };
+}
+
+function emitPreviewAttention() {
+  window.dispatchEvent(new CustomEvent("solar-preview-attention", {
+    detail: previewAttentionState(),
+  }));
+  window.dispatchEvent(new Event(previewEvent));
+}
 
 function savePreview() {
   try {
@@ -125,7 +145,41 @@ async function previewCommand(
 ): Promise<unknown> {
   switch (command) {
     case "get_bootstrap":
-      return structuredClone(preview);
+      return { ...structuredClone(preview), attentionItems: structuredClone(previewAttention) };
+    case "get_attention_state":
+      return previewAttentionState();
+    case "attention_ready":
+    case "attention_bounds":
+      return;
+    case "preview_attention": {
+      const orbit = preview.orbits.find((item) => item.id === args.orbitId && item.enabled);
+      if (!orbit) throw new Error("Choose an enabled Orbit to preview.");
+      const conversation = preview.conversations.find((item) =>
+        item.orbitIds.length === 1 && item.orbitIds[0] === orbit.id,
+      );
+      previewAttention.push({
+        id: crypto.randomUUID(),
+        orbitId: orbit.id,
+        taskId: "preview",
+        conversationId: conversation?.id ?? "preview",
+        kind: "message",
+        title: "Your update is ready",
+        createdAt: now(),
+      });
+      emitPreviewAttention();
+      window.location.hash = "attention";
+      return;
+    }
+    case "dismiss_attention":
+    case "open_attention": {
+      const item = previewAttention.find((attention) => attention.id === args.id);
+      if (!item) throw new Error("This attention request is no longer waiting.");
+      previewAttention = previewAttention.filter((attention) => attention.id !== item.id);
+      emitPreviewAttention();
+      if (command === "open_attention") window.location.hash = `chat/${item.orbitId}`;
+      else if (!previewAttention.length) window.location.hash = "";
+      return;
+    }
     case "get_messages":
       return preview.messages.filter(
         (message) => message.conversationId === args.conversationId,
@@ -138,7 +192,9 @@ async function previewCommand(
     }
     case "delete_orbit":
       preview.orbits = preview.orbits.filter((orbit) => orbit.id !== args.id);
+      previewAttention = previewAttention.filter((item) => item.orbitId !== args.id);
       savePreview();
+      emitPreviewAttention();
       return;
     case "save_provider": {
       const input = args.provider as Provider & { apiKey?: string };
@@ -239,6 +295,7 @@ async function previewCommand(
         ...(args.settings as Settings),
       };
       savePreview();
+      emitPreviewAttention();
       return preview.settings;
     case "save_mcp_server": {
       const input = args.server as McpServer;
@@ -340,6 +397,7 @@ export async function subscribe(onChange: () => void): Promise<() => void> {
       "solar://message",
       "solar://task",
       "solar://approval",
+      "solar://attention",
     ].map((event) => listen(event, onChange)),
   );
   return () => cleanup.forEach((unlisten) => unlisten());
