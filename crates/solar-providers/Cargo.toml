@@ -1,0 +1,30 @@
+[package]
+name = "solar-providers"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+solar-agent-core = { path = "../solar-agent-core" }
+async-stream = "0.3"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+futures = "0.3"
+http = "1"
+rand = "0.8"
+reqwest = { version = "0.13", features = ["json", "form", "query", "stream"] }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "1f9547774edb4c269be991ac42eb043fd7b6e87f", package = "rig-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[dev-dependencies]
+rig-core = { git = "https://github.com/0xPlaygrounds/rig.git", rev = "1f9547774edb4c269be991ac42eb043fd7b6e87f", package = "rig-core", features = ["test-utils"] }

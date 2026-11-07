@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSScreenCaptureUsageDescription</key><string>Share a selected screen or window with an Orbit for your current task.</string>
+<key>NSAccessibilityUsageDescription</key><string>Allow an Orbit to interact with applications while you authorize computer use.</string>
+</dict></plist>
