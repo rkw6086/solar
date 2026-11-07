@@ -1,6 +1,9 @@
 //! Solar-owned credentials and provider construction. Tokens never cross into UI state.
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -109,6 +112,8 @@ struct AuthSlot {
 #[derive(Clone)]
 pub struct ProviderService {
     slots: Arc<Mutex<HashMap<String, Arc<AuthSlot>>>>,
+    resetting: Arc<AtomicBool>,
+    reset_lock: Arc<Mutex<()>>,
     client: reqwest::Client,
     #[cfg(test)]
     token_override: Option<String>,
@@ -124,6 +129,8 @@ impl ProviderService {
     pub fn new() -> Self {
         Self {
             slots: Arc::new(Mutex::new(HashMap::new())),
+            resetting: Arc::new(AtomicBool::new(false)),
+            reset_lock: Arc::new(Mutex::new(())),
             #[cfg(test)]
             token_override: None,
             client: reqwest::Client::builder()
@@ -164,10 +171,16 @@ impl ProviderService {
     }
 
     fn slot_for_key(&self, key: String) -> Result<Arc<AuthSlot>, String> {
+        if self.resetting.load(Ordering::SeqCst) {
+            return Err("Solar credentials are being reset.".into());
+        }
         let mut slots = self
             .slots
             .lock()
             .map_err(|_| "Credential service is unavailable.")?;
+        if self.resetting.load(Ordering::SeqCst) {
+            return Err("Solar credentials are being reset.".into());
+        }
         if let Some(slot) = slots.get(&key) {
             return Ok(slot.clone());
         }
@@ -204,6 +217,9 @@ impl ProviderService {
             .state
             .lock()
             .map_err(|_| "Credential service is unavailable.")?;
+        if self.resetting.load(Ordering::SeqCst) {
+            return Err("Solar credentials are being reset.".into());
+        }
         save_secret(&key, &record)?;
         state.generation = state.generation.wrapping_add(1);
         state.record = Some(record);
@@ -291,6 +307,9 @@ impl ProviderService {
             .state
             .lock()
             .map_err(|_| "Credential service is unavailable.")?;
+        if self.resetting.load(Ordering::SeqCst) {
+            return Err("Solar credentials are being reset.".into());
+        }
         save_secret(&Self::key(profile)?, &record)?;
         state.generation = state.generation.wrapping_add(1);
         slot.cancel_login.notify_waiters();
@@ -313,6 +332,58 @@ impl ProviderService {
         state.pending = None;
         state.error = deletion.as_ref().err().cloned();
         deletion
+    }
+
+    /// Clear only Solar's dedicated credential namespace. This also covers
+    /// orphaned keys from providers or MCP servers no longer in the database.
+    /// Successful reset keeps this service closed until the app restarts.
+    pub fn reset_credentials(&self) -> Result<(), String> {
+        self.reset_credentials_with(delete_all_solar_secrets)
+    }
+
+    fn reset_credentials_with(
+        &self,
+        delete: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let _reset = self
+            .reset_lock
+            .lock()
+            .map_err(|_| "Credential service is unavailable.")?;
+        if self.resetting.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let result = (|| {
+            let slots = self
+                .slots
+                .lock()
+                .map_err(|_| "Credential service is unavailable.")?;
+            let mut states = Vec::with_capacity(slots.len());
+            for slot in slots.values() {
+                let mut state = slot
+                    .state
+                    .lock()
+                    .map_err(|_| "Credential service is unavailable.")?;
+                state.generation = state.generation.wrapping_add(1);
+                state.record = None;
+                state.pending = None;
+                state.error = None;
+                slot.cancel_login.notify_waiters();
+                states.push(state);
+            }
+            // Keep the slot and state locks through deletion. Late auth writes
+            // see a changed generation or the reset gate, never restore a key.
+            let deletion = delete();
+            if let Err(error) = &deletion {
+                for state in &mut states {
+                    state.error = Some(error.clone());
+                }
+            }
+            deletion
+        })();
+        if result.is_err() {
+            self.resetting.store(false, Ordering::SeqCst);
+        }
+        result
     }
 
     pub async fn begin_login(&self, profile: &ProviderProfile) -> Result<LoginStart, String> {
@@ -1023,6 +1094,26 @@ fn delete_secret(_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn delete_all_solar_secrets() -> Result<(), String> {
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+    let result = ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service("net.solar-chat.credentials")
+        .delete();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == -25300 => Ok(()),
+        Err(_) => Err("Cannot remove Solar's credentials from macOS Keychain. Solar data has not been erased; try again after unlocking the keychain.".into()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_all_solar_secrets() -> Result<(), String> {
+    // Other platforms use only the per-service in-memory records cleared above.
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,6 +1126,49 @@ mod tests {
             models: vec![],
             experimental: false,
         }
+    }
+
+    #[test]
+    fn reset_invalidates_loaded_credentials_and_prevents_late_reconnect() {
+        let service = ProviderService::new();
+        let profile = profile();
+        let slot = service.slot(&profile).unwrap();
+        let before = slot.state.lock().unwrap().generation;
+        slot.state.lock().unwrap().record = Some(CredentialRecord {
+            access_token: "test-only-memory-token".into(),
+            refresh_token: None,
+            account_id: None,
+            expires_at: None,
+        });
+        // Never invoke the real namespace deletion in a developer's Keychain.
+        service.reset_credentials_with(|| Ok(())).unwrap();
+        service
+            .reset_credentials_with(|| panic!("A completed credential reset must be idempotent"))
+            .unwrap();
+        let state = slot.state.lock().unwrap();
+        assert!(state.record.is_none());
+        assert_ne!(state.generation, before);
+        drop(state);
+        assert!(service.slot(&profile).is_err());
+        assert!(service.set_api_key(&profile, "replacement").is_err());
+        assert!(
+            service
+                .set_integration_secret("mcp-test", "replacement")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn failed_credential_reset_can_be_retried() {
+        let service = ProviderService::new();
+        assert!(
+            service
+                .reset_credentials_with(|| Err("test deletion failure".into()))
+                .is_err()
+        );
+        assert!(!service.resetting.load(Ordering::SeqCst));
+        service.reset_credentials_with(|| Ok(())).unwrap();
+        assert!(service.resetting.load(Ordering::SeqCst));
     }
     #[test]
     fn credentials_never_serialize_through_profile_or_debug() {

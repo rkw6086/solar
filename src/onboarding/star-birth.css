@@ -1,0 +1,119 @@
+.star-birth {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  overflow: hidden;
+  isolation: isolate;
+  background: #000;
+  color: #f3eadb;
+}
+
+.star-birth-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.star-birth-title {
+  position: absolute;
+  top: 61%;
+  left: 24px;
+  right: 24px;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+  transition: opacity 1.25s ease, transform 1.5s ease;
+}
+
+.star-birth[data-phase="solar"] .star-birth-title {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.star-birth-kicker {
+  display: block;
+  margin-bottom: 16px;
+  color: #a29887;
+  font-size: clamp(8px, 1vw, 10px);
+  font-weight: 500;
+  letter-spacing: .2em;
+}
+
+.star-birth-title h1 {
+  margin: 0;
+  font-size: clamp(42px, 7.2vw, 78px);
+  font-weight: 350;
+  line-height: 1.08;
+  letter-spacing: .19em;
+  padding-left: .19em;
+  text-transform: uppercase;
+  text-shadow: 0 0 50px #edb87421;
+}
+
+.star-birth-title p {
+  margin: 18px 0 0;
+  color: #b3aea6;
+  font-size: clamp(12px, 1.6vw, 15px);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: .045em;
+}
+
+.star-birth-skip {
+  position: absolute;
+  bottom: 28px;
+  right: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #ffffff1c;
+  border-radius: 20px;
+  padding: 9px 14px;
+  background: #08090bbf;
+  color: #a3a09a;
+  font-size: 11px;
+  line-height: 1.2;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+  z-index: 1;
+}
+
+.star-birth-skip:hover {
+  color: #fff1d9;
+  border-color: #e9bf7e66;
+  background: #17130dd9;
+}
+
+.star-birth-skip:focus-visible {
+  outline: 2px solid #edb874;
+  outline-offset: 4px;
+}
+
+.star-birth-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.star-birth-calm .star-birth-title {
+  transition: none;
+}
+
+@media (max-height: 580px) {
+  .star-birth-title { top: 61%; }
+  .star-birth-kicker { margin-bottom: 10px; }
+  .star-birth-title h1 { font-size: 46px; }
+  .star-birth-title p { margin-top: 10px; font-size: 12px; }
+  .star-birth-skip { right: 18px; bottom: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .star-birth-title, .star-birth-skip { transition: none; }
+}

@@ -19,6 +19,14 @@ corepack pnpm tauri dev
 
 The native preparation hook builds the Swift screen/accessibility helper and stages it as a Tauri sidecar. The helper is bundled with the application for distribution.
 
+## First launch
+
+Solar opens on black as white ripples gather into a new star. The welcome tour then introduces your Orbits and walks through model connections, the first Orbit, a project folder, and desktop preferences. Each setup step saves real settings and can be skipped or resumed; existing profiles and files are preserved when replaying the tour.
+
+The optional soundtrack is synthesized locally: a seamless 38.4-second, 100 BPM space-pop loop in C major, using Cadd9–G–Am7–Fmaj7, bright plucks, a light pulse, and soft chords. Its I–V–vi–IV pattern follows a familiar [pop progression](https://viva.pressbooks.pub/openmusictheory/chapter/4-chord-schemas/). Welcome music has separate mute and volume controls. Music pauses when the welcome window hides and stops when you finish; reduced motion skips the moving starburst.
+
+Find **Replay welcome tour**, **Welcome music**, and its volume in **Settings → Welcome experience**. Replay keeps your existing setup. **Settings → Start over → Reset Solar** instead shows one confirmation modal, then stops active work, clears Solar’s saved credentials and all app-managed data, and restarts from the opening animation. Files in external project folders are preserved.
+
 For the browser-only UI preview, run the following and open the URL Vite prints.
 
 ```sh

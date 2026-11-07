@@ -27,6 +27,9 @@ pub struct Engine {
     mcp_connected: Mutex<HashSet<String>>,
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
     pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
+    pub(crate) settings_write: Mutex<()>,
+    pub(crate) resetting: std::sync::atomic::AtomicBool,
+    pub(crate) reset_operations: tokio::sync::RwLock<()>,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +106,9 @@ impl Engine {
             mcp_connected: Mutex::new(HashSet::new()),
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
             attention: Mutex::new(crate::attention::AttentionQueue::default()),
+            settings_write: Mutex::new(()),
+            resetting: std::sync::atomic::AtomicBool::new(false),
+            reset_operations: tokio::sync::RwLock::new(()),
         });
         engine.seed()?;
         engine.recover()?;
@@ -174,6 +180,13 @@ impl Engine {
     pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
         self.events.subscribe()
     }
+    pub(crate) fn ensure_running(&self) -> Result<(), String> {
+        if self.resetting.load(std::sync::atomic::Ordering::SeqCst) {
+            Err("Solar is resetting. Wait for setup to restart.".into())
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) fn changed(&self) {
         let _ = self.events.send(AppEvent::State);
     }
@@ -239,6 +252,7 @@ impl Engine {
     }
 
     pub fn save_orbit(&self, mut orbit: Orbit) -> Result<Orbit, String> {
+        self.ensure_running()?;
         if orbit.id.is_empty() {
             orbit.id = id();
         }
@@ -342,6 +356,7 @@ impl Engine {
     }
 
     pub fn save_provider(&self, mut draft: ProviderDraft) -> Result<ProviderView, String> {
+        self.ensure_running()?;
         if draft.profile.id.is_empty() {
             draft.profile.id = id();
         }
@@ -387,6 +402,8 @@ impl Engine {
     }
 
     pub async fn discover_models(&self, provider_id: &str) -> Result<Vec<String>, String> {
+        let _operation = self.reset_operations.read().await;
+        self.ensure_running()?;
         let profile = self.provider(provider_id)?;
         let models = self.providers.discover_models(&profile).await?;
         let mut current = self.provider(provider_id)?;
@@ -402,6 +419,8 @@ impl Engine {
     }
 
     pub async fn start_login(&self, provider_id: &str) -> Result<serde_json::Value, String> {
+        let _operation = self.reset_operations.read().await;
+        self.ensure_running()?;
         let profile = self.provider(provider_id)?;
         if profile.kind == ProviderKind::Claude && !self.settings()?.experimental_claude {
             return Err("Experimental Claude subscriptions are disabled".into());
@@ -418,6 +437,7 @@ impl Engine {
     }
 
     pub fn save_project(&self, mut project: Project) -> Result<Project, String> {
+        self.ensure_running()?;
         if project.id.is_empty() {
             project.id = id();
         }
@@ -452,6 +472,7 @@ impl Engine {
         title: String,
         project_id: Option<String>,
     ) -> Result<Conversation, String> {
+        self.ensure_running()?;
         let _lock = self
             .conversation_creation
             .lock()
@@ -547,6 +568,7 @@ impl Engine {
     }
 
     pub fn save_memory(&self, mut memory: Memory) -> Result<Memory, String> {
+        self.ensure_running()?;
         if memory.id.is_empty() {
             memory.id = id();
         }
@@ -607,6 +629,11 @@ impl Engine {
     }
 
     pub fn save_settings(&self, mut settings: Settings) -> Result<Settings, String> {
+        self.ensure_running()?;
+        let _write = self
+            .settings_write
+            .lock()
+            .map_err(|_| "Settings are unavailable")?;
         settings.max_concurrent = settings.max_concurrent.clamp(1, 8);
         settings.attention_volume = if settings.attention_volume.is_finite() {
             settings.attention_volume.clamp(0.0, 1.0)
@@ -614,6 +641,15 @@ impl Engine {
             0.35
         };
         let previous = self.settings()?;
+        // The explicit onboarding commands own progress. A settings form that
+        // was opened on an earlier slide must not accidentally rewind it.
+        settings.onboarding_complete = previous.onboarding_complete;
+        settings.onboarding_step = previous.onboarding_step;
+        settings.onboarding_volume = if settings.onboarding_volume.is_finite() {
+            settings.onboarding_volume.clamp(0.0, 0.5)
+        } else {
+            0.22
+        };
         if previous.experimental_claude && !settings.experimental_claude {
             for profile in self.store.list::<ProviderProfile>("providers")? {
                 if profile.kind == ProviderKind::Claude {
@@ -629,6 +665,7 @@ impl Engine {
     }
 
     pub fn save_routine(&self, mut routine: Routine) -> Result<Routine, String> {
+        self.ensure_running()?;
         if routine.id.is_empty() {
             routine.id = id();
         }
@@ -661,6 +698,8 @@ impl Engine {
     }
 
     pub async fn start_screen_share(&self, orbit_id: &str) -> Result<(), String> {
+        let _operation = self.reset_operations.read().await;
+        self.ensure_running()?;
         self.orbit(orbit_id)?;
         self.tools.start_screen_share(orbit_id).await?;
         self.sharing
@@ -682,6 +721,8 @@ impl Engine {
     }
 
     pub async fn save_mcp_server(&self, draft: McpServerDraft) -> Result<McpServer, String> {
+        let _operation = self.reset_operations.read().await;
+        self.ensure_running()?;
         let mut server = draft.server;
         if server.id.is_empty() {
             server.id = id();
@@ -734,6 +775,8 @@ impl Engine {
     }
 
     pub async fn connect_mcp(&self, server_id: &str) -> Result<usize, String> {
+        let _operation = self.reset_operations.read().await;
+        self.ensure_running()?;
         let server: McpServer = self
             .store
             .get("mcp", server_id)?

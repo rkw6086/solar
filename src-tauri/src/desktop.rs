@@ -192,6 +192,7 @@ fn save_settings(
     }
     engine.changed();
     crate::desktop_attention::refresh(&app);
+    crate::desktop_onboarding::settings_changed(&app, &settings);
     Ok(settings)
 }
 #[tauri::command]
@@ -259,6 +260,9 @@ fn set_desktop_expanded(
     engine: AppState<'_>,
     expanded: bool,
 ) -> Result<(), String> {
+    if !engine.settings()?.onboarding_complete {
+        return Err("Finish or skip the welcome tour before opening desktop Orbits".into());
+    }
     ensure_sun(&app)?;
     EXPANDED.store(expanded, Ordering::SeqCst);
     engine.desktop_expanded.store(expanded, Ordering::SeqCst);
@@ -551,7 +555,10 @@ fn create_companion(
     Ok(())
 }
 
-fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
+pub(crate) fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
+    if !app.state::<Arc<Engine>>().settings()?.onboarding_complete {
+        return Ok(());
+    }
     SUN_REQUESTED.store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("sun") {
         if READY_WIDGETS
@@ -582,12 +589,20 @@ fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
     create_companion(app, "sun", "sun", x, y)
 }
 
+pub(crate) fn restart_after_reset(app: &tauri::AppHandle) {
+    // Reset already quiesced work. Preserve Tauri's restart exit code rather
+    // than routing it through the ordinary quit-and-drain handler.
+    QUITTING.store(true, Ordering::SeqCst);
+    app.request_restart();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            crate::reset::apply_pending_reset(&data_dir).map_err(std::io::Error::other)?;
             let engine = Engine::open(data_dir).map_err(std::io::Error::other)?;
             let mut events = engine.subscribe();
             app.manage(engine.clone());
@@ -720,11 +735,16 @@ pub fn run() {
             if window.label() == "main" {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    crate::desktop_onboarding::stop_music(window.app_handle());
                     let _ = window.hide();
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::desktop_onboarding::reset_solar,
+            crate::desktop_onboarding::save_onboarding_progress,
+            crate::desktop_onboarding::complete_onboarding,
+            crate::desktop_onboarding::set_onboarding_music,
             crate::desktop_attention::get_attention_state,
             crate::desktop_attention::attention_ready,
             crate::desktop_attention::attention_bounds,

@@ -83,6 +83,10 @@ function initialPreview(): PreviewState {
       reducedMotion: false,
       maxConcurrent: 2,
       experimentalClaude: false,
+      onboardingComplete: false,
+      onboardingStep: "birth",
+      onboardingMusic: true,
+      onboardingVolume: 0.22,
     },
   };
 }
@@ -146,6 +150,26 @@ async function previewCommand(
   switch (command) {
     case "get_bootstrap":
       return { ...structuredClone(preview), attentionItems: structuredClone(previewAttention) };
+    case "save_onboarding_progress": {
+      const step = requiredString(args, "step");
+      if (!["birth", "welcome", "team", "desktop", "connection", "orbit", "workspace", "ready"].includes(step)) throw new Error("Unknown welcome step");
+      preview.settings = { ...preview.settings, onboardingStep: step };
+      savePreview();
+      return preview.settings;
+    }
+    case "complete_onboarding":
+      preview.settings = { ...preview.settings, onboardingComplete: true, onboardingStep: "ready" };
+      savePreview();
+      return preview.settings;
+    case "set_onboarding_music":
+      return { playing: false };
+    case "reset_solar":
+      if (args.confirmed !== true) throw new Error("Confirm Reset Solar before continuing.");
+      preview = initialPreview();
+      previewAttention = [];
+      savePreview();
+      emitPreviewAttention();
+      return;
     case "get_attention_state":
       return previewAttentionState();
     case "attention_ready":
@@ -293,6 +317,8 @@ async function previewCommand(
       preview.settings = {
         ...preview.settings,
         ...(args.settings as Settings),
+        onboardingStep: preview.settings.onboardingStep,
+        onboardingComplete: preview.settings.onboardingComplete,
       };
       savePreview();
       emitPreviewAttention();

@@ -114,6 +114,8 @@ impl Engine {
         content: String,
         allow_completion_routines: bool,
     ) -> Result<Task, String> {
+        let mut active = self.active.lock().map_err(|_| "Task lock unavailable")?;
+        self.ensure_running()?;
         validate_text(&content, "Message", 64_000)?;
         let conversation: Conversation = self
             .store
@@ -136,10 +138,8 @@ impl Engine {
         };
         self.update_task(&task)?;
         let token = CancellationToken::new();
-        self.active
-            .lock()
-            .map_err(|_| "Task lock unavailable")?
-            .insert(task.id.clone(), token.clone());
+        active.insert(task.id.clone(), token.clone());
+        drop(active);
         let context = RunContext {
             task: task.clone(),
             conversation,

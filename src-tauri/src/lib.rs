@@ -1,6 +1,9 @@
 mod attention;
 pub mod engine;
 pub mod model;
+mod onboarding;
+#[cfg(any(feature = "desktop", test))]
+mod reset;
 mod routines;
 mod runs;
 pub mod store;
@@ -13,5 +16,9 @@ mod attention_sound;
 mod desktop;
 #[cfg(feature = "desktop")]
 mod desktop_attention;
+#[cfg(feature = "desktop")]
+mod desktop_onboarding;
+#[cfg(any(feature = "desktop", test))]
+mod space_score;
 #[cfg(feature = "desktop")]
 pub use desktop::run;

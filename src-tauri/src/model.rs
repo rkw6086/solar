@@ -130,6 +130,10 @@ pub struct Settings {
     pub experimental_claude: bool,
     pub attention_sound: bool,
     pub attention_volume: f32,
+    pub onboarding_complete: bool,
+    pub onboarding_step: String,
+    pub onboarding_music: bool,
+    pub onboarding_volume: f32,
 }
 
 impl Default for Settings {
@@ -141,6 +145,10 @@ impl Default for Settings {
             experimental_claude: false,
             attention_sound: true,
             attention_volume: 0.35,
+            onboarding_complete: false,
+            onboarding_step: "birth".into(),
+            onboarding_music: true,
+            onboarding_volume: 0.22,
         }
     }
 }

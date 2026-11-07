@@ -1,7 +1,7 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #e9e9e5;
-  background: #121519;
+  background: #000;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,6 +20,7 @@
 body {
   margin: 0;
 }
+.startup-black { min-height: 100vh; background: #000; }
 button,
 input,
 textarea,
@@ -80,6 +81,7 @@ p {
 }
 
 .app-shell {
+  background: var(--background);
   display: flex;
   height: 100vh;
   overflow: hidden;

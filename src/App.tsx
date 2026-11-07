@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   Activity,
@@ -50,6 +50,7 @@ import type {
 import { Planet } from "./components/Planet";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
+import { ResetSolar } from "./components/ResetSolar";
 import {
   GroupForm,
   McpForm,
@@ -69,6 +70,8 @@ type Page =
   | "routines"
   | "activity"
   | "settings";
+
+const Onboarding = lazy(() => import("./onboarding/Onboarding").then(({ Onboarding }) => ({ default: Onboarding })));
 type Dialog =
   | { kind: "orbit"; value?: Orbit }
   | { kind: "provider"; value?: Provider }
@@ -141,6 +144,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [previewOrbitId, setPreviewOrbitId] = useState("");
+  const [replayWelcome, setReplayWelcome] = useState(false);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryOwner, setMemoryOwner] = useState("");
   const [logins, setLogins] = useState<
@@ -375,6 +379,18 @@ export function App() {
   const filteredOrbits = data.orbits.filter((orbit) =>
     `${orbit.name} ${orbit.role}`.toLowerCase().includes(search.toLowerCase()),
   );
+
+  if (loading && !data.orbits.length) {
+    return <div className="startup-black" aria-label="Starting Solar" aria-busy="true" />;
+  }
+  if (!loadError && (replayWelcome || !data.settings.onboardingComplete)) {
+    return <Suspense fallback={<div className="startup-black" aria-label="Starting Solar" aria-busy="true" />}><Onboarding
+      data={data}
+      refresh={refresh}
+      initialStep={replayWelcome ? "birth" : undefined}
+      onComplete={() => { void refresh().then(() => setReplayWelcome(false)); }}
+    /></Suspense>;
+  }
 
   return (
     <div className="app-shell">
@@ -1654,6 +1670,21 @@ export function App() {
                   </SettingsRow>
                 </section>
                 <section className="settings-section">
+                  <h2>Welcome experience</h2>
+                  <SettingsRow title="Welcome music" description="Play a gentle, major-key space-pop loop during the welcome tour.">
+                    <button className={`switch ${data.settings.onboardingMusic !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.onboardingMusic !== false} aria-label="Welcome music" onClick={() => void action("save_settings", { settings: { ...data.settings, onboardingMusic: data.settings.onboardingMusic === false } })}><span /></button>
+                  </SettingsRow>
+                  <SettingsRow title="Welcome music volume" description="Independent of Orbit notification chimes.">
+                    <label className="attention-volume">
+                      <input type="range" min="0" max="0.5" step="0.025" aria-label="Welcome music volume" value={Number(data.settings.onboardingVolume ?? 0.22)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, onboardingVolume: Number(event.target.value) } })} />
+                      <output>{Math.round(Number(data.settings.onboardingVolume ?? 0.22) * 200)}%</output>
+                    </label>
+                  </SettingsRow>
+                  <SettingsRow title="Welcome tour" description="Replay Solar’s origin and revisit setup. Your existing profiles and connections stay in place.">
+                    <button className="button button-secondary" onClick={() => setReplayWelcome(true)}><Sparkles size={14} /> Replay welcome tour</button>
+                  </SettingsRow>
+                </section>
+                <section className="settings-section">
                   <h2>Work and connections</h2>
                   <SettingsRow
                     title="Concurrent model turns"
@@ -1727,6 +1758,16 @@ export function App() {
                     <LockKeyhole size={18} />
                   </SettingsRow>
                 </section>
+                <ResetSolar onReset={async () => {
+                  await api("reset_solar", { confirmed: true });
+                  if (!native) {
+                    setConversationId(null);
+                    setDialog(null);
+                    setPage("orbits");
+                    await refresh();
+                    setReplayWelcome(true);
+                  }
+                }} />
               </div>
             )}
           </>

@@ -114,6 +114,10 @@ export interface Settings {
   desktopEnabled?: boolean;
   attentionSound?: boolean;
   attentionVolume?: number;
+  onboardingComplete?: boolean;
+  onboardingStep?: string;
+  onboardingMusic?: boolean;
+  onboardingVolume?: number;
   [key: string]: unknown;
 }
 

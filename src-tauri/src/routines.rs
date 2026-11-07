@@ -32,6 +32,9 @@ impl Engine {
                 let Some(engine) = engine.upgrade() else {
                     break;
                 };
+                if engine.resetting.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
                 let has_sharing = engine
                     .sharing
                     .lock()
@@ -70,7 +73,13 @@ impl Engine {
     }
 
     fn tick_routines(self: &Arc<Self>) -> Result<(), String> {
+        if self.resetting.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
         for mut routine in self.store.list::<Routine>("routines")? {
+            if self.resetting.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             if !routine.enabled || routine.trigger == "completion" {
                 continue;
             }
@@ -129,6 +138,7 @@ impl Engine {
     }
 
     fn launch_routine(self: &Arc<Self>, mut routine: Routine) -> Result<(), String> {
+        self.ensure_running()?;
         routine.last_run_at = Some(now());
         self.store.put("routines", &routine.id, &routine)?;
         let conversation = self.create_conversation(

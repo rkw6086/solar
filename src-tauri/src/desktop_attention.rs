@@ -180,7 +180,9 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
         .current
         .as_ref()
         .is_some_and(|item| item.id.starts_with("preview:"));
-    if snapshot.current.is_none() || (!settings.desktop_enabled && !preview) {
+    if snapshot.current.is_none()
+        || ((!settings.desktop_enabled || !settings.onboarding_complete) && !preview)
+    {
         *PRESENTED
             .lock()
             .map_err(|_| "Attention state unavailable")? = None;
