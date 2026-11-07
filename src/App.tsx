@@ -1671,7 +1671,7 @@ export function App() {
                 </section>
                 <section className="settings-section">
                   <h2>Welcome experience</h2>
-                  <SettingsRow title="Welcome music" description="Play a mellow minor-key theme with a short, syncopated melody during the welcome tour.">
+                  <SettingsRow title="Welcome music" description="Play a quiet, upbeat synthwave theme during the welcome tour.">
                     <button className={`switch ${data.settings.onboardingMusic !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.onboardingMusic !== false} aria-label="Welcome music" onClick={() => void action("save_settings", { settings: { ...data.settings, onboardingMusic: data.settings.onboardingMusic === false } })}><span /></button>
                   </SettingsRow>
                   <SettingsRow title="Welcome music volume" description="Independent of Orbit notification chimes.">

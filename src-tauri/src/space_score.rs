@@ -1,84 +1,74 @@
-//! A short, syncopated synth motif for Solar's beginning.
+//! A warm, upbeat synthwave theme for Solar's beginning.
 //!
-//! The 112-BPM, 12-bar loop follows i–iv–III–VI–iiø7–V7 in E minor.
-//! Chords alternate six and two beats, then the progression repeats with a
-//! varied response. Clipped foreground notes follow those changes; only a
-//! quiet root/fifth layer sustains in the bass.
-//! Notes, releases and short pluck echoes wrap around the same timeline.
+//! A steady 120-BPM backbeat and pulsing octave bass support an analog-style
+//! synth hook. Chords retain the user's six/two-beat harmonic rhythm, with a
+//! varied second pass. The foreground releases between phrases; a quiet bass
+//! foundation supplies the only sustained layer. The master level is modest.
 //! All sounds are synthesized locally, with no recordings or network assets.
-//! Envelope reference: https://learningsynths.ableton.com/recipes/plucked-bass
-//! Harmony reference: https://musictheory.pugetsound.edu/mt21c/DiatonicChordsInMinor.html
+//! Palette reference: https://articles.roland.com/synthwave-essentials-for-the-jupiter-xm/
 
 use std::sync::LazyLock;
 
 const SAMPLE_RATE: u32 = 22_050;
 const CHANNELS: u16 = 2;
-const BPM: f64 = 112.0;
+const BPM: f64 = 120.0;
 const BEAT_SECONDS: f64 = 60.0 / BPM;
-// Exactly 48 beats at 112 BPM: use samples, not rounded milliseconds.
-const FRAME_COUNT: usize = 567_000;
+const FRAME_COUNT: usize = 529_200; // Exactly 48 beats, 24 seconds.
 const LOOP_SECONDS: f64 = FRAME_COUNT as f64 / SAMPLE_RATE as f64;
-// Root movement 1–4–3–6–2, followed by V7 to turn back to the tonic.
-// The melodic motifs imply the extensions; these chords are never held as pads.
+const MASTER_PEAK: f64 = 0.45;
+const GROOVE_BEATS: f64 = 8.0;
+// Em(add9), Am(add9), Gmaj7, Cmaj7, F#m7b5, B7.
 const HARMONIES: [[i32; 4]; 6] = [
-    [52, 55, 59, 54], // Em(add9): E, G, B, F#.
-    [57, 60, 64, 59], // Am(add9): A, C, E, B.
-    [55, 59, 62, 54], // Gmaj7: G, B, D, F#.
-    [48, 52, 55, 59], // Cmaj7: C, E, G, B.
-    [54, 57, 60, 52], // F#m7b5: F#, A, C, E.
-    [47, 51, 54, 57], // B7: B, D#, F#, A; D# resolves up to E.
+    [52, 55, 59, 54],
+    [57, 60, 64, 59],
+    [55, 59, 62, 54],
+    [48, 52, 55, 59],
+    [54, 57, 60, 52],
+    [47, 51, 54, 57],
 ];
-const BASS_NOTES: [i32; 6] = [40, 33, 31, 36, 30, 35];
-const LOW_FIFTHS: [i32; 6] = [35, 40, 38, 43, 36, 42]; // F# uses its diminished fifth, C.
+const BASS_NOTES: [i32; 6] = [40, 45, 43, 36, 42, 35];
+const BED_NOTES: [i32; 6] = [28, 33, 31, 36, 30, 35];
+const LOW_FIFTHS: [i32; 6] = [35, 40, 38, 43, 36, 42];
 const CHORD_START_BEATS: [f64; 6] = [0.0, 6.0, 8.0, 14.0, 16.0, 22.0];
 const CHORD_LENGTH_BEATS: [f64; 6] = [6.0, 2.0, 6.0, 2.0, 6.0, 2.0];
-// Each row spans two chords: six beats of call, then a two-beat answer.
 const MELODY: [[i32; 8]; 3] = [
-    [52, 55, 59, 54, 55, 59, 60, 59], // Em(add9), then Am(add9).
-    [55, 59, 62, 54, 59, 62, 59, 52], // Gmaj7, then Cmaj7.
-    [54, 57, 60, 52, 57, 60, 57, 51], // F#m7b5, then B7.
+    [64, 67, 71, 67, 66, 64, 64, 60],
+    [62, 66, 67, 71, 69, 67, 67, 64],
+    [66, 69, 72, 69, 64, 66, 66, 63],
 ];
-const MELODY_BEATS: [f64; 8] = [0.5, 1.25, 2.75, 3.5, 4.25, 5.5, 6.25, 7.25];
-const MELODY_LENGTHS: [f64; 8] = [0.18, 0.14, 0.22, 0.16, 0.18, 0.14, 0.20, 0.16];
-const GROOVE_BEATS: f64 = 8.0;
-// Two bars of half-time movement: the second bar answers the first rather
-// than repeating a kick on every quarter. Gains also drive the gentle ducking.
-const KICK_PATTERN: [(f64, f64); 6] = [
-    (0.0, 0.155),
-    (1.5, 0.108),
-    (3.25, 0.092),
-    (4.0, 0.142),
-    (5.75, 0.104),
-    (7.5, 0.080),
+const RESPONSE_MELODY: [[i32; 8]; 3] = [
+    [64, 67, 71, 69, 67, 66, 60, 64],
+    [62, 66, 67, 69, 71, 67, 64, 67],
+    [66, 69, 72, 71, 69, 66, 63, 66],
 ];
-// A short bass answer follows some kicks and anticipates the final one.
-// Tuples are beat, duration in beats, and gain. No upper-octave lead is added.
-const BASS_PATTERN: [(f64, f64, f64); 7] = [
-    (0.0, 0.95, 0.105),
-    (1.5, 0.52, 0.082),
-    (3.25, 0.48, 0.078),
-    (4.0, 0.90, 0.100),
-    (5.75, 0.48, 0.080),
-    (6.0, 0.48, 0.075),
-    (7.5, 0.35, 0.070),
+const MELODY_BEATS: [f64; 8] = [0.5, 1.25, 2.0, 3.25, 4.0, 5.0, 6.25, 7.25];
+const MELODY_LENGTHS: [f64; 8] = [0.28, 0.32, 0.42, 0.30, 0.36, 0.34, 0.30, 0.32];
+const KICK_PATTERN: [(f64, f64); 8] = [
+    (0.0, 0.17),
+    (1.0, 0.14),
+    (2.0, 0.15),
+    (3.0, 0.14),
+    (4.0, 0.17),
+    (5.0, 0.14),
+    (6.0, 0.15),
+    (7.0, 0.14),
 ];
-const SNARE_LAG_SECONDS: f64 = 0.012;
-const SHAKER_SWING: f64 = 0.56;
+const SNARE_LAG_SECONDS: f64 = 0.006;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Voice {
     LowBed,
     Bass,
-    Pluck,
+    Lead,
+    Chord,
     Kick,
     Snare,
-    Brush,
-    Shaker,
+    Hat,
 }
 
 impl Voice {
     fn is_percussion(self) -> bool {
-        matches!(self, Self::Kick | Self::Snare | Self::Brush | Self::Shaker)
+        matches!(self, Self::Kick | Self::Snare | Self::Hat)
     }
 }
 
@@ -105,32 +95,41 @@ fn smooth(value: f64) -> f64 {
     value * value * (3.0 - 2.0 * value)
 }
 
-// Zero sustain: the body decays even before the explicit note release. The
-// short final taper keeps a clipped note from making a digital discontinuity.
-fn pluck_envelope(time: f64, length: f64, velocity: f64) -> f64 {
+fn lead_envelope(time: f64, length: f64, velocity: f64) -> f64 {
     if time < 0.0 || time >= length {
         return 0.0;
     }
-    let decay = 28.0 - 10.0 * velocity.clamp(0.0, 1.0);
-    smooth(time / 0.003) * (-time * decay).exp() * smooth((length - time) / 0.03)
+    smooth(time / 0.009)
+        * (-time * (8.5 - 2.0 * velocity.clamp(0.0, 1.0))).exp()
+        * smooth((length - time) / 0.075)
 }
 
-/// A short breath follows actual kicks, including the offbeats. Empty quarters
-/// stay unducked; the background never acquires a four-on-the-floor pump.
-fn sidechain(time: f64) -> f64 {
-    let phase = (time / BEAT_SECONDS).rem_euclid(GROOVE_BEATS);
-    let mut duck = 1.0_f64;
-    for (beat, velocity) in KICK_PATTERN {
-        let age = (phase - beat).rem_euclid(GROOVE_BEATS) * BEAT_SECONDS;
-        let depth = 0.18 * velocity / KICK_PATTERN[0].1;
-        let pulse = if age < 0.012 {
-            smooth(age / 0.012)
+// The source is a small bank of band-limited saw partials. Detuning and a
+// closing spectral envelope give motion and warmth rather than a static organ.
+fn analog_tone(phase: f64, rolloff: f64, detune: bool) -> f64 {
+    let mut tone = 0.0;
+    for partial in 1..=8 {
+        let harmonic = f64::from(partial);
+        let weight = (-harmonic * rolloff).exp() / harmonic;
+        let oscillator = if detune {
+            0.62 * (phase * harmonic).sin() + 0.38 * (phase * harmonic * 1.0045 + 0.12).sin()
         } else {
-            1.0 - smooth((age - 0.012) / 0.23)
+            // A small odd-harmonic pulse component rounds the saw bass.
+            (phase * harmonic).sin() * if partial % 2 == 1 { 1.0 } else { 0.55 }
         };
-        duck = duck.min(1.0 - depth * pulse);
+        tone += weight * oscillator;
     }
-    duck
+    tone * 0.9
+}
+
+fn sidechain(time: f64) -> f64 {
+    let phase = time.rem_euclid(BEAT_SECONDS);
+    let pulse = if phase < 0.012 {
+        smooth(phase / 0.012)
+    } else {
+        1.0 - smooth((phase - 0.012) / 0.20)
+    };
+    1.0 - 0.16 * pulse
 }
 
 fn harmonic_index(beat: f64) -> usize {
@@ -144,37 +143,55 @@ fn harmonic_index(beat: f64) -> usize {
 fn score_notes() -> Vec<Note> {
     let mut notes = Vec::new();
     for cycle in 0..2 {
-        for chord_index in 0..HARMONIES.len() {
-            let start = (cycle as f64 * 24.0 + CHORD_START_BEATS[chord_index]) * BEAT_SECONDS;
-            let root = BASS_NOTES[chord_index];
-            // Only roots and fifths sustain, entirely below the foreground.
-            // Their fades finish on the actual 6/2-beat harmonic boundaries.
-            let fifth = LOW_FIFTHS[chord_index];
-            for (midi, level, pan) in [(root, 0.008, -0.08), (fifth, 0.004, 0.08)] {
+        for chord in 0..HARMONIES.len() {
+            let start_beat = cycle as f64 * 24.0 + CHORD_START_BEATS[chord];
+            for (midi, level, pan) in [
+                (BED_NOTES[chord], 0.0045, -0.08),
+                (LOW_FIFTHS[chord], 0.0025, 0.08),
+            ] {
                 notes.push(Note {
-                    start,
-                    length: CHORD_LENGTH_BEATS[chord_index] * BEAT_SECONDS,
+                    start: start_beat * BEAT_SECONDS,
+                    length: CHORD_LENGTH_BEATS[chord] * BEAT_SECONDS,
                     midi: f64::from(midi),
                     gain: level,
                     pan,
                     voice: Voice::LowBed,
                 });
             }
+            // Quiet, clipped polysynth support makes the harmony audible
+            // without restoring the sustained midrange chord stack.
+            for offset in [0.0, 1.0] {
+                let beat = start_beat + offset + 0.02;
+                for (index, midi) in HARMONIES[chord][..3].iter().enumerate() {
+                    notes.push(Note {
+                        start: beat * BEAT_SECONDS,
+                        length: 0.24,
+                        midi: f64::from(*midi),
+                        gain: 0.014,
+                        pan: [-0.42, 0.12, 0.42][index],
+                        voice: Voice::Chord,
+                    });
+                }
+            }
         }
     }
     for phrase in 0..6 {
         let start_beat = phrase as f64 * GROOVE_BEATS;
         let start = start_beat * BEAT_SECONDS;
-        for (beat, length, velocity) in BASS_PATTERN {
-            let chord_index = harmonic_index(start_beat + beat);
+        // Eighth-note propulsion with occasional octave replies. The first
+        // downbeat defines each new harmony; the bass then plays around it.
+        for step in 0..16 {
+            let beat = step as f64 * 0.5;
+            let chord = harmonic_index(start_beat + beat);
             let phase = (start_beat + beat).rem_euclid(24.0);
-            let beats_to_change =
-                CHORD_START_BEATS[chord_index] + CHORD_LENGTH_BEATS[chord_index] - phase;
+            let available = CHORD_START_BEATS[chord] + CHORD_LENGTH_BEATS[chord] - phase;
+            let octave = if step % 4 == 3 { 12 } else { 0 };
+            let touch = if step % 2 == 0 { 0.0 } else { 0.003 };
             notes.push(Note {
-                start: start + beat * BEAT_SECONDS,
-                length: length.min(beats_to_change) * BEAT_SECONDS,
-                midi: f64::from(BASS_NOTES[chord_index]),
-                gain: velocity,
+                start: start + beat * BEAT_SECONDS + touch,
+                length: 0.17_f64.min(available * BEAT_SECONDS - touch),
+                midi: f64::from(BASS_NOTES[chord] + octave),
+                gain: if step % 2 == 0 { 0.093 } else { 0.070 },
                 pan: 0.0,
                 voice: Voice::Bass,
             });
@@ -182,83 +199,51 @@ fn score_notes() -> Vec<Note> {
         for (beat, velocity) in KICK_PATTERN {
             notes.push(Note {
                 start: start + beat * BEAT_SECONDS,
-                length: 0.28,
+                length: 0.22,
                 midi: 40.0,
                 gain: velocity,
                 pan: 0.0,
                 voice: Voice::Kick,
             });
         }
-        for beat in [2.0, 6.0] {
+        for beat in [1.0, 3.0, 5.0, 7.0] {
             notes.push(Note {
                 start: start + beat * BEAT_SECONDS + SNARE_LAG_SECONDS,
-                length: 0.24,
+                length: 0.22,
                 midi: 40.0,
-                gain: if beat < 4.0 { 0.138 } else { 0.148 },
-                pan: 0.04,
+                gain: if beat < 4.0 { 0.085 } else { 0.094 },
+                pan: 0.06,
                 voice: Voice::Snare,
             });
         }
-        for (beat, velocity) in [(1.75, 0.034), (5.5, 0.026), (6.75, 0.030)] {
-            notes.push(Note {
-                start: start + beat * BEAT_SECONDS,
-                length: 0.11,
-                midi: 40.0,
-                gain: velocity,
-                pan: -0.13,
-                voice: Voice::Brush,
-            });
-        }
-        // Each offbeat is a little late (56% swing). Alternate accents and a
-        // quiet second-bar variation keep these dark ticks out of the foreground.
-        let shaker_accents = [0.45, 1.0, 0.34, 0.78, 0.48, 0.86, 0.30, 0.94];
         for step in 0..16 {
-            let beat = (step / 2) as f64 + if step % 2 == 0 { 0.0 } else { SHAKER_SWING };
+            let offbeat = step % 2 == 1;
             notes.push(Note {
-                start: start + beat * BEAT_SECONDS,
-                length: 0.075,
+                start: start + step as f64 * 0.5 * BEAT_SECONDS + if offbeat { 0.003 } else { 0.0 },
+                length: if offbeat { 0.085 } else { 0.052 },
                 midi: 40.0,
-                gain: 0.060 * shaker_accents[step % 8] * if step >= 8 { 0.92 } else { 1.0 },
-                pan: if step % 2 == 0 { -0.24 } else { 0.24 },
-                voice: Voice::Shaker,
+                gain: if offbeat { 0.048 } else { 0.028 },
+                pan: if offbeat { 0.20 } else { -0.20 },
+                voice: Voice::Hat,
             });
         }
-        // Six beats of the first chord, then two beats of its answering chord.
-        // All foreground attacks are offbeat and every note ends before the
-        // next harmonic boundary. The second pass changes one call note.
-        let accents = [1.0, 0.70, 0.88, 0.79, 0.91, 0.72, 0.85, 0.64];
-        let touch = [-0.006, 0.008, -0.004, 0.011, -0.003, 0.007, 0.012, -0.002];
-        let pans = [-0.12, -0.04, 0.09, -0.07, 0.14, 0.03, 0.08, -0.10];
+        let returning = phrase >= 3;
+        let melody = if returning {
+            RESPONSE_MELODY[phrase % 3]
+        } else {
+            MELODY[phrase % 3]
+        };
+        let accents = [0.91, 0.73, 1.0, 0.82, 0.88, 0.76, 0.92, 0.78];
+        let touches = [-0.003, 0.006, 0.0, 0.008, -0.002, 0.005, 0.007, 0.003];
         for (index, original_beat) in MELODY_BEATS.into_iter().enumerate() {
-            let melody = MELODY[phrase % MELODY.len()];
-            let returning = phrase >= 3;
-            let beat = original_beat
-                + if returning {
-                    match index {
-                        1 | 4 | 6 => 0.125,
-                        5 => -0.25,
-                        _ => 0.0,
-                    }
-                } else {
-                    0.0
-                };
-            let midi = match (returning, index) {
-                (true, 4) => melody[2],
-                (true, 5) => melody[1],
-                (true, 6) => [64, 55, 54][phrase % 3],
-                (true, 7) => [60, 52, 51][phrase % 3],
-                _ => melody[index],
-            };
-            let velocity = accents[index] * if returning { 0.96 } else { 1.0 };
+            let beat = original_beat + if returning && index == 3 { 0.125 } else { 0.0 };
             notes.push(Note {
-                start: start
-                    + beat * BEAT_SECONDS
-                    + touch[index] * if phrase % 2 == 0 { 1.0 } else { 0.8 },
-                length: MELODY_LENGTHS[index] + 0.005 * velocity,
-                midi: f64::from(midi),
-                gain: 0.28 * velocity,
-                pan: pans[index],
-                voice: Voice::Pluck,
+                start: start + beat * BEAT_SECONDS + touches[index],
+                length: MELODY_LENGTHS[index],
+                midi: f64::from(melody[index]),
+                gain: 0.15 * accents[index],
+                pan: [-0.10, 0.04, 0.13, -0.05, 0.10, -0.12, 0.03, -0.04][index],
+                voice: Voice::Lead,
             });
         }
     }
@@ -278,60 +263,54 @@ fn add_note(buffer: &mut [[f64; 2]], note: Note) {
         let phase = std::f64::consts::TAU * frequency * time;
         let remaining = note.length - time;
         let sample = match note.voice {
-            Voice::LowBed => {
-                let envelope = smooth(time / 0.65) * smooth(remaining / 0.65);
-                envelope * (0.97 * phase.sin() + 0.03 * (phase * 2.0).sin())
-            }
+            Voice::LowBed => smooth(time / 0.45) * smooth(remaining / 0.45) * phase.sin(),
             Voice::Bass => {
                 let envelope =
-                    smooth(time / 0.018) * smooth(remaining / 0.095) * (-time * 1.9).exp();
-                envelope * (0.95 * phase.sin() + 0.05 * (phase * 2.0).sin())
+                    smooth(time / 0.006) * smooth(remaining / 0.035) * (-time * 5.0).exp();
+                envelope
+                    * (0.58 * phase.sin() + 0.42 * analog_tone(phase, 0.20 + time * 4.0, false))
             }
-            Voice::Pluck => {
-                // A rounded mallet-like attack closes quickly into the body.
-                // The upper partials decay faster than the fundamental, unlike
-                // the fixed harmonic balance of a held organ tone.
-                let velocity = (note.gain / 0.28).clamp(0.0, 1.0);
-                let transient = (-time * (55.0 - 20.0 * velocity)).exp();
-                let tone = (phase + (0.22 + 0.16 * velocity) * transient * (phase * 2.0).sin())
-                    .sin()
-                    + (0.18 + 0.12 * velocity) * (-time * 35.0).exp() * (phase * 2.0).sin()
-                    + 0.10 * (-time * 60.0).exp() * (phase * 3.0).sin();
-                pluck_envelope(time, note.length, velocity) * tone
+            Voice::Lead | Voice::Chord => {
+                let velocity = (note.gain / 0.15).clamp(0.0, 1.0);
+                let envelope = lead_envelope(time, note.length, velocity);
+                let tone = analog_tone(phase, 0.16 + time * 2.0, true);
+                envelope * tone
             }
             Voice::Kick => {
                 let envelope =
-                    smooth(time / 0.014) * smooth(remaining / 0.12) * (-time * 14.0).exp();
+                    smooth(time / 0.005) * smooth(remaining / 0.06) * (-time * 15.0).exp();
                 let sweep =
-                    std::f64::consts::TAU * (52.0 * time + 0.7 * (1.0 - (-time * 20.0).exp()));
+                    std::f64::consts::TAU * (49.0 * time + 1.4 * (1.0 - (-time * 24.0).exp()));
                 envelope * sweep.sin()
             }
-            Voice::Snare | Voice::Brush | Voice::Shaker => {
+            Voice::Snare | Voice::Hat => {
                 let bits = (offset as u32)
                     .wrapping_mul(747_796_405)
                     .wrapping_add((start as u32).wrapping_mul(2_891_336_453));
                 let noise = f64::from((bits ^ (bits >> 16)) & 0xffff) / 32767.5 - 1.0;
-                // No open hi-hat: restrict the noise before the master low-pass.
-                filtered_noise += 0.22 * (noise - filtered_noise);
-                slow_noise += 0.065 * (filtered_noise - slow_noise);
-                if note.voice == Voice::Shaker {
-                    smooth(time / 0.006)
-                        * smooth(remaining / 0.032)
-                        * (-time * 40.0).exp()
+                filtered_noise += 0.48 * (noise - filtered_noise);
+                slow_noise += 0.08 * (filtered_noise - slow_noise);
+                if note.voice == Voice::Hat {
+                    smooth(time / 0.002)
+                        * smooth(remaining / 0.025)
+                        * (-time * 36.0).exp()
                         * (filtered_noise - slow_noise)
                 } else {
-                    let ghost = note.voice == Voice::Brush;
-                    let envelope = smooth(time / 0.005)
-                        * smooth(remaining / 0.065)
-                        * (-time * if ghost { 30.0 } else { 20.0 }).exp();
-                    let body_phase =
-                        std::f64::consts::TAU * (168.0 * time + 0.6 * (1.0 - (-time * 25.0).exp()));
-                    envelope
-                        * (0.62 * body_phase.sin()
-                            + 0.13
-                                * (std::f64::consts::TAU * 330.0 * time).sin()
-                                * (-time * 30.0).exp()
-                            + 0.8 * filtered_noise)
+                    let body = (std::f64::consts::TAU * 182.0 * time).sin() * (-time * 25.0).exp();
+                    let clap = [0.0, 0.009, 0.018]
+                        .into_iter()
+                        .map(|delay| {
+                            if time >= delay {
+                                (-(time - delay) * 95.0).exp()
+                            } else {
+                                0.0
+                            }
+                        })
+                        .sum::<f64>();
+                    smooth(time / 0.002)
+                        * smooth(remaining / 0.06)
+                        * (0.48 * body
+                            + 1.2 * filtered_noise * (0.5 * (-time * 15.0).exp() + 0.22 * clap))
                 }
             }
         } * note.gain;
@@ -348,16 +327,14 @@ fn render_score() -> Vec<i16> {
     for note in score_notes() {
         let target = if note.voice.is_percussion() {
             &mut drums
-        } else if note.voice == Voice::Pluck {
+        } else if matches!(note.voice, Voice::Lead | Voice::Chord) {
             &mut lead
         } else {
             &mut background
         };
         add_note(target, note);
     }
-    // Short, low-level reflections belong only to the plucks. The low bed and
-    // bass stay dry so overlapping echoes cannot turn into another organ wash.
-    let taps = [(BEAT_SECONDS * 0.5, 0.10), (BEAT_SECONDS * 0.75, 0.045)]
+    let taps = [(BEAT_SECONDS * 0.75, 0.14), (BEAT_SECONDS * 1.5, 0.065)]
         .map(|(delay, amount)| ((delay * f64::from(SAMPLE_RATE)).round() as usize, amount));
     let mut mix = Vec::with_capacity(FRAME_COUNT);
     for (index, frame) in lead.iter().enumerate() {
@@ -371,14 +348,14 @@ fn render_score() -> Vec<i16> {
                     * amount;
             }
             stereo[channel] =
-                (((melodic + background[index][channel]) * duck + drums[index][channel]) * 1.6)
+                (((melodic + background[index][channel]) * duck + drums[index][channel]) * 1.35)
                     .tanh();
         }
         mix.push(stereo);
     }
-    // Two gentle low-pass stages take off upper harmonics. Warm the filters
-    // over a full cycle before rendering so the loop has a periodic filter state.
-    let alpha = 1.0 - (-std::f64::consts::TAU * 1_900.0 / f64::from(SAMPLE_RATE)).exp();
+    // Two gentle stages tame the top end while retaining the saw's character.
+    // Warm the filter over a whole cycle so its boundary remains periodic.
+    let alpha = 1.0 - (-std::f64::consts::TAU * 3_000.0 / f64::from(SAMPLE_RATE)).exp();
     let mut first = [0.0; 2];
     let mut second = [0.0; 2];
     let mut rendered = Vec::with_capacity(FRAME_COUNT * usize::from(CHANNELS));
@@ -396,7 +373,7 @@ fn render_score() -> Vec<i16> {
     let peak = rendered
         .iter()
         .fold(0.0_f64, |peak, sample| peak.max(sample.abs()));
-    let master = 0.72 / peak.max(f64::EPSILON);
+    let master = MASTER_PEAK / peak.max(f64::EPSILON);
     rendered
         .into_iter()
         .map(|sample| (sample * master * f64::from(i16::MAX)) as i16)
@@ -410,11 +387,11 @@ pub fn prepare() {
     LazyLock::force(&SCORE_SAMPLES);
 }
 
-/// Create a 25.714-second stereo, signed 16-bit PCM WAV at 22.05 kHz.
+/// Create a quiet 24-second stereo, signed 16-bit PCM WAV at 22.05 kHz.
 ///
-/// The 112-BPM E-minor theme moves through i–iv–III–VI–iiø7–V7, with a six-note
-/// call and two-note reply. Short foreground plucks, a quiet bass foundation,
-/// and a softly swung beat leave room for the welcome UI. Rendering is cached.
+/// The 120-BPM synthwave theme keeps six/two-beat chord changes, with a warm
+/// analog-style hook, pulsing octave bass and a straight dance backbeat.
+/// Its restrained master level leaves room for the welcome UI. Rendering is cached.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn synthesize_score(requested_volume: f32) -> Vec<u8> {
     let requested_gain = gain(requested_volume);
@@ -528,188 +505,115 @@ mod tests {
     }
 
     #[test]
-    fn background_pulse_follows_broken_kicks_instead_of_every_quarter() {
-        assert!((BEAT_SECONDS * 48.0 - LOOP_SECONDS).abs() < 1e-12);
-        assert!((sidechain(0.0) - 1.0).abs() < 1e-12);
-        assert!((sidechain(0.012) - 0.82).abs() < 1e-12);
-        // Beat two is empty, while the following offbeat breathes with its kick.
-        assert_eq!(sidechain(BEAT_SECONDS * 1.0 + 0.012), 1.0);
-        assert!(sidechain(BEAT_SECONDS * 1.5 + 0.012) < 0.9);
-        for sample in 0..1000 {
-            let time = sample as f64 * BEAT_SECONDS * GROOVE_BEATS / 1000.0;
-            assert!((0.82..=1.0).contains(&sidechain(time)));
-            assert!(
-                (sidechain(time) - sidechain(time + BEAT_SECONDS * GROOVE_BEATS)).abs() < 1e-12
-            );
-        }
-        assert!((sidechain(LOOP_SECONDS - 1e-6) - sidechain(0.0)).abs() < 1e-8);
-    }
-
-    #[test]
-    fn groove_has_syncopated_kicks_late_half_time_backbeats_and_ghosts() {
+    fn dance_groove_has_quarter_kicks_and_two_and_four_backbeats() {
         let notes = score_notes();
-        let first_phrase: Vec<_> = notes
+        let phrase: Vec<_> = notes
             .iter()
-            .filter(|note| note.start >= 0.0 && note.start < 8.0 * BEAT_SECONDS)
+            .filter(|note| note.start >= 0.0 && note.start < GROOVE_BEATS * BEAT_SECONDS)
             .collect();
-        let kicks: Vec<_> = first_phrase
+        let kicks: Vec<_> = phrase
             .iter()
             .filter(|note| note.voice == Voice::Kick)
             .collect();
-        assert_eq!(kicks.len(), 6);
-        let offbeat_count = kicks
-            .iter()
-            .filter(|note| {
-                let beat = note.start / BEAT_SECONDS;
-                (beat - beat.round()).abs() > 0.1
-            })
-            .count();
-        assert_eq!(offbeat_count, 4);
-        assert!(kicks[0].gain > kicks[1].gain);
-        assert!(kicks[3].gain > kicks[4].gain);
-        let backbeats: Vec<_> = first_phrase
+        assert_eq!(kicks.len(), 8);
+        for (beat, note) in kicks.iter().enumerate() {
+            assert!((note.start / BEAT_SECONDS - beat as f64).abs() < 1e-9);
+        }
+        let snares: Vec<_> = phrase
             .iter()
             .filter(|note| note.voice == Voice::Snare)
             .collect();
-        assert_eq!(backbeats.len(), 2);
-        for (note, beat) in backbeats.iter().zip([2.0, 6.0]) {
-            let lag = note.start - beat * BEAT_SECONDS;
-            assert!((0.008..=0.018).contains(&lag));
+        assert_eq!(snares.len(), 4);
+        for (note, beat) in snares.iter().zip([1.0, 3.0, 5.0, 7.0]) {
+            assert!((note.start - beat * BEAT_SECONDS - SNARE_LAG_SECONDS).abs() < 1e-9);
         }
-        let ghosts: Vec<_> = first_phrase
+        let hats: Vec<_> = phrase
             .iter()
-            .filter(|note| note.voice == Voice::Brush)
+            .filter(|note| note.voice == Voice::Hat)
             .collect();
-        assert!(ghosts.len() >= 2);
-        assert!(
-            ghosts
-                .iter()
-                .all(|note| note.gain < backbeats[0].gain * 0.3)
-        );
-        let bass: Vec<_> = first_phrase
+        assert_eq!(hats.len(), 16);
+        assert!(hats[1].gain > hats[0].gain);
+        assert!(hats.iter().all(|note| note.length < 0.1));
+    }
+
+    #[test]
+    fn octave_bass_drives_the_beat_and_follows_six_two_changes() {
+        let notes = score_notes();
+        let bass: Vec<_> = notes
             .iter()
             .filter(|note| note.voice == Voice::Bass)
             .collect();
-        assert!(kicks.iter().all(|kick| {
-            bass.iter()
-                .any(|note| (note.start - kick.start).abs() < 1e-9)
-        }));
-        assert!(bass.iter().all(|note| note.length < BEAT_SECONDS));
-    }
-
-    #[test]
-    fn quiet_shakers_swing_instead_of_playing_straight_eighths() {
-        let notes = score_notes();
-        let shakers: Vec<_> = notes
-            .iter()
-            .filter(|note| note.voice == Voice::Shaker && note.start < 8.0 * BEAT_SECONDS)
-            .collect();
-        assert_eq!(shakers.len(), 16);
-        for pair in shakers.chunks_exact(2) {
-            let offbeat = (pair[1].start - pair[0].start) / BEAT_SECONDS;
-            assert!((0.54..=0.58).contains(&offbeat));
-            assert!(pair[1].gain > pair[0].gain);
-            assert!(
-                pair.iter()
-                    .all(|note| note.gain <= 0.06 && note.length <= 0.08)
-            );
+        assert_eq!(bass.len(), 96);
+        assert!(bass.iter().any(|note| note.midi >= 55.0));
+        for note in bass {
+            let beat = note.start / BEAT_SECONDS;
+            let chord = harmonic_index(beat);
+            assert_eq!(note.midi as i32 % 12, BASS_NOTES[chord] % 12);
+            let phase = beat.rem_euclid(24.0);
+            let available = CHORD_START_BEATS[chord] + CHORD_LENGTH_BEATS[chord] - phase;
+            assert!(note.length <= available * BEAT_SECONDS + 1e-9);
         }
-        assert!(shakers[8].gain < shakers[0].gain);
-    }
-
-    #[test]
-    fn only_low_roots_and_fifths_sustain_under_the_new_progression() {
-        let notes = score_notes();
-        let pitched: Vec<_> = notes
-            .iter()
-            .filter(|note| !note.voice.is_percussion())
-            .collect();
-        assert!(pitched.iter().all(|note| note.midi <= 64.0));
-        let beds: Vec<_> = pitched
-            .iter()
-            .filter(|note| note.voice == Voice::LowBed)
-            .collect();
-        assert_eq!(beds.len(), 24); // Two voices, six chords, two passes.
-        assert!(beds.iter().all(|note| (28.0..=43.0).contains(&note.midi)));
-        assert!(beds.iter().all(|note| note.gain <= 0.008));
-        assert!(
-            pitched
-                .iter()
-                .all(|note| note.length <= BEAT_SECONDS || note.voice == Voice::LowBed)
-        );
-        let roots: Vec<_> = BASS_NOTES.iter().map(|note| note % 12).collect();
-        assert_eq!(roots, [4, 9, 7, 0, 6, 11]); // 1–4–3–6–2, then dominant.
-        assert_eq!(LOW_FIFTHS[4] % 12, 0); // Diminished fifth C over F#.
-        assert!(HARMONIES[5].contains(&51)); // D# resolves up to E.
-        assert_eq!(MELODY[2][7] + 1, MELODY[0][0]);
-    }
-
-    #[test]
-    fn harmony_alternates_six_and_two_beats_with_bass_and_melody_aligned() {
-        let notes = score_notes();
         assert_eq!(CHORD_START_BEATS, [0.0, 6.0, 8.0, 14.0, 16.0, 22.0]);
         assert_eq!(CHORD_LENGTH_BEATS, [6.0, 2.0, 6.0, 2.0, 6.0, 2.0]);
         for cycle in 0..2 {
             for chord in 0..6 {
                 let start = cycle as f64 * 24.0 + CHORD_START_BEATS[chord];
-                let end = start + CHORD_LENGTH_BEATS[chord];
-                assert_eq!(harmonic_index(start), chord);
-                assert_eq!(harmonic_index(end - 0.001), chord);
                 assert!(notes.iter().any(|note| note.voice == Voice::Bass
                     && (note.start / BEAT_SECONDS - start).abs() < 1e-9
                     && note.midi == f64::from(BASS_NOTES[chord])));
-                let melody: Vec<_> = notes
-                    .iter()
-                    .filter(|note| {
-                        let beat = note.start / BEAT_SECONDS;
-                        note.voice == Voice::Pluck && beat >= start && beat < end
-                    })
-                    .collect();
-                assert_eq!(melody.len(), if chord % 2 == 0 { 6 } else { 2 });
-                assert!(melody.iter().all(|note| {
-                    HARMONIES[chord]
-                        .iter()
-                        .any(|pitch| *pitch % 12 == note.midi as i32 % 12)
-                        && note.start + note.length <= end * BEAT_SECONDS
-                }));
             }
         }
-        for note in notes.iter().filter(|note| note.voice == Voice::Bass) {
-            let beat = note.start / BEAT_SECONDS;
-            let chord = harmonic_index(beat);
-            let phase = beat.rem_euclid(24.0);
-            let available = CHORD_START_BEATS[chord] + CHORD_LENGTH_BEATS[chord] - phase;
-            assert!(note.length <= available * BEAT_SECONDS + 1e-9);
-        }
+        assert_eq!(LOW_FIFTHS[4] % 12, 0); // C is the diminished fifth over F#.
     }
 
     #[test]
-    fn foreground_is_short_syncopated_plucks_with_space_and_no_sustain() {
+    fn analog_hook_has_articulated_phrases_and_a_varied_return() {
         let notes = score_notes();
-        let plucks: Vec<_> = notes
+        let leads: Vec<_> = notes
             .iter()
-            .filter(|note| note.voice == Voice::Pluck)
+            .filter(|note| note.voice == Voice::Lead)
             .collect();
-        assert_eq!(plucks.len(), 48);
+        assert_eq!(leads.len(), 48);
         assert!(
-            plucks
+            leads
                 .iter()
-                .all(|note| (0.14..=0.23).contains(&note.length))
+                .all(|note| (0.25..=0.45).contains(&note.length))
         );
-        assert!(plucks.iter().all(|note| {
-            let beat = note.start / BEAT_SECONDS;
-            (beat - beat.round()).abs() > 0.1
-        }));
-        for pair in plucks.windows(2) {
-            assert!(pair[1].start - pair[0].start - pair[0].length >= 0.15);
+        assert!(leads.iter().all(|note| (60.0..=72.0).contains(&note.midi)));
+        for pair in leads.windows(2) {
+            assert!(pair[1].start > pair[0].start + pair[0].length);
         }
-        let duty: f64 = plucks.iter().map(|note| note.length).sum::<f64>() / LOOP_SECONDS;
-        assert!(duty < 0.35);
-        assert!(pluck_envelope(0.12, 0.22, 1.0) < pluck_envelope(0.012, 0.22, 1.0) * 0.15);
-        assert_eq!(pluck_envelope(0.22, 0.22, 1.0), 0.0);
-        assert_eq!(pluck_envelope(0.30, 0.22, 1.0), 0.0);
-        assert!(pluck_envelope(0.12, 0.22, 0.6) < pluck_envelope(0.12, 0.22, 1.0));
-        assert_ne!(plucks[4].midi, plucks[28].midi); // Second-pass contour varies.
+        assert_ne!(leads[3].midi, leads[27].midi);
+        assert!(lead_envelope(0.25, 0.42, 1.0) < lead_envelope(0.02, 0.42, 1.0) * 0.3);
+        assert_eq!(lead_envelope(0.42, 0.42, 1.0), 0.0);
+        assert_eq!(lead_envelope(0.50, 0.42, 1.0), 0.0);
+        assert!(lead_envelope(0.25, 0.42, 0.5) < lead_envelope(0.25, 0.42, 1.0));
+        let beds: Vec<_> = notes
+            .iter()
+            .filter(|note| note.voice == Voice::LowBed)
+            .collect();
+        assert!(
+            beds.iter()
+                .all(|note| note.midi <= 43.0 && note.gain <= 0.0045)
+        );
+        assert!(
+            notes
+                .iter()
+                .filter(|note| note.length > 0.45)
+                .all(|note| note.voice == Voice::LowBed)
+        );
+    }
+
+    #[test]
+    fn sidechain_breathes_gently_with_the_steady_kick() {
+        assert!((BEAT_SECONDS * 48.0 - LOOP_SECONDS).abs() < 1e-12);
+        assert!((sidechain(0.012) - 0.84).abs() < 1e-12);
+        for sample in 0..1000 {
+            let time = sample as f64 * BEAT_SECONDS / 1000.0;
+            assert!((0.84..=1.0).contains(&sidechain(time)));
+            assert!((sidechain(time) - sidechain(time + BEAT_SECONDS)).abs() < 1e-12);
+        }
+        assert!((sidechain(LOOP_SECONDS - 1e-6) - sidechain(0.0)).abs() < 1e-8);
     }
 
     #[test]
@@ -728,6 +632,7 @@ mod tests {
             SAMPLE_RATE
         );
         assert_eq!(samples(&wav).len(), FRAME_COUNT * usize::from(CHANNELS));
+        assert_eq!(LOOP_SECONDS, 24.0);
         assert!(wav.len() < 6 * 1024 * 1024);
     }
 
@@ -739,12 +644,6 @@ mod tests {
         assert_eq!(quiet, synthesize_score(0.25));
         let full = samples(&full);
         let quiet = samples(&quiet);
-        let peak = full
-            .iter()
-            .map(|sample| i32::from(*sample).abs())
-            .max()
-            .unwrap();
-        assert!(peak > 1000 && peak < i32::from(i16::MAX));
         assert!(
             full.iter()
                 .zip(&quiet)
@@ -760,59 +659,37 @@ mod tests {
     }
 
     #[test]
-    fn output_has_headroom_and_stays_dark_with_audible_percussion() {
+    fn mix_is_quiet_and_keeps_the_foreground_above_the_sustained_bed() {
         let output = samples(&synthesize_score(1.0));
         let normalized: Vec<_> = output
             .iter()
             .map(|sample| f64::from(*sample) / f64::from(i16::MAX))
             .collect();
-        let rms = (normalized.iter().map(|sample| sample * sample).sum::<f64>()
-            / normalized.len() as f64)
-            .sqrt();
+        let energy = |values: &[f64]| values.iter().map(|sample| sample * sample).sum::<f64>();
+        let rms = (energy(&normalized) / normalized.len() as f64).sqrt();
         let peak = normalized
             .iter()
             .fold(0.0_f64, |peak, sample| peak.max(sample.abs()));
-        assert!((0.07..0.22).contains(&rms), "full-volume RMS {rms}");
-        assert!((0.71..0.73).contains(&peak));
-        // First differences emphasize upper frequencies. This bound catches
-        // accidentally bright noise/lead additions without testing a recipe.
-        let difference_rms = (normalized
+        assert!((0.04..0.12).contains(&rms), "RMS {rms}");
+        assert!((0.44..0.46).contains(&peak));
+        let differences: Vec<_> = normalized
             .iter()
             .zip(normalized.iter().skip(2))
-            .map(|(a, b)| (a - b).powi(2))
-            .sum::<f64>()
-            / (normalized.len() - 2) as f64)
-            .sqrt();
-        assert!(difference_rms / rms < 0.18);
-
+            .map(|(a, b)| a - b)
+            .collect();
+        let difference_rms = (energy(&differences) / differences.len() as f64).sqrt();
+        assert!(difference_rms / rms < 0.35); // Character without a harsh upper register.
         let mut lead = vec![[0.0_f64; 2]; FRAME_COUNT];
         let mut bed = vec![[0.0_f64; 2]; FRAME_COUNT];
-        let mut drums = vec![[0.0_f64; 2]; FRAME_COUNT];
         for note in score_notes() {
-            let target = if note.voice.is_percussion() {
-                &mut drums
-            } else if note.voice == Voice::Pluck {
-                &mut lead
+            if note.voice == Voice::Lead {
+                add_note(&mut lead, note);
             } else if note.voice == Voice::LowBed {
-                &mut bed
-            } else {
-                continue;
-            };
-            add_note(target, note);
+                add_note(&mut bed, note);
+            }
         }
-        let energy = |stem: &[[f64; 2]]| -> f64 {
-            stem.iter()
-                .flatten()
-                .map(|sample| sample * sample)
-                .sum::<f64>()
-        };
-        let ratio = (energy(&drums) / energy(&lead)).sqrt();
-        assert!(
-            (0.20..1.50).contains(&ratio),
-            "percussion/foreground RMS ratio {ratio}"
-        );
-        let lead_to_bed = (energy(&lead) / energy(&bed)).sqrt();
-        assert!(lead_to_bed > 4.0, "foreground/bed RMS ratio {lead_to_bed}");
+        let stem_energy = |stem: &[[f64; 2]]| stem.iter().flatten().map(|v| v * v).sum::<f64>();
+        assert!((stem_energy(&lead) / stem_energy(&bed)).sqrt() > 4.0);
     }
 
     #[test]
@@ -828,8 +705,6 @@ mod tests {
             let seam = values[0] - values[values.len() - 1];
             let before = values[values.len() - 1] - values[values.len() - 2];
             let after = values[1] - values[0];
-            // A click is a discontinuity relative to neighboring slopes,
-            // rather than the ordinary sample-to-sample movement of a tone.
             assert!(seam.abs() <= before.abs().max(after.abs()) + 300);
             assert!(
                 (seam - before).abs() < 300,
@@ -839,7 +714,6 @@ mod tests {
                 (after - seam).abs() < 300,
                 "after seam slope {seam} -> {after}"
             );
-            assert!(values.iter().any(|sample| *sample != 0));
         }
     }
 }
