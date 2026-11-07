@@ -8,6 +8,7 @@
   isolation: isolate;
   background: #000;
   color: #f3eadb;
+  --star-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 .star-birth-canvas {
@@ -36,7 +37,8 @@
 .star-birth-kicker {
   display: block;
   margin-bottom: 16px;
-  color: #a29887;
+  color: #a7b9ad;
+  font-family: var(--star-mono);
   font-size: clamp(8px, 1vw, 10px);
   font-weight: 500;
   letter-spacing: .2em;
@@ -44,13 +46,14 @@
 
 .star-birth-title h1 {
   margin: 0;
+  font-family: var(--star-mono);
   font-size: clamp(42px, 7.2vw, 78px);
-  font-weight: 350;
+  font-weight: 400;
   line-height: 1.08;
   letter-spacing: .19em;
   padding-left: .19em;
   text-transform: uppercase;
-  text-shadow: 0 0 50px #edb87421;
+  text-shadow: 0 0 34px #edb87435, 1px 0 #9fc4bb30;
 }
 
 .star-birth-title p {
@@ -70,7 +73,8 @@
   align-items: center;
   gap: 12px;
   border: 1px solid #ffffff1c;
-  border-radius: 20px;
+  border-radius: 4px;
+  font-family: var(--star-mono);
   padding: 9px 14px;
   background: #08090bbf;
   color: #a3a09a;

@@ -28,6 +28,41 @@ function circle(context: CanvasRenderingContext2D, x: number, y: number, radius:
   context.arc(x, y, Math.max(0.01, radius), 0, Math.PI * 2);
 }
 
+function drawScope(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  elapsed: number,
+  calm: boolean,
+) {
+  const reveal = calm ? 0.65 : smooth((elapsed - 650) / 1_500);
+  if (reveal <= 0) return;
+  context.save();
+  // Stationary, low-contrast phosphor lines suggest a CRT without flicker,
+  // moving noise, or a texture laid over the readable interface text.
+  context.fillStyle = `rgba(153,195,187,${reveal * 0.014})`;
+  for (let y = 1; y < height; y += 4) context.fillRect(0, y, width, 1);
+  const inset = width < 900 ? 20 : 30;
+  context.strokeStyle = `rgba(142,191,188,${reveal * 0.23})`;
+  context.lineWidth = 1;
+  for (const [x, y, sx, sy] of [
+    [inset, inset, 1, 1],
+    [width - inset, inset, -1, 1],
+    [inset, height - inset, 1, -1],
+    [width - inset, height - inset, -1, -1],
+  ]) {
+    context.beginPath();
+    context.moveTo(x + sx * 14, y);
+    context.lineTo(x, y);
+    context.lineTo(x, y + sy * 14);
+    context.stroke();
+  }
+  context.font = '9px "SFMono-Regular", Consolas, monospace';
+  context.fillStyle = `rgba(165,194,187,${reveal * 0.64})`;
+  context.fillText("SOLAR / ORIGIN", inset + 10, height - inset - 12);
+  context.restore();
+}
+
 function glow(
   context: CanvasRenderingContext2D,
   x: number,
@@ -134,6 +169,8 @@ function paint(
   const centerY = height * (0.49 - zoom * 0.1);
   const afterglow = reducedMotion ? 1 : smooth((elapsed - BURST_AT) / 1_600);
 
+  if (reducedMotion || elapsed >= 650) drawScope(context, width, height, elapsed, reducedMotion);
+
   if (afterglow > 0) {
     for (let index = 0; index < 74; index += 1) {
       const x = seeded(index * 3 + 10) * width;
@@ -169,7 +206,7 @@ function paint(
       context.lineWidth = 0.65 + gathering * 0.6;
       circle(context, centerX, centerY, radius);
       context.stroke();
-      context.strokeStyle = `rgba(221,231,245,${alpha * 0.16})`;
+      context.strokeStyle = `rgba(157,203,205,${alpha * 0.18})`;
       context.lineWidth = 4;
       context.stroke();
     }
@@ -217,6 +254,17 @@ function paint(
     }
     const starRadius = smaller * (0.033 + zoom * 0.054);
     drawStar(context, centerX, centerY, starRadius, time, smooth((elapsed - BURST_AT) / 320), smooth((elapsed - 8_500) / 700));
+    context.save();
+    context.strokeStyle = `rgba(145,192,184,${zoom * 0.25})`;
+    context.lineWidth = 1;
+    for (let tick = 0; tick < 4; tick += 1) {
+      const angle = tick * Math.PI / 2;
+      context.beginPath();
+      context.moveTo(centerX + Math.cos(angle) * starRadius * 2.05, centerY + Math.sin(angle) * starRadius * 2.05);
+      context.lineTo(centerX + Math.cos(angle) * starRadius * 2.17, centerY + Math.sin(angle) * starRadius * 2.17);
+      context.stroke();
+    }
+    context.restore();
   }
 }
 

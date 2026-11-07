@@ -27,7 +27,7 @@ function validStep(value: unknown): Step {
 }
 
 function Later({ children }: { children: ReactNode }) {
-  return <p className="onboarding-later"><Settings2 size={13} />{children}</p>;
+  return <p className="onboarding-later"><Settings2 size={13} /><span>{children}</span></p>;
 }
 
 function SettingSwitch({ title, description, checked, disabled, onChange }: {

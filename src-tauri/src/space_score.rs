@@ -1,32 +1,42 @@
-//! A bright, repeating melodic EDM score made from MIDI pitches and synthesis.
+//! A warm, lower-register, analog-inspired electronic theme for Solar's beginning.
 //!
-//! The 128-BPM, 16-bar loop stays in C major. Its four-on-the-floor beat,
-//! offbeat bass, syncopated chord stabs and bright lead make the welcome lively.
-//! Notes, releases and stereo delay wrap around the same 30-second timeline.
-//! No recordings or network assets are used. The I–V–vi–IV harmony is discussed
-//! in Open Music Theory:
-//! https://viva.pressbooks.pub/openmusictheory/chapter/4-chord-schemas/
+//! The 112-BPM, 16-bar loop starts in E minor, opens into related major
+//! harmonies, then returns through a suspended dominant. This is a musical
+//! interpretation of emergence and renewal, not a claim about universal emotion.
+//! Notes, releases and stereo echoes wrap around the same timeline. No
+//! recordings or network assets are used. Detuned pads, rounded bass and dark
+//! stereo echoes provide retro warmth without a high chiptune melody.
+//! Tonic/dominant function reference:
+//! https://musictheory.pugetsound.edu/mt21c/HarmonicFunction.html
 
 use std::sync::LazyLock;
 
 const SAMPLE_RATE: u32 = 22_050;
 const CHANNELS: u16 = 2;
-const BPM: f64 = 128.0;
-const LOOP_MILLISECONDS: u32 = 30_000;
-const LOOP_SECONDS: f64 = 30.0;
+const BPM: f64 = 112.0;
 const BEAT_SECONDS: f64 = 60.0 / BPM;
-const FRAME_COUNT: usize = SAMPLE_RATE as usize * LOOP_MILLISECONDS as usize / 1000;
+// Exactly 64 beats at 112 BPM: use samples, not rounded milliseconds.
+const FRAME_COUNT: usize = 756_000;
+const LOOP_SECONDS: f64 = FRAME_COUNT as f64 / SAMPLE_RATE as f64;
+const HARMONIES: [[i32; 4]; 8] = [
+    [52, 55, 59, 66], // Em(add9): E, G, B, F#.
+    [52, 55, 59, 60], // Cmaj7/E: E, G, B, C.
+    [50, 55, 57, 59], // G(add9): D, G, A, B.
+    [50, 57, 62, 64], // Dsus2: D, A, D, E.
+    [48, 52, 55, 59], // Am9: C, E, G, B above an A bass.
+    [48, 52, 55, 59], // Cmaj7: C, E, G, B.
+    [47, 52, 54, 57], // B7sus4: B, E, F#, A.
+    [47, 51, 54, 57], // B7: B, D#, F#, A; D# resolves to E on the loop.
+];
+const BASS_NOTES: [i32; 8] = [40, 48, 43, 38, 45, 48, 47, 47];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Voice {
     Pad,
     Bass,
-    Lead,
-    Stab,
+    Key,
     Kick,
-    Clap,
-    ClosedHat,
-    OpenHat,
+    Brush,
 }
 
 struct Note {
@@ -52,31 +62,96 @@ fn smooth(value: f64) -> f64 {
     value * value * (3.0 - 2.0 * value)
 }
 
-/// A polynomial correction removes a sawtooth's discontinuity before it aliases.
-fn poly_blep(phase: f64, increment: f64) -> f64 {
-    if phase < increment {
-        let x = phase / increment;
-        2.0 * x - x * x - 1.0
-    } else if phase > 1.0 - increment {
-        let x = (phase - 1.0) / increment;
-        x * x + 2.0 * x + 1.0
-    } else {
-        0.0
-    }
-}
-
-fn saw(phase: f64, increment: f64) -> f64 {
-    2.0 * phase - 1.0 - poly_blep(phase, increment)
-}
-
-/// Fast attack and a musical recovery, continuous across each beat/loop edge.
+/// A subtle, roughly 1.5 dB breath under the pulse, not a club-style pump.
 fn sidechain(time: f64) -> f64 {
     let phase = (time / BEAT_SECONDS).rem_euclid(1.0);
-    if phase < 0.035 {
-        1.0 - 0.8 * smooth(phase / 0.035)
+    if phase < 0.06 {
+        1.0 - 0.16 * smooth(phase / 0.06)
     } else {
-        0.2 + 0.8 * smooth((phase - 0.035) / 0.58)
+        0.84 + 0.16 * smooth((phase - 0.06) / 0.52)
     }
+}
+
+fn score_notes() -> Vec<Note> {
+    let mut notes = Vec::new();
+    let pans = [-0.6, 0.4, -0.2, 0.6];
+    // Quiet beginnings, a little opening in the middle, then a poised return.
+    let warmth = [0.84, 0.92, 1.0, 0.98, 0.94, 1.0, 0.87, 0.84];
+    let motif = [
+        [59, 64],
+        [60, 64],
+        [59, 62],
+        [57, 62],
+        [59, 60],
+        [55, 64],
+        [54, 59],
+        [57, 63],
+    ];
+    for (chord_index, chord) in HARMONIES.iter().enumerate() {
+        let start = chord_index as f64 * 8.0 * BEAT_SECONDS;
+        for (voice, midi) in chord.iter().enumerate() {
+            notes.push(Note {
+                start: start - 0.65,
+                length: 8.0 * BEAT_SECONDS + 1.3,
+                midi: f64::from(*midi),
+                gain: 0.075 * warmth[chord_index],
+                pan: pans[voice],
+                voice: Voice::Pad,
+            });
+        }
+        for beat in [0.0, 3.5, 6.0] {
+            notes.push(Note {
+                start: start + beat * BEAT_SECONDS,
+                length: 0.82,
+                midi: f64::from(BASS_NOTES[chord_index]),
+                gain: 0.066,
+                pan: 0.0,
+                voice: Voice::Bass,
+            });
+        }
+        for beat in 0..8 {
+            notes.push(Note {
+                start: start + f64::from(beat) * BEAT_SECONDS,
+                length: 0.28,
+                midi: 40.0,
+                gain: if beat % 4 == 0 { 0.053 } else { 0.032 },
+                pan: 0.0,
+                voice: Voice::Kick,
+            });
+        }
+        for beat in [2.0, 6.0] {
+            notes.push(Note {
+                start: start + beat * BEAT_SECONDS,
+                length: 0.25,
+                midi: 40.0,
+                gain: 0.013,
+                pan: 0.1,
+                voice: Voice::Brush,
+            });
+        }
+        // Slow inner movement stays within the chord's existing register.
+        for (index, beat) in [1.0, 3.0, 5.0, 7.0].into_iter().enumerate() {
+            notes.push(Note {
+                start: start + beat * BEAT_SECONDS,
+                length: 1.1,
+                midi: f64::from(chord[[1, 2, 1, 3][index]]),
+                gain: 0.021,
+                pan: if index % 2 == 0 { -0.3 } else { 0.3 },
+                voice: Voice::Key,
+            });
+        }
+        for (index, beat) in [0.5, 4.5].into_iter().enumerate() {
+            notes.push(Note {
+                start: start + beat * BEAT_SECONDS,
+                length: 1.8,
+                midi: f64::from(motif[chord_index][index]),
+                gain: 0.030 * warmth[chord_index],
+                pan: 0.05,
+                voice: Voice::Key,
+            });
+        }
+    }
+    notes
 }
 
 fn add_note(buffer: &mut [[f64; 2]], note: Note) {
@@ -85,88 +160,49 @@ fn add_note(buffer: &mut [[f64; 2]], note: Note) {
     let frames = (note.length * f64::from(SAMPLE_RATE)).round() as usize;
     let left = ((1.0 - note.pan.clamp(-1.0, 1.0)) / 2.0).sqrt();
     let right = ((1.0 + note.pan.clamp(-1.0, 1.0)) / 2.0).sqrt();
-    let increments = [
-        frequency / f64::from(SAMPLE_RATE),
-        frequency * 0.996 / f64::from(SAMPLE_RATE),
-        frequency * 1.004 / f64::from(SAMPLE_RATE),
-    ];
-    let mut phases = [0.0, 0.29, 0.67];
-    let mut filtered = 0.0;
-    let mut previous_noise = 0.0;
+    let mut filtered_noise = 0.0;
     for offset in 0..frames {
         let time = offset as f64 / f64::from(SAMPLE_RATE);
         let phase = std::f64::consts::TAU * frequency * time;
         let remaining = note.length - time;
-        let bits = (offset as u32)
-            .wrapping_mul(747_796_405)
-            .wrapping_add(2_891_336_453);
-        let noise = f64::from((bits ^ (bits >> 16)) & 0xffff) / 32767.5 - 1.0;
-        let bright_noise = (noise - previous_noise) * 0.55;
-        previous_noise = noise;
-        let supersaw = (saw(phases[0], increments[0])
-            + saw(phases[1], increments[1])
-            + saw(phases[2], increments[2]))
-            / 3.0;
-        for (phase, increment) in phases.iter_mut().zip(increments) {
-            *phase = (*phase + increment).fract();
-        }
         let sample = match note.voice {
             Voice::Pad => {
-                filtered += 0.15 * (supersaw - filtered);
-                let envelope = smooth(time / 0.2) * smooth(remaining / 0.45);
-                envelope * (filtered * 0.65 + phase.sin() * 0.35)
+                let envelope = smooth(time / 1.05) * smooth(remaining / 1.05);
+                let tone = 0.66 * phase.sin()
+                    + 0.14 * (phase * 0.999).sin()
+                    + 0.14 * (phase * 1.001).sin()
+                    + 0.055 * (phase * 2.0).sin()
+                    + 0.015 * (phase * 3.0).sin();
+                envelope * tone
             }
             Voice::Bass => {
-                filtered += 0.09 * (supersaw - filtered);
                 let envelope =
-                    smooth(time / 0.004) * smooth(remaining / 0.05) * (-time * 3.0).exp();
-                envelope * (phase.sin() * 0.68 + filtered * 0.52)
+                    smooth(time / 0.035) * smooth(remaining / 0.22) * (-time * 1.7).exp();
+                envelope * (0.95 * phase.sin() + 0.05 * (phase * 2.0).sin())
             }
-            Voice::Lead => {
-                filtered += 0.48 * (supersaw - filtered);
+            Voice::Key => {
                 let envelope =
-                    smooth(time / 0.008) * smooth(remaining / 0.045) * (-time * 0.65).exp();
-                envelope * (filtered * 0.82 + phase.sin() * 0.3)
-            }
-            Voice::Stab => {
-                filtered += 0.33 * (supersaw - filtered);
-                let envelope =
-                    smooth(time / 0.004) * smooth(remaining / 0.035) * (-time * 5.5).exp();
-                envelope * (filtered * 0.85 + phase.sin() * 0.22)
+                    smooth(time / 0.045) * smooth(remaining / 0.30) * (-time * 2.1).exp();
+                envelope
+                    * (0.93 * phase.sin() + 0.06 * (phase * 2.0).sin() + 0.01 * (phase * 3.0).sin())
             }
             Voice::Kick => {
                 let envelope =
-                    smooth(time / 0.0015) * smooth(remaining / 0.06) * (-time * 10.0).exp();
+                    smooth(time / 0.014) * smooth(remaining / 0.12) * (-time * 14.0).exp();
                 let sweep =
-                    std::f64::consts::TAU * (49.0 * time + 3.8 * (1.0 - (-time * 38.0).exp()));
-                envelope * (sweep.sin() + bright_noise * 0.055 * (-time * 180.0).exp())
+                    std::f64::consts::TAU * (52.0 * time + 0.7 * (1.0 - (-time * 20.0).exp()));
+                envelope * sweep.sin()
             }
-            Voice::Clap => {
-                let bursts = [0.0, 0.012, 0.024]
-                    .into_iter()
-                    .map(|delay| {
-                        let t = time - delay;
-                        if t < 0.0 {
-                            0.0
-                        } else {
-                            smooth(t / 0.001) * (-t * 75.0).exp()
-                        }
-                    })
-                    .sum::<f64>();
-                let body = smooth(time / 0.001) * (-time * 16.0).exp() * 0.22;
-                smooth(remaining / 0.045) * bright_noise * (bursts * 0.6 + body)
-            }
-            Voice::ClosedHat => {
-                let envelope =
-                    smooth(time / 0.0015) * smooth(remaining / 0.012) * (-time * 60.0).exp();
-                filtered += 0.72 * (bright_noise - filtered);
-                envelope * filtered
-            }
-            Voice::OpenHat => {
-                let envelope =
-                    smooth(time / 0.002) * smooth(remaining / 0.04) * (-time * 14.0).exp();
-                filtered += 0.65 * (bright_noise - filtered);
-                envelope * filtered
+            Voice::Brush => {
+                let bits = (offset as u32)
+                    .wrapping_mul(747_796_405)
+                    .wrapping_add(2_891_336_453);
+                let noise = f64::from((bits ^ (bits >> 16)) & 0xffff) / 32767.5 - 1.0;
+                filtered_noise += 0.12 * (noise - filtered_noise);
+                smooth(time / 0.025)
+                    * smooth(remaining / 0.09)
+                    * (-time * 13.0).exp()
+                    * filtered_noise
             }
         } * note.gain;
         let frame = &mut buffer[(start + offset) % FRAME_COUNT];
@@ -178,145 +214,24 @@ fn add_note(buffer: &mut [[f64; 2]], note: Note) {
 fn render_score() -> Vec<i16> {
     let mut music = vec![[0.0_f64; 2]; FRAME_COUNT];
     let mut drums = vec![[0.0_f64; 2]; FRAME_COUNT];
-    let chords = [
-        [60, 64, 67, 74], // Cadd9: I.
-        [59, 62, 67, 69], // Gadd9: V.
-        [57, 60, 64, 67], // Am7: vi.
-        [57, 60, 64, 65], // Fmaj7: IV.
-    ];
-    let bass = [36, 43, 45, 41];
-    let lead = [
-        [79, 79, 81, 79, 76, 74, 76, 79],
-        [79, 74, 76, 79, 81, 79, 74, 74],
-        [81, 81, 79, 76, 79, 76, 74, 76],
-        [79, 81, 79, 76, 74, 76, 72, 72],
-    ];
-    let melody_beats = [0.0, 1.5, 2.0, 2.75, 3.5, 4.5, 6.0, 7.25];
-    for (chord_index, chord) in chords.iter().enumerate() {
-        let start = chord_index as f64 * 16.0 * BEAT_SECONDS;
-        for (voice, midi) in chord.iter().enumerate() {
-            add_note(
-                &mut music,
-                Note {
-                    start: start - 0.2,
-                    length: 7.9,
-                    midi: f64::from(*midi) - 12.0,
-                    gain: 0.055,
-                    pan: [-0.6, 0.5, -0.2, 0.7][voice],
-                    voice: Voice::Pad,
-                },
-            );
-        }
-        for beat in 0..16 {
-            let time = start + f64::from(beat) * BEAT_SECONDS;
-            // Four-on-the-floor begins on the first sample, not after a long pad introduction.
-            add_note(
-                &mut drums,
-                Note {
-                    start: time,
-                    length: 0.34,
-                    midi: 36.0,
-                    gain: 0.35,
-                    pan: 0.0,
-                    voice: Voice::Kick,
-                },
-            );
-            if beat % 2 == 1 {
-                add_note(
-                    &mut drums,
-                    Note {
-                        start: time,
-                        length: 0.23,
-                        midi: 60.0,
-                        gain: 0.16,
-                        pan: 0.0,
-                        voice: Voice::Clap,
-                    },
-                );
-            }
-            add_note(
-                &mut drums,
-                Note {
-                    start: time + BEAT_SECONDS * 0.5,
-                    length: 0.20,
-                    midi: 90.0,
-                    gain: 0.105,
-                    pan: 0.18,
-                    voice: Voice::OpenHat,
-                },
-            );
-            add_note(
-                &mut music,
-                Note {
-                    start: time + BEAT_SECONDS * 0.5,
-                    length: BEAT_SECONDS * 0.45,
-                    midi: f64::from(bass[chord_index]),
-                    gain: 0.19,
-                    pan: 0.0,
-                    voice: Voice::Bass,
-                },
-            );
-            for sixteenth in [0.0, 0.25, 0.75] {
-                add_note(
-                    &mut drums,
-                    Note {
-                        start: time + BEAT_SECONDS * sixteenth,
-                        length: 0.055,
-                        midi: 90.0,
-                        gain: if sixteenth == 0.0 { 0.055 } else { 0.028 },
-                        pan: -0.25,
-                        voice: Voice::ClosedHat,
-                    },
-                );
-            }
-        }
-        for bar in 0..4 {
-            for (position, beat) in [0.5, 1.5, 2.75, 3.5].into_iter().enumerate() {
-                for (voice, midi) in chord.iter().enumerate() {
-                    add_note(
-                        &mut music,
-                        Note {
-                            start: start + (f64::from(bar) * 4.0 + beat) * BEAT_SECONDS,
-                            length: if position == 2 { 0.15 } else { 0.24 },
-                            midi: f64::from(*midi),
-                            gain: 0.095,
-                            pan: [-0.35, 0.35, -0.6, 0.6][voice],
-                            voice: Voice::Stab,
-                        },
-                    );
-                }
-            }
-        }
-        for repeat in 0..2 {
-            for (index, midi) in lead[chord_index].iter().enumerate() {
-                let long = matches!(index, 0 | 5 | 7);
-                add_note(
-                    &mut music,
-                    Note {
-                        start: start
-                            + (f64::from(repeat) * 8.0 + melody_beats[index]) * BEAT_SECONDS,
-                        length: if long { 0.42 } else { 0.26 },
-                        midi: f64::from(*midi),
-                        gain: if long { 0.18 } else { 0.15 },
-                        pan: 0.05,
-                        voice: Voice::Lead,
-                    },
-                );
-            }
-        }
+    for note in score_notes() {
+        let target = if matches!(note.voice, Voice::Kick | Voice::Brush) {
+            &mut drums
+        } else {
+            &mut music
+        };
+        add_note(target, note);
     }
-    // Only the melodic bus receives a restrained dotted-eighth stereo echo;
-    // the kick and clap stay dry and tight rather than washing out the rhythm.
     let taps = [
-        (BEAT_SECONDS * 0.75, 0.17),
+        (BEAT_SECONDS * 0.75, 0.16),
         (BEAT_SECONDS * 1.5, 0.09),
         (BEAT_SECONDS * 2.25, 0.045),
-    ];
-    let taps =
-        taps.map(|(delay, amount)| ((delay * f64::from(SAMPLE_RATE)).round() as usize, amount));
-    let mut rendered = Vec::with_capacity(FRAME_COUNT * usize::from(CHANNELS));
+    ]
+    .map(|(delay, amount)| ((delay * f64::from(SAMPLE_RATE)).round() as usize, amount));
+    let mut mix = Vec::with_capacity(FRAME_COUNT);
     for (index, frame) in music.iter().enumerate() {
         let duck = sidechain(index as f64 / f64::from(SAMPLE_RATE));
+        let mut stereo = [0.0; 2];
         for (channel, direct) in frame.iter().enumerate() {
             let mut melodic = *direct;
             for (tap, (delay, amount)) in taps.iter().enumerate() {
@@ -324,14 +239,31 @@ fn render_score() -> Vec<i16> {
                     [if tap % 2 == 0 { 1 - channel } else { channel }]
                     * amount;
             }
-            let mixed = melodic * duck + drums[index][channel];
-            rendered.push((mixed * 5.0).tanh());
+            stereo[channel] = ((melodic * duck + drums[index][channel]) * 1.6).tanh();
+        }
+        mix.push(stereo);
+    }
+    // Two gentle low-pass stages take off upper harmonics. Warm the filters
+    // over a full cycle before rendering so the loop has a periodic filter state.
+    let alpha = 1.0 - (-std::f64::consts::TAU * 1_900.0 / f64::from(SAMPLE_RATE)).exp();
+    let mut first = [0.0; 2];
+    let mut second = [0.0; 2];
+    let mut rendered = Vec::with_capacity(FRAME_COUNT * usize::from(CHANNELS));
+    for pass in 0..2 {
+        for frame in &mix {
+            for channel in 0..2 {
+                first[channel] += alpha * (frame[channel] - first[channel]);
+                second[channel] += alpha * (first[channel] - second[channel]);
+                if pass == 1 {
+                    rendered.push(second[channel]);
+                }
+            }
         }
     }
     let peak = rendered
         .iter()
         .fold(0.0_f64, |peak, sample| peak.max(sample.abs()));
-    let master = 0.82 / peak.max(f64::EPSILON);
+    let master = 0.72 / peak.max(f64::EPSILON);
     rendered
         .into_iter()
         .map(|sample| (sample * master * f64::from(i16::MAX)) as i16)
@@ -345,11 +277,11 @@ pub fn prepare() {
     LazyLock::force(&SCORE_SAMPLES);
 }
 
-/// Create a 30-second stereo, signed 16-bit PCM WAV at 22.05 kHz.
+/// Create a 34.286-second stereo, signed 16-bit PCM WAV at 22.05 kHz.
 ///
-/// The 128-BPM I–V–vi–IV loop uses Cadd9, Gadd9, Am7 and Fmaj7. A C-major
-/// lead, pumping chord stabs, offbeat bass and four-on-the-floor rhythm
-/// keep the electronic arrangement upbeat and welcoming. Rendering is cached once.
+/// The 112-BPM E-minor theme moves from Em(add9) through warmer related
+/// harmonies to B7sus4–B7, resolving home as it loops. Low-register pads,
+/// sparse keys and a soft pulse leave room for the welcome UI. Rendering is cached once.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn synthesize_score(requested_volume: f32) -> Vec<u8> {
     let requested_gain = gain(requested_volume);
@@ -463,18 +395,38 @@ mod tests {
     }
 
     #[test]
-    fn dance_pulse_is_periodic_and_recovers_between_kicks() {
+    fn background_pulse_is_periodic_and_only_gently_ducks() {
         assert!((BEAT_SECONDS * 64.0 - LOOP_SECONDS).abs() < 1e-12);
         assert!((sidechain(0.0) - 1.0).abs() < 1e-12);
-        assert!(sidechain(BEAT_SECONDS * 0.035) <= 0.201);
-        assert!(sidechain(BEAT_SECONDS * 0.8) >= 0.999);
-        assert!((sidechain(LOOP_SECONDS - 1e-6) - sidechain(0.0)).abs() < 1e-8);
-        for part in [0.0, 0.015, 0.035, 0.3, 0.8] {
-            assert!(
-                (sidechain(part * BEAT_SECONDS) - sidechain((part + 4.0) * BEAT_SECONDS)).abs()
-                    < 1e-12
-            );
+        assert!((sidechain(BEAT_SECONDS * 0.06) - 0.84).abs() < 1e-12);
+        for sample in 0..1000 {
+            let time = sample as f64 * BEAT_SECONDS / 1000.0;
+            assert!((0.84..=1.0).contains(&sidechain(time)));
+            assert!((sidechain(time) - sidechain(time + BEAT_SECONDS * 4.0)).abs() < 1e-12);
         }
+        assert!((sidechain(LOOP_SECONDS - 1e-6) - sidechain(0.0)).abs() < 1e-8);
+    }
+
+    #[test]
+    fn background_notes_stay_low_and_dominant_returns_to_minor_home() {
+        let notes = score_notes();
+        let pitched: Vec<_> = notes
+            .iter()
+            .filter(|note| !matches!(note.voice, Voice::Kick | Voice::Brush))
+            .collect();
+        assert!(pitched.iter().all(|note| note.midi <= 66.0));
+        assert!(
+            pitched
+                .iter()
+                .filter(|note| note.voice == Voice::Key)
+                .count()
+                < 60
+        );
+        assert_eq!(HARMONIES[0], [52, 55, 59, 66]); // E minor + ninth.
+        assert!(HARMONIES[6].contains(&52)); // The E suspension.
+        assert!(HARMONIES[7].contains(&51)); // D# resolves up to E.
+        assert_eq!(BASS_NOTES.first(), Some(&40));
+        assert_eq!(BASS_NOTES.last(), Some(&47)); // Dominant B returns to E.
     }
 
     #[test]
