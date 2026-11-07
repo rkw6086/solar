@@ -662,7 +662,14 @@ pub fn run() {
             tauri::async_runtime::spawn({
                 let engine = engine.clone();
                 async move {
-                    engine.start_routines();
+                    if let Err(error) = engine.start_routines() {
+                        crate::remote_logging::event(
+                            "error",
+                            "routine_scheduler_failed",
+                            "The routine scheduler could not start",
+                            serde_json::json!({"error": error}),
+                        );
+                    }
                 }
             });
             let show = MenuItem::with_id(app, "show", "Open Solar", true, None::<&str>)?;

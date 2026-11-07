@@ -1,5 +1,5 @@
 use crate::{
-    engine::Engine,
+    engine::{Engine, background_runtime},
     model::{Routine, Task, now},
 };
 use chrono::Utc;
@@ -10,9 +10,10 @@ use std::{
 };
 
 impl Engine {
-    pub fn start_routines(self: &Arc<Self>) {
+    pub fn start_routines(self: &Arc<Self>) -> Result<(), String> {
+        let runtime = background_runtime()?;
         let engine = Arc::downgrade(self);
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
@@ -25,7 +26,7 @@ impl Engine {
             }
         });
         let engine = Arc::downgrade(self);
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(2));
             loop {
                 interval.tick().await;
@@ -71,6 +72,7 @@ impl Engine {
                 }
             }
         });
+        Ok(())
     }
 
     fn tick_routines(self: &Arc<Self>) -> Result<(), String> {

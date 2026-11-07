@@ -6,9 +6,11 @@ use tokio::{
 
 fn logger(capacity: usize) -> (Logger, mpsc::Receiver<Command>) {
     let (sender, receiver) = mpsc::channel(capacity);
+    let (panic_sender, _) = mpsc::channel(1);
     (
         Logger {
             sender,
+            panic_sender,
             sanitizer: Sanitizer::new("test-ingestion-key"),
             session_id: "test-session".into(),
             dropped: AtomicU64::new(0),
@@ -278,7 +280,8 @@ async fn queue_is_bounded_and_flush_acknowledges_earlier_records() {
     );
     let running = tokio::spawn(async move {
         let mut receiver = receiver;
-        worker_with_client(config, &mut receiver, test_client()).await;
+        let (_, mut panic_receiver) = mpsc::channel(1);
+        worker_with_client(config, &mut receiver, &mut panic_receiver, test_client()).await;
     });
     let (send, acknowledged) = oneshot::channel();
     assert!(logger.sender.send(Command::Flush(send)).await.is_ok());
@@ -289,4 +292,136 @@ async fn queue_is_bounded_and_flush_acknowledges_earlier_records() {
     assert_eq!(received.await.unwrap()[0].1["context"]["event"], "queued");
     drop(logger);
     running.await.unwrap();
+}
+
+#[test]
+fn panic_reporting_without_a_runtime_has_a_bounded_wait() {
+    let (mut logger, _) = logger(1);
+    let (panic_sender, _panic_receiver) = mpsc::channel(1);
+    logger.panic_sender = panic_sender;
+    assert!(tokio::runtime::Handle::try_current().is_err());
+    let started = Instant::now();
+    assert!(!logger.panic_record("test panic", json!({}), Duration::from_millis(40)));
+    assert!(started.elapsed() < Duration::from_millis(500));
+    // A queued but unattended panic fills the dedicated slot; another report
+    // must return immediately rather than waiting for queue capacity.
+    let started = Instant::now();
+    assert!(!logger.panic_record("second panic", json!({}), PANIC_WAIT_TIMEOUT));
+    assert!(started.elapsed() < Duration::from_millis(100));
+}
+
+#[test]
+fn a_logging_worker_never_waits_for_itself_when_it_panics() {
+    let (mut logger, _) = logger(1);
+    let (panic_sender, mut panic_receiver) = mpsc::channel(1);
+    logger.panic_sender = panic_sender;
+    IN_LOGGER_WORKER.set(true);
+    let forwarded = logger.panic_record("worker panic", json!({}), PANIC_WAIT_TIMEOUT);
+    IN_LOGGER_WORKER.set(false);
+    assert!(!forwarded);
+    assert!(panic_receiver.try_recv().is_err());
+}
+
+async fn read_request(socket: &mut tokio::net::TcpStream) -> Value {
+    let mut bytes = Vec::new();
+    let header_end = loop {
+        let mut buffer = [0; 1_024];
+        let count = socket.read(&mut buffer).await.unwrap();
+        assert_ne!(count, 0);
+        bytes.extend_from_slice(&buffer[..count]);
+        if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            break end + 4;
+        }
+        assert!(bytes.len() < 64_000);
+    };
+    let headers = String::from_utf8(bytes[..header_end].to_vec()).unwrap();
+    let length = headers
+        .lines()
+        .find_map(|line| {
+            line.split_once(':')
+                .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+        })
+        .unwrap();
+    while bytes.len() < header_end + length {
+        let mut buffer = [0; 1_024];
+        let count = socket.read(&mut buffer).await.unwrap();
+        assert_ne!(count, 0);
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+    serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap()
+}
+
+#[tokio::test]
+async fn plain_thread_panic_preempts_a_stalled_normal_delivery() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/api/logs", listener.local_addr().unwrap());
+    let (normal_started, waiting) = oneshot::channel();
+    let serving = tokio::spawn(async move {
+        let (mut normal, _) = listener.accept().await.unwrap();
+        let normal_body = read_request(&mut normal).await;
+        normal_started.send(()).unwrap();
+        // Keep the ordinary request open without any response while the
+        // priority panic is accepted on a second connection.
+        let (mut panic, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let panic_body = read_request(&mut panic).await;
+        panic
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        (normal_body, panic_body)
+    });
+    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let (mut logger, mut receiver) = logger(1);
+    let (panic_sender, mut panic_receiver) = mpsc::channel(1);
+    logger.panic_sender = panic_sender;
+    assert!(
+        logger
+            .sender
+            .try_send(Command::Record(logger.payload(
+                "info",
+                "ordinary",
+                "Ordinary event",
+                json!({}),
+            )))
+            .is_ok()
+    );
+    let logger = std::sync::Arc::new(logger);
+    let worker = tokio::spawn(async move {
+        worker_with_client(config, &mut receiver, &mut panic_receiver, test_client()).await;
+    });
+    tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    let reporting = {
+        let logger = logger.clone();
+        std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            logger.panic_record(
+                "panic containing test-ingestion-key",
+                json!({"location": {"file": "runs.rs", "line": 172}}),
+                PANIC_WAIT_TIMEOUT,
+            )
+        })
+    };
+    assert!(
+        tokio::task::spawn_blocking(move || reporting.join().unwrap())
+            .await
+            .unwrap()
+    );
+    let (ordinary, panic) = serving.await.unwrap();
+    assert_eq!(ordinary["context"]["event"], "ordinary");
+    assert_eq!(panic["context"]["event"], "rust_panic");
+    assert_eq!(panic["context"]["location"]["line"], 172);
+    assert!(
+        !serde_json::to_string(&panic)
+            .unwrap()
+            .contains("test-ingestion-key")
+    );
+    drop(logger);
+    worker.await.unwrap();
 }

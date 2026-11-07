@@ -85,6 +85,22 @@ pub(crate) fn validate_text(value: &str, name: &str, max: usize) -> Result<(), S
     Ok(())
 }
 
+/// Synchronous desktop commands run on the UI thread, outside Tokio's entered
+/// context. Obtain a handle explicitly before accepting background work.
+pub(crate) fn background_runtime() -> Result<tokio::runtime::Handle, String> {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return Ok(handle);
+    }
+    #[cfg(feature = "desktop")]
+    {
+        Ok(tauri::async_runtime::handle().inner().clone())
+    }
+    #[cfg(not(feature = "desktop"))]
+    {
+        Err("Solar background work requires a running Tokio runtime".into())
+    }
+}
+
 impl Engine {
     pub fn open(data_dir: PathBuf) -> Result<Arc<Self>, String> {
         std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;

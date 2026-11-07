@@ -76,6 +76,8 @@ RYSERVE_LOGGING_KEY='' corepack pnpm tauri dev
 
 Delivery runs on a separate worker with a bounded in-memory queue, short timeouts, and limited retries. An unavailable logging service does not block the UI or tasks, and undelivered events are not written to disk. Transport tests use a local mock server, without sending development test data to RyServe.
 
+Rust panics use a separate priority delivery attempt capped at 700 milliseconds. The panic hook waits at most 900 milliseconds before continuing normal panic reporting, without depending on the crashing thread having a Tokio runtime. Delivery remains best effort if the service is unreachable or the logging worker itself fails.
+
 ## Tools and permissions
 
 Built-in tools cover scoped file listing, reading, writing and search, HTTP retrieval, a dedicated Chromium browser, shell commands, MCP tools, screen capture, and macOS application inspection/control. Browser automation requires an installed Chrome or Chromium and uses a separate profile for each Orbit.

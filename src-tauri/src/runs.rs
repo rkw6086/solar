@@ -1,5 +1,5 @@
 use crate::{
-    engine::{Engine, validate_text},
+    engine::{Engine, background_runtime, validate_text},
     model::*,
 };
 use futures::{StreamExt, future::BoxFuture};
@@ -132,6 +132,9 @@ impl Engine {
         content: String,
         allow_completion_routines: bool,
     ) -> Result<Task, String> {
+        // Resolve scheduling before saving the user message/task, so a missing
+        // runtime cannot leave accepted work stranded in the queue.
+        let runtime = background_runtime()?;
         let mut active = self.active.lock().map_err(|_| "Task lock unavailable")?;
         self.ensure_running()?;
         validate_text(&content, "Message", 64_000)?;
@@ -169,7 +172,7 @@ impl Engine {
             model_origin: None,
         };
         let engine = self.clone();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             let task_id = context.task.id.clone();
             let orbit_id = context.task.orbit_id.clone();
             let result = engine.clone().run_agent(context).await;
@@ -1281,6 +1284,84 @@ fn transport_error(message: &str) -> AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "desktop"))]
+    #[test]
+    fn missing_runtime_rejects_work_before_saving_messages_or_tasks() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(directory.path().into()).unwrap();
+        let conversation = engine
+            .create_conversation(
+                vec!["assistant".into()],
+                "assistant".into(),
+                "No runtime".into(),
+                None,
+            )
+            .unwrap();
+        let error = std::thread::spawn({
+            let engine = engine.clone();
+            let conversation_id = conversation.id.clone();
+            move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                assert!(engine.start_routines().is_err());
+                engine
+                    .send_message(&conversation_id, "A request without a runtime".into())
+                    .unwrap_err()
+            }
+        })
+        .join()
+        .expect("synchronous entry must not panic");
+        assert!(error.contains("running Tokio runtime"));
+        assert!(engine.messages(&conversation.id).unwrap().is_empty());
+        assert!(engine.store.list::<Task>("tasks").unwrap().is_empty());
+        assert!(engine.active.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn desktop_task_from_thread_without_tokio_reaches_a_terminal_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(directory.path().into()).unwrap();
+        // A missing local provider exercises scheduling and the async run
+        // boundary without contacting any model service or needing credentials.
+        let mut orbit = engine.orbit("assistant").unwrap();
+        orbit.model = "fixture-model".into();
+        orbit.provider_id.clear();
+        engine.save_orbit(orbit).unwrap();
+        let conversation = engine
+            .create_conversation(
+                vec!["assistant".into()],
+                "assistant".into(),
+                "Desktop runtime".into(),
+                None,
+            )
+            .unwrap();
+        let task = std::thread::spawn({
+            let engine = engine.clone();
+            move || {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                engine.send_message(&conversation.id, "Exercise desktop scheduling".into())
+            }
+        })
+        .join()
+        .expect("synchronous desktop entry must not panic")
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let saved: Task = engine.store.get("tasks", &task.id).unwrap().unwrap();
+            let active = engine.active.lock().unwrap().contains_key(&task.id);
+            if saved.status == "failed" && !active {
+                assert_eq!(
+                    saved.error.as_deref(),
+                    Some("Connect a model provider in Settings first")
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "task remained {}", saved.status);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn cancelled_queued_input_is_excluded_from_future_requests() {
         let directory = tempfile::tempdir().unwrap();

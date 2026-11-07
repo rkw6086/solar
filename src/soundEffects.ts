@@ -1,4 +1,5 @@
 import { api, native } from "./api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export type SoundCue = "click" | "ripple" | "formation" | "wink";
 
@@ -12,7 +13,10 @@ export function playSoundEffect(cue: SoundCue, variant = variation()) {
 }
 
 export function stopSoundEffects() {
-  if (native) void api("stop_sound_effects").catch(() => {});
+  // The launcher owns intro playback. Hiding a companion must not stop it.
+  if (native && getCurrentWindow().label === "main") {
+    void api("stop_sound_effects").catch(() => {});
+  }
 }
 
 /** One sound for an activated control, including keyboard-triggered clicks. */

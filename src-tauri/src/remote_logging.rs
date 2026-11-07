@@ -2,6 +2,7 @@
 //! Credentials and user/model/tool content never belong in these records.
 
 use std::{
+    cell::Cell,
     sync::{
         OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -21,7 +22,13 @@ const MAX_ATTEMPTS: usize = 3;
 const MAX_CONTEXT_BYTES: usize = 12_000;
 const MAX_PAYLOAD_BYTES: usize = 20_000;
 const MAX_INPUT_CHARS: usize = 16_384;
+const PANIC_DELIVERY_TIMEOUT: Duration = Duration::from_millis(700);
+const PANIC_WAIT_TIMEOUT: Duration = Duration::from_millis(900);
 static LOGGER: OnceLock<Option<Logger>> = OnceLock::new();
+thread_local! {
+    static IN_LOGGER_WORKER: Cell<bool> = const { Cell::new(false) };
+    static IN_PANIC_HOOK: Cell<bool> = const { Cell::new(false) };
+}
 
 struct Config {
     endpoint: String,
@@ -48,6 +55,7 @@ impl Config {
 
 struct Logger {
     sender: mpsc::Sender<Command>,
+    panic_sender: mpsc::Sender<PanicRecord>,
     sanitizer: Sanitizer,
     session_id: String,
     dropped: AtomicU64,
@@ -56,6 +64,11 @@ struct Logger {
 enum Command {
     Record(Payload),
     Flush(oneshot::Sender<()>),
+}
+
+struct PanicRecord {
+    payload: Payload,
+    completed: std::sync::mpsc::Sender<bool>,
 }
 
 #[derive(Serialize)]
@@ -81,10 +94,15 @@ pub(crate) fn init() {
             ENDPOINT,
         )?;
         let sanitizer = config.sanitizer.clone();
+        // Regex initialization must happen during normal startup, not while
+        // unwinding a panic or holding the panic-hook recursion guard.
+        let _ = sanitizer.text("", 0);
         let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
+        let (panic_sender, panic_receiver) = mpsc::channel(1);
         std::thread::Builder::new()
             .name("solar-remote-logging".into())
             .spawn(move || {
+                IN_LOGGER_WORKER.set(true);
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -92,7 +110,7 @@ pub(crate) fn init() {
                     eprintln!("Solar remote logging worker could not start");
                     return;
                 };
-                runtime.block_on(worker(config, receiver));
+                runtime.block_on(worker(config, receiver, panic_receiver));
             })
             .ok()?;
         let previous_hook = std::panic::take_hook();
@@ -100,15 +118,21 @@ pub(crate) fn init() {
             let message = panic.payload().downcast_ref::<&str>().copied()
                 .or_else(|| panic.payload().downcast_ref::<String>().map(String::as_str))
                 .unwrap_or("Rust panic with a non-string payload");
-            event("error", "rust_panic", message, json!({
-                "location": panic.location().map(|location| json!({
-                    "file": location.file(), "line": location.line(), "column": location.column(),
-                })),
-            }));
+            if !IN_LOGGER_WORKER.get() && !IN_PANIC_HOOK.replace(true) {
+                if let Some(Some(logger)) = LOGGER.get() {
+                    let _ = logger.panic_record(message, json!({
+                        "location": panic.location().map(|location| json!({
+                            "file": location.file(), "line": location.line(), "column": location.column(),
+                        })),
+                    }), PANIC_WAIT_TIMEOUT);
+                }
+                IN_PANIC_HOOK.set(false);
+            }
             previous_hook(panic);
         }));
         Some(Logger {
             sender,
+            panic_sender,
             sanitizer,
             session_id: uuid::Uuid::new_v4().to_string(),
             dropped: AtomicU64::new(0),
@@ -146,6 +170,23 @@ pub(crate) async fn flush(timeout: Duration) {
 }
 
 impl Logger {
+    // This path uses only a nonblocking enqueue and an OS-thread wait. It is
+    // safe to call from a native UI thread with no Tokio runtime entered.
+    fn panic_record(&self, message: &str, context: Value, timeout: Duration) -> bool {
+        if IN_LOGGER_WORKER.get() {
+            return false;
+        }
+        let (completed, receive) = std::sync::mpsc::channel();
+        let record = PanicRecord {
+            payload: self.payload("error", "rust_panic", message, context),
+            completed,
+        };
+        if self.panic_sender.try_send(record).is_err() {
+            return false;
+        }
+        receive.recv_timeout(timeout).unwrap_or(false)
+    }
+
     fn payload(&self, level: &str, event: &str, message: &str, context: Value) -> Payload {
         let mut budget = MAX_CONTEXT_BYTES;
         let context = self.sanitizer.value(context, 0, &mut budget);
@@ -189,24 +230,48 @@ fn http_client() -> Result<Client, reqwest::Error> {
         .build()
 }
 
-async fn worker(config: Config, mut receiver: mpsc::Receiver<Command>) {
+async fn worker(
+    config: Config,
+    mut receiver: mpsc::Receiver<Command>,
+    mut panic_receiver: mpsc::Receiver<PanicRecord>,
+) {
     let Ok(client) = http_client() else {
         eprintln!("Solar remote logging HTTP client could not start");
         return;
     };
-    worker_with_client(config, &mut receiver, client).await;
+    worker_with_client(config, &mut receiver, &mut panic_receiver, client).await;
 }
 
 async fn worker_with_client(
     config: Config,
     receiver: &mut mpsc::Receiver<Command>,
+    panic_receiver: &mut mpsc::Receiver<PanicRecord>,
     client: Client,
 ) {
     let mut last_warning: Option<Instant> = None;
-    while let Some(command) = receiver.recv().await {
+    loop {
+        let command = tokio::select! {
+            biased;
+            Some(panic) = panic_receiver.recv() => {
+                deliver_panic(&client, &config, panic).await;
+                continue;
+            }
+            command = receiver.recv() => command,
+        };
+        let Some(command) = command else { break };
         match command {
             Command::Record(payload) => {
-                if !deliver(&client, &config, &payload, Duration::from_millis(200)).await
+                let delivered = tokio::select! {
+                    biased;
+                    Some(panic) = panic_receiver.recv() => {
+                        // A fatal panic cannot wait behind an ordinary log's
+                        // network timeout/retries. Drop that best-effort send.
+                        deliver_panic(&client, &config, panic).await;
+                        continue;
+                    }
+                    delivered = deliver(&client, &config, &payload, Duration::from_millis(200)) => delivered,
+                };
+                if !delivered
                     && last_warning.is_none_or(|last| last.elapsed() >= Duration::from_secs(30))
                 {
                     // Never format reqwest errors or response bodies here:
@@ -220,6 +285,30 @@ async fn worker_with_client(
             }
         }
     }
+}
+
+async fn deliver_panic(client: &Client, config: &Config, record: PanicRecord) {
+    // One attempt only. The outer deadline also covers response headers so a
+    // server that accepts a socket but stalls cannot hold the panic hook.
+    let delivered = tokio::time::timeout(PANIC_DELIVERY_TIMEOUT, async {
+        let Ok(body) = serde_json::to_vec(&record.payload) else {
+            return false;
+        };
+        if body.len() > MAX_PAYLOAD_BYTES {
+            return false;
+        }
+        client
+            .post(&config.endpoint)
+            .header("x-api-key", config.api_key.clone())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+    })
+    .await
+    .unwrap_or(false);
+    let _ = record.completed.send(delivered);
 }
 
 async fn deliver(client: &Client, config: &Config, payload: &Payload, backoff: Duration) -> bool {
