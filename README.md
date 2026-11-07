@@ -61,6 +61,8 @@ This build presents a Solar-owned overlay, including on Golden Gate. Apple's nat
 
 Provider API keys and OAuth tokens stay in macOS Keychain. They are excluded from TOML configuration, profile exports, SQLite records, and diagnostic error text. Linux development uses session-only credential storage. No model connection is automatically replaced with a paid alternative.
 
+OpenAI-compatible requests serialize text-only system instructions as plain strings. This preserves their system role while allowing [LiteLLM's ChatGPT bridge](https://github.com/BerriAI/litellm/blob/v1.94.0/litellm/completion_extras/litellm_responses_transformation/transformation.py) to extract them as instructions; tools, images, and conversation roles are unchanged.
+
 ## Remote diagnostics
 
 The desktop app sends operational diagnostics to `https://logging.ryserve.net/api/logs`, using Galaxy's `x-api-key` protocol and the `solar` service name. This includes startup/shutdown, frontend errors, task/model/tool outcomes, approval decisions, durations, usage counts, and correlation IDs. Each event identifies the build and process session. Chat messages, prompts, tool arguments/results, and provider credentials are excluded; errors are bounded and credential-like values are redacted.

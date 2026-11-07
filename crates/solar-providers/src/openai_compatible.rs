@@ -76,7 +76,7 @@ impl AgentRuntime for OpenAICompatibleRuntime {
             // compatibility with unauthenticated local OpenAI-compatible servers.
             .api_key(self.config.api_key.as_deref().unwrap_or_default())
             .base_url(&self.config.base_url)
-            .http_client(DiagnosticHttpClient::new())
+            .http_client(DiagnosticHttpClient::new().with_plain_system_content())
             .build()
             .map_err(|error| AgentError::new(AgentErrorKind::Configuration, error.to_string()))?;
         let model = client.completion_model(&self.config.model);
@@ -138,3 +138,7 @@ fn build_completion_request(
 #[cfg(test)]
 #[path = "openai_compatible_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "openai_compatible_wire_tests.rs"]
+mod wire_tests;

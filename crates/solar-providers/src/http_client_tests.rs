@@ -200,13 +200,70 @@ fn request() -> Request<Bytes> {
 }
 
 #[test]
+fn plain_system_content_preserves_instruction_role_and_other_messages() {
+    let payload = serde_json::json!({
+        "model": "codex-gpt-6-astra",
+        "messages": [
+            {"role": "system", "content": [{"type": "text", "text": "Role: researcher.\n"}, {"type": "text", "text": "Use tools carefully. 🌞"}]},
+            {"role": "user", "content": [{"type": "text", "text": "Inspect this."}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,fixture"}}]},
+            {"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "result"}
+        ],
+        "stream": true, "tools": [{"type": "function", "function": {"name": "lookup"}}]
+    });
+    let make_request = || {
+        Request::builder()
+            .uri("http://localhost/v1/chat/completions")
+            .header("authorization", "Bearer synthetic-key")
+            .header("content-length", "999")
+            .body(serde_json::to_vec(&payload).unwrap())
+            .unwrap()
+    };
+    let unmodified = DiagnosticHttpClient::new().prepare(make_request());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(unmodified.body()).unwrap(),
+        payload
+    );
+    assert_eq!(unmodified.headers()["content-length"], "999");
+
+    let normalized = DiagnosticHttpClient::new()
+        .with_plain_system_content()
+        .prepare(make_request());
+    let body: serde_json::Value = serde_json::from_slice(normalized.body()).unwrap();
+    let mut expected = payload;
+    expected["messages"][0]["content"] = "Role: researcher.\nUse tools carefully. 🌞".into();
+    assert_eq!(body, expected);
+    assert_eq!(
+        normalized.headers()["authorization"],
+        "Bearer synthetic-key"
+    );
+    assert!(!normalized.headers().contains_key("content-length"));
+}
+
+#[test]
+fn system_normalization_never_drops_unknown_content_or_rewrites_strings() {
+    for content in [
+        serde_json::json!("Already a string"),
+        serde_json::json!([{"type": "text", "text": "Keep"}, {"type": "future", "data": "also keep"}]),
+    ] {
+        let original = serde_json::json!({"messages": [{"role": "system", "content": content}]});
+        let mut body = original.clone();
+        assert!(!normalize_system_content(&mut body));
+        assert_eq!(body, original);
+    }
+}
+
+#[test]
 fn streaming_adapter_preserves_response_and_chunks_without_internal_retries() {
     block_on(async {
         let calls = Arc::new(AtomicUsize::new(0));
-        let client = DiagnosticHttpClient(FakeHttpClient {
-            calls: calls.clone(),
-            fail_before_response: false,
-        });
+        let client = DiagnosticHttpClient {
+            inner: FakeHttpClient {
+                calls: calls.clone(),
+                fail_before_response: false,
+            },
+            plain_system_content: false,
+        };
         let response = client.send_streaming(request()).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["x-request-id"], "original-request-id");
@@ -232,18 +289,24 @@ fn streaming_adapter_preserves_response_and_chunks_without_internal_retries() {
 fn adapter_preserves_causes_before_headers_and_during_lazy_body_reads() {
     block_on(async {
         let calls = Arc::new(AtomicUsize::new(0));
-        let client = DiagnosticHttpClient(FakeHttpClient {
-            calls: calls.clone(),
-            fail_before_response: true,
-        });
+        let client = DiagnosticHttpClient {
+            inner: FakeHttpClient {
+                calls: calls.clone(),
+                fail_before_response: true,
+            },
+            plain_system_content: false,
+        };
         let error = client.send_streaming(request()).await.err().unwrap();
         assert!(error.to_string().contains("DNS resolution failed"));
         assert_eq!(calls.load(Ordering::Relaxed), 1);
 
-        let client = DiagnosticHttpClient(FakeHttpClient {
-            calls: calls.clone(),
-            fail_before_response: false,
-        });
+        let client = DiagnosticHttpClient {
+            inner: FakeHttpClient {
+                calls: calls.clone(),
+                fail_before_response: false,
+            },
+            plain_system_content: false,
+        };
         let response = client.send::<_, Bytes>(request()).await.unwrap();
         let error = response.into_body().await.unwrap_err();
         assert!(error.to_string().contains("DNS resolution failed"));

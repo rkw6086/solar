@@ -10,12 +10,75 @@ use rig_core::http_client::{
 use rig_core::wasm_compat::WasmCompatSend;
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct DiagnosticHttpClient<H = http_client::ReqwestClient>(H);
+pub(crate) struct DiagnosticHttpClient<H = http_client::ReqwestClient> {
+    inner: H,
+    plain_system_content: bool,
+}
 
 impl DiagnosticHttpClient {
     pub(crate) fn new() -> Self {
-        Self(http_client::ReqwestClient::default())
+        Self::default()
     }
+}
+
+impl<H> DiagnosticHttpClient<H> {
+    pub(crate) fn with_plain_system_content(mut self) -> Self {
+        self.plain_system_content = true;
+        self
+    }
+
+    fn prepare<T: Into<Bytes>>(&self, request: Request<T>) -> Request<Bytes> {
+        let mut request = request.map(Into::into);
+        if !self.plain_system_content {
+            return request;
+        }
+        let Ok(mut body) = serde_json::from_slice::<serde_json::Value>(request.body()) else {
+            return request;
+        };
+        if normalize_system_content(&mut body)
+            && let Ok(body) = serde_json::to_vec(&body)
+        {
+            *request.body_mut() = body.into();
+            request.headers_mut().remove(http::header::CONTENT_LENGTH);
+        }
+        request
+    }
+}
+
+// LiteLLM's ChatGPT chat-to-Responses bridge extracts only string-valued system
+// messages into `instructions`. Rig emits text-part arrays, which otherwise
+// reach ChatGPT as unsupported system input. Keep the role and text intact.
+fn normalize_system_content(body: &mut serde_json::Value) -> bool {
+    let Some(messages) = body
+        .get_mut("messages")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    let mut changed = false;
+    for message in messages {
+        if message.get("role").and_then(serde_json::Value::as_str) != Some("system") {
+            continue;
+        }
+        let Some(parts) = message.get("content").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let Some(text) = parts
+            .iter()
+            .map(|part| {
+                (part.get("type").and_then(serde_json::Value::as_str) == Some("text"))
+                    .then(|| part.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            // Leave future non-text system content untouched; never drop data.
+            continue;
+        };
+        message["content"] = text.join("").into();
+        changed = true;
+    }
+    changed
 }
 
 impl<H: HttpClientExt + Clone + 'static> HttpClientExt for DiagnosticHttpClient<H> {
@@ -27,8 +90,8 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for DiagnosticHttpClient<
         T: Into<Bytes> + WasmCompatSend,
         U: From<Bytes> + WasmCompatSend + 'static,
     {
-        let client = self.0.clone();
-        let request = request.map(Into::<Bytes>::into);
+        let client = self.inner.clone();
+        let request = self.prepare(request);
         async move {
             let response = client
                 .send(request)
@@ -47,7 +110,7 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for DiagnosticHttpClient<
     where
         U: From<Bytes> + WasmCompatSend + 'static,
     {
-        let client = self.0.clone();
+        let client = self.inner.clone();
         async move {
             let response = client
                 .send_multipart(request)
@@ -66,8 +129,8 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for DiagnosticHttpClient<
     where
         T: Into<Bytes> + WasmCompatSend,
     {
-        let client = self.0.clone();
-        let request = request.map(Into::<Bytes>::into);
+        let client = self.inner.clone();
+        let request = self.prepare(request);
         async move {
             let response = client
                 .send_streaming(request)
