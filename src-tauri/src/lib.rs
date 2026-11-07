@@ -20,8 +20,10 @@ mod desktop;
 #[cfg(feature = "desktop")]
 mod desktop_attention;
 #[cfg(feature = "desktop")]
+mod desktop_intro;
+#[cfg(feature = "desktop")]
 mod desktop_onboarding;
 #[cfg(any(feature = "desktop", test))]
-mod space_score;
+mod sound_effects;
 #[cfg(feature = "desktop")]
 pub use desktop::run;

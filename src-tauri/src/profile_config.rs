@@ -185,8 +185,8 @@ fn validate_master(master: &MasterConfig) -> Result<(), String> {
     if !(1..=8).contains(&settings.max_concurrent)
         || !settings.attention_volume.is_finite()
         || !(0.0..=1.0).contains(&settings.attention_volume)
-        || !settings.onboarding_volume.is_finite()
-        || !(0.0..=0.5).contains(&settings.onboarding_volume)
+        || !settings.sound_effects_volume.is_finite()
+        || !(0.0..=0.5).contains(&settings.sound_effects_volume)
         || ![
             "birth",
             "welcome",

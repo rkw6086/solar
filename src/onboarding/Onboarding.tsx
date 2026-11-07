@@ -5,7 +5,9 @@ import {
   Layers3, LoaderCircle, LockKeyhole, MessageCircle, Plus, Settings2,
   ShieldCheck, Sparkles, Sun, Users, Volume2, VolumeX,
 } from "lucide-react";
-import { api, native } from "../api";
+import { api } from "../api";
+import { playSoundEffect, stopSoundEffects } from "../soundEffects";
+import { useIntroFullscreen } from "./useIntroFullscreen";
 import { errorText, isProviderConfigured } from "../types";
 import type { Bootstrap, Orbit, Project, Provider, Settings } from "../types";
 import { OrbitForm, ProjectForm, ProviderForm } from "../components/Forms";
@@ -51,15 +53,13 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
   const [selectedOrbitId, setSelectedOrbitId] = useState(data.orbits.find((orbit) => orbit.enabled)?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [musicPlaying, setMusicPlaying] = useState(false);
-  const [musicUnavailable, setMusicUnavailable] = useState(false);
-  const [musicBusy, setMusicBusy] = useState(false);
+  const [effectsBusy, setEffectsBusy] = useState(false);
+  const { ready: fullscreenReady, error: fullscreenError, leaveFullscreen } = useIntroFullscreen();
+  const effectsEnabled = data.settings.soundEffects !== false;
   const [desktopDemoExpanded, setDesktopDemoExpanded] = useState(false);
   const [loginPending, setLoginPending] = useState<Record<string, boolean>>({});
   const [loginMessage, setLoginMessage] = useState<Record<string, string>>({});
   const heading = useRef<HTMLHeadingElement>(null);
-  const musicSequence = useRef(0);
-  const active = useRef(true);
   const settingsRef = useRef(data.settings);
   settingsRef.current = data.settings;
   const reducedMotion = Boolean(data.settings.reducedMotion);
@@ -68,30 +68,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
   const selectedOrbit = enabledOrbits.find((orbit) => orbit.id === selectedOrbitId) ?? enabledOrbits[0];
   const pendingIds = Object.keys(loginPending).filter((id) => loginPending[id]).sort().join(",");
 
-  async function setMusic(playing: boolean) {
-    const sequence = ++musicSequence.current;
-    const response = await api<{ playing: boolean }>("set_onboarding_music", { playing });
-    if (active.current && sequence === musicSequence.current) {
-      setMusicPlaying(response.playing);
-      setMusicUnavailable(playing && !response.playing);
-    }
-  }
-
-  useEffect(() => {
-    active.current = true;
-    const visibility = () => {
-      const playing = native && document.visibilityState === "visible" && settingsRef.current.onboardingMusic !== false;
-      void setMusic(playing).catch(() => { if (active.current) setMusicPlaying(false); });
-    };
-    document.addEventListener("visibilitychange", visibility);
-    if (native) visibility();
-    return () => {
-      active.current = false;
-      musicSequence.current += 1;
-      document.removeEventListener("visibilitychange", visibility);
-      void api("set_onboarding_music", { playing: false }).catch(() => {});
-    };
-  }, []);
+  useEffect(() => () => stopSoundEffects(), []);
 
   useEffect(() => {
     document.documentElement.dataset.motion = reducedMotion ? "reduced" : "full";
@@ -131,6 +108,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     setBusy(true);
     setError("");
     try {
+      if (step === "birth") stopSoundEffects();
       await api("save_onboarding_progress", { step: next });
       setStep(next);
     } catch (reason) { setError(errorText(reason)); }
@@ -142,26 +120,27 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     setBusy(true);
     setError("");
     try {
-      await api("set_onboarding_music", { playing: false }).catch(() => {});
+      stopSoundEffects();
       await api("complete_onboarding");
       await refresh();
+      await leaveFullscreen().catch(() => {});
       onNavigate?.(destination);
       onComplete();
     } catch (reason) { setError(errorText(reason)); }
     finally { setBusy(false); }
   }
 
-  async function toggleMusic() {
-    if (musicBusy) return;
-    const next = !musicPlaying;
-    setMusicBusy(true);
+  async function toggleEffects() {
+    if (effectsBusy) return;
+    const next = settingsRef.current.soundEffects === false;
+    setEffectsBusy(true);
     setError("");
     try {
-      await api("save_settings", { settings: { ...settingsRef.current, onboardingMusic: next } });
+      await api("save_settings", { settings: { ...settingsRef.current, soundEffects: next } });
+      if (!next) stopSoundEffects();
       await refresh();
-      await setMusic(next);
     } catch (reason) { setError(errorText(reason)); }
-    finally { setMusicBusy(false); }
+    finally { setEffectsBusy(false); }
   }
 
   async function updateSettings(patch: Partial<Settings>) {
@@ -171,7 +150,6 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     try {
       await api("save_settings", { settings: { ...settingsRef.current, ...patch } });
       await refresh();
-      if (patch.onboardingVolume !== undefined && musicPlaying) await setMusic(true);
     } catch (reason) { setError(errorText(reason)); }
     finally { setBusy(false); }
   }
@@ -214,17 +192,17 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     <header className="onboarding-topbar">
       <div className="onboarding-wordmark"><Sun size={20} /><span>solar.</span><span className="onboarding-label">A little universe of help.</span></div>
       <div className="onboarding-top-actions">
-        <button type="button" className={`onboarding-music ${musicPlaying ? "playing" : ""}`} aria-label={musicPlaying ? "Mute welcome music" : "Play welcome music"} aria-pressed={musicPlaying} disabled={musicBusy} onClick={() => void toggleMusic()} title={musicUnavailable ? "Music playback is available in the native Mac app" : musicPlaying ? "Mute welcome music" : "Play welcome music"}>
-          {musicPlaying ? <Volume2 size={15} /> : <VolumeX size={15} />}
-          <span>{musicPlaying ? "Music on" : "Music off"}</span>
+        <button type="button" className={`onboarding-sound-effects ${effectsEnabled ? "playing" : ""}`} aria-label={effectsEnabled ? "Sound Effects On" : "Sound Effects Off"} aria-pressed={effectsEnabled} disabled={effectsBusy} onClick={() => void toggleEffects()} title={effectsEnabled ? "Turn sound effects off" : "Turn sound effects on"}>
+          {effectsEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+          <span>{effectsEnabled ? "Sound Effects On" : "Sound Effects Off"}</span>
         </button>
         {step !== "birth" && step !== "ready" && <button type="button" className="onboarding-skip" onClick={() => void go("ready")} disabled={busy}>Skip setup <ChevronRight size={13} /></button>}
       </div>
     </header>
 
     {step === "birth" ? <>
-      <StarBirth reducedMotion={reducedMotion} onComplete={() => void go("welcome")} />
-      {(error || musicUnavailable) && <div className="onboarding-birth-notice" role={error ? "alert" : "status"}>{error || "The preview is silent. Music plays in the native Mac app."}</div>}
+      {fullscreenReady && <StarBirth reducedMotion={reducedMotion} onSoundCue={playSoundEffect} onComplete={() => void go("welcome")} />}
+      {(error || fullscreenError) && <div className="onboarding-birth-notice" role="alert">{error || fullscreenError}</div>}
     </> : <>
       <div className="onboarding-progress" aria-label={`Welcome step ${index} of ${steps.length - 1}`}>
         {steps.slice(1).map((value, position) => <div key={value} className={`${position + 1 < index ? "done" : ""} ${value === step ? "current" : ""}`}><span /><small>{position + 1 <= 3 ? "Discover" : position + 1 === 7 ? "Launch" : "Set up"}</small></div>)}
@@ -340,7 +318,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
             <SettingSwitch title="Desktop companions" description="Keep the sun nearby while Solar runs." checked={data.settings.desktopEnabled !== false} disabled={busy} onChange={() => void updateSettings({ desktopEnabled: data.settings.desktopEnabled === false })} />
             <SettingSwitch title="Orbit chimes" description="A short melody when a collapsed Orbit needs you." checked={data.settings.attentionSound !== false} disabled={busy} onChange={() => void updateSettings({ attentionSound: data.settings.attentionSound === false })} />
             <SettingSwitch title="Reduced motion" description="Use still illustrations and gentle transitions." checked={reducedMotion} disabled={busy} onChange={() => void updateSettings({ reducedMotion: !reducedMotion })} />
-            <div className="onboarding-setting"><div><strong>Welcome music</strong><p>A little atmosphere for this introduction.</p></div><label className="onboarding-volume"><input type="range" min="0" max="0.5" step="0.01" aria-label="Welcome music volume" disabled={busy} value={Number(data.settings.onboardingVolume ?? 0.12)} onChange={(event) => void updateSettings({ onboardingVolume: Number(event.target.value) })} /><output>{Math.round(Number(data.settings.onboardingVolume ?? 0.12) * 200)}%</output></label></div>
+            <div className="onboarding-setting"><div><strong>Sound effects volume</strong><p>Quiet feedback for clicks and Solar’s introduction.</p></div><label className="onboarding-volume"><input type="range" min="0" max="0.5" step="0.01" aria-label="Sound effects volume" disabled={busy} value={Number(data.settings.soundEffectsVolume ?? 0.25)} onChange={(event) => void updateSettings({ soundEffectsVolume: Number(event.target.value) })} /><output>{Math.round(Number(data.settings.soundEffectsVolume ?? 0.25) * 200)}%</output></label></div>
             <p className="onboarding-card-footnote">You’ll find all of these again in Settings.</p>
           </div>}
         </div>
@@ -348,7 +326,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
 
       <footer className="onboarding-footer">
         <div className="onboarding-footer-left"><button type="button" className="button button-quiet" disabled={busy} onClick={() => void go(steps[Math.max(0, index - 1)])}><ArrowLeft size={15} />Back</button><span>{index} / {steps.length - 1}</span></div>
-        <div className="onboarding-footer-status">{error ? <span role="alert">{error}</span> : musicUnavailable ? <span>Music plays in the native Mac app.</span> : <span>Your setup is saved as you go.</span>}</div>
+        <div className="onboarding-footer-status">{error || fullscreenError ? <span role="alert">{error || fullscreenError}</span> : <span>Your setup is saved as you go.</span>}</div>
         <div className="onboarding-footer-right">
           {setupStep && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void go(next)}>Do this later</button>}
           <button type="button" className="button button-primary" disabled={busy} onClick={() => step === "ready" ? void finish() : void go(next)}>{busy ? <LoaderCircle size={15} className="spin" /> : null}{step === "ready" ? "Open Solar" : step === "desktop" ? "Make it yours" : "Continue"}<ArrowRight size={15} /></button>

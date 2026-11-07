@@ -19,10 +19,10 @@
 .onboarding-wordmark > span:first-of-type { font-size: 23px; letter-spacing: -.8px; font-weight: 700; color: #f2f0e9; }
 .onboarding-wordmark .onboarding-label { font-family: var(--onboarding-mono); font-size: 9px; font-weight: 400; letter-spacing: .2px; color: #6f777a; margin-left: 15px; }
 .onboarding-top-actions { display: flex; align-items: center; gap: 20px; }
-.onboarding-music, .onboarding-skip { font-family: var(--onboarding-mono); display: flex; align-items: center; gap: 7px; background: none; color: #818b8e; padding: 8px 0; font-size: 10px; }
-.onboarding-music.playing { color: #d6c19e; }
-.onboarding-music:hover, .onboarding-skip:hover { color: #f3f1eb; }
-.onboarding-music:focus-visible, .onboarding-skip:focus-visible { outline: 2px solid var(--onboarding-gold); outline-offset: 5px; border-radius: 4px; }
+.onboarding-sound-effects, .onboarding-skip { font-family: var(--onboarding-mono); display: flex; align-items: center; gap: 7px; background: none; color: #818b8e; padding: 8px 0; font-size: 10px; }
+.onboarding-sound-effects.playing { color: #d6c19e; }
+.onboarding-sound-effects:hover, .onboarding-skip:hover { color: #f3f1eb; }
+.onboarding-sound-effects:focus-visible, .onboarding-skip:focus-visible { outline: 2px solid var(--onboarding-gold); outline-offset: 5px; border-radius: 4px; }
 .onboarding-progress { display: flex; width: min(380px, 44vw); margin: 5px auto 6px; gap: 7px; }
 .onboarding-progress > div { flex: 1; position: relative; }
 .onboarding-progress span { display: block; height: 3px; background: #263235; border-radius: 0; }

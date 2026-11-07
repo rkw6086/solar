@@ -10,6 +10,7 @@
     "prebuild": "node crates/solar-tools/scripts/prepare-native.mjs",
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
+    "test:intro": "node --test src/onboarding/birthTimeline.test.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "node node_modules/@tauri-apps/cli/tauri.js"
   },

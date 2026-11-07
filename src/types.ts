@@ -116,8 +116,8 @@ export interface Settings {
   attentionVolume?: number;
   onboardingComplete?: boolean;
   onboardingStep?: string;
-  onboardingMusic?: boolean;
-  onboardingVolume?: number;
+  soundEffects?: boolean;
+  soundEffectsVolume?: number;
   [key: string]: unknown;
 }
 

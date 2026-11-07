@@ -91,7 +91,18 @@ mod tests {
         assert!(settings.reduced_motion);
         assert_eq!(settings.onboarding_step, "birth");
         assert!(!settings.onboarding_complete);
-        assert!(settings.onboarding_music);
-        assert_eq!(settings.onboarding_volume, 0.12);
+        assert!(settings.sound_effects);
+        assert_eq!(settings.sound_effects_volume, 0.25);
+    }
+
+    #[test]
+    fn existing_audio_preferences_apply_to_sound_effects() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"onboardingMusic":false,"onboardingVolume":0.09}"#).unwrap();
+        assert!(!settings.sound_effects);
+        assert_eq!(settings.sound_effects_volume, 0.09);
+        let saved = serde_json::to_value(settings).unwrap();
+        assert_eq!(saved["soundEffects"], false);
+        assert!(saved.get("onboardingMusic").is_none());
     }
 }

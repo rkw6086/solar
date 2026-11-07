@@ -37,7 +37,7 @@ fn state(app: &tauri::AppHandle) -> Result<AttentionState, String> {
         items,
         geometry: attention_geometry::placement(app)?,
         reduced_motion: settings.reduced_motion,
-        sound_enabled: settings.attention_sound,
+        sound_enabled: settings.sound_effects && settings.attention_sound,
     })
 }
 
@@ -277,7 +277,7 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
     if presented.as_deref() != Some(&current.id) {
         *presented = Some(current.id.clone());
         let collapsed = !engine.desktop_expanded.load(Ordering::SeqCst);
-        if settings.attention_sound && (collapsed || preview) {
+        if settings.sound_effects && settings.attention_sound && (collapsed || preview) {
             let mut last = LAST_SOUND.lock().map_err(|_| "Sound state unavailable")?;
             if last.is_none_or(|time| time.elapsed() >= Duration::from_millis(1000)) {
                 *last = Some(Instant::now());

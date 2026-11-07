@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { BIRTH_TIMING, RIPPLE_COUNT, birthCuesBetween, rippleTiming, winkAmount } from "./birthTimeline";
+import type { BirthSoundCue } from "./birthTimeline";
 import "./star-birth.css";
 
 export type StarBirthPhase = "gather" | "burst" | "solar";
@@ -7,11 +9,10 @@ interface StarBirthProps {
   reducedMotion: boolean;
   onComplete: () => void;
   onPhaseChange?: (phase: StarBirthPhase) => void;
+  onSoundCue?: (cue: BirthSoundCue, index?: number) => void;
 }
 
-const OPENING_DURATION = 10_400;
-const BURST_AT = 6_800;
-const SOLAR_AT = 8_100;
+const { opening: OPENING_DURATION, burst: BURST_AT, solar: SOLAR_AT } = BIRTH_TIMING;
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 const smooth = (value: number) => {
@@ -88,6 +89,7 @@ function drawStar(
   time: number,
   opacity: number,
   face: number,
+  wink = 0,
 ) {
   context.save();
   context.globalAlpha = opacity;
@@ -137,7 +139,13 @@ function drawStar(
     context.fillStyle = "#5c3c29";
     const pixel = Math.max(1.5, radius * 0.065);
     context.fillRect(x - radius * 0.29, y - radius * 0.06, pixel, pixel * 1.8);
-    context.fillRect(x + radius * 0.22, y - radius * 0.06, pixel, pixel * 1.8);
+    const eyeHeight = Math.max(pixel * 0.24, pixel * 1.8 * (1 - wink));
+    context.fillRect(
+      x + radius * 0.22 - wink * pixel * 0.3,
+      y - radius * 0.06 + (pixel * 1.8 - eyeHeight) * 0.5,
+      pixel * (1 + wink * 0.6),
+      eyeHeight,
+    );
     context.strokeStyle = "#5c3c29";
     context.lineWidth = Math.max(1.5, radius * 0.035);
     context.lineCap = "square";
@@ -164,7 +172,7 @@ function paint(
 
   const time = elapsed / 1000;
   const smaller = Math.min(width, height);
-  const zoom = reducedMotion ? 1 : smooth((elapsed - 7_700) / 2_000);
+  const zoom = reducedMotion ? 1 : smooth((elapsed - BIRTH_TIMING.zoom) / 2_000);
   const centerX = width * 0.5;
   const centerY = height * (0.49 - zoom * 0.1);
   const afterglow = reducedMotion ? 1 : smooth((elapsed - BURST_AT) / 1_600);
@@ -194,14 +202,20 @@ function paint(
     const compression = smooth((elapsed - 6_350) / 450);
     const maxRadius = Math.hypot(width, height) * 0.62;
 
-    // Ripples arrive from beyond the window, and each leaves a little more
-    // light at the center. Individual rings fade before they reach a point.
-    for (let ring = 0; ring < 18; ring += 1) {
-      const startsAt = 650 + ring * (330 - ring * 5);
-      const progress = (elapsed - startsAt) / (2_650 - ring * 28);
-      if (progress <= 0 || progress >= 1) continue;
+    // The render and sound timeline share each exact arrival. Rings stay
+    // visible through their final contraction, merging into the nucleus.
+    for (let ring = 0; ring < RIPPLE_COUNT; ring += 1) {
+      const { start, duration, arrival } = rippleTiming(ring);
+      const progress = (elapsed - start) / duration;
+      if (progress <= 0) continue;
+      if (progress >= 1) {
+        const impact = clamp(1 - (elapsed - arrival) / 100);
+        glow(context, centerX, centerY, 10 + impact * 12, impact * 0.08);
+        continue;
+      }
       const radius = maxRadius * Math.pow(1 - progress, 1.65);
-      const alpha = Math.sin(progress * Math.PI) * (0.16 + gathering * 0.27) * (1 - compression);
+      const alpha = smooth(progress / 0.18) * (0.16 + gathering * 0.27)
+        * (1 - smooth((progress - 0.8) / 0.2) * 0.45) * (1 - compression * 0.65);
       context.strokeStyle = `rgba(243,245,248,${alpha})`;
       context.lineWidth = 0.65 + gathering * 0.6;
       circle(context, centerX, centerY, radius);
@@ -253,7 +267,7 @@ function paint(
       }
     }
     const starRadius = smaller * (0.033 + zoom * 0.054);
-    drawStar(context, centerX, centerY, starRadius, time, smooth((elapsed - BURST_AT) / 320), smooth((elapsed - 8_500) / 700));
+    drawStar(context, centerX, centerY, starRadius, time, smooth((elapsed - BURST_AT) / 320), smooth((elapsed - 8_500) / 700), winkAmount(elapsed));
     context.save();
     context.strokeStyle = `rgba(145,192,184,${zoom * 0.25})`;
     context.lineWidth = 1;
@@ -268,12 +282,13 @@ function paint(
   }
 }
 
-export function StarBirth({ reducedMotion, onComplete, onPhaseChange }: StarBirthProps) {
+export function StarBirth({ reducedMotion, onComplete, onPhaseChange, onSoundCue }: StarBirthProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const container = useRef<HTMLElement>(null);
   const completed = useRef(false);
-  const callbacks = useRef({ onComplete, onPhaseChange });
-  callbacks.current = { onComplete, onPhaseChange };
+  const callbacks = useRef({ onComplete, onPhaseChange, onSoundCue });
+  callbacks.current = { onComplete, onPhaseChange, onSoundCue };
+  const playback = useRef({ elapsed: 0, calm: false, delivered: new Set<string>() });
   const currentPhase = useRef<StarBirthPhase | null>(null);
   const [phase, setPhase] = useState<StarBirthPhase>("gather");
   const [systemReduced, setSystemReduced] = useState(() =>
@@ -301,7 +316,11 @@ export function StarBirth({ reducedMotion, onComplete, onPhaseChange }: StarBirt
     const context = element.getContext("2d");
     let width = 1;
     let height = 1;
-    let elapsed = 0;
+    if (playback.current.calm !== calm) {
+      playback.current.elapsed = 0;
+      playback.current.calm = calm;
+    }
+    let elapsed = playback.current.elapsed;
     let previous: number | null = null;
     let animation = 0;
     let disposed = false;
@@ -330,12 +349,20 @@ export function StarBirth({ reducedMotion, onComplete, onPhaseChange }: StarBirt
 
     const frame = (timestamp: number) => {
       if (disposed || completed.current || document.hidden) return;
+      const previousElapsed = elapsed;
       if (previous !== null) elapsed += Math.min(timestamp - previous, 80);
       previous = timestamp;
+      playback.current.elapsed = elapsed;
       const nextPhase = calm || elapsed >= SOLAR_AT ? "solar" : elapsed >= BURST_AT ? "burst" : "gather";
       emitPhase(nextPhase);
       if (context) paint(context, width, height, elapsed, calm);
-      if (elapsed >= (calm ? 1_100 : OPENING_DURATION)) {
+      for (const event of birthCuesBetween(previousElapsed, elapsed, calm)) {
+        const key = `${event.cue}:${event.index ?? ""}`;
+        if (playback.current.delivered.has(key)) continue;
+        playback.current.delivered.add(key);
+        callbacks.current.onSoundCue?.(event.cue, event.index);
+      }
+      if (elapsed >= (calm ? BIRTH_TIMING.reducedOpening : OPENING_DURATION)) {
         if (!completed.current) {
           completed.current = true;
           callbacks.current.onComplete();

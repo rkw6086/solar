@@ -3,9 +3,11 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { DesktopWidget } from "./DesktopWidget";
 import { AttentionWidget } from "./AttentionWidget";
+import { installClickSounds } from "./soundEffects";
 import "./styles.css";
 
 function Root() {
+  useEffect(installClickSounds, []);
   const [route, setRoute] = useState(window.location.hash.slice(1));
   useEffect(() => {
     const update = () => setRoute(window.location.hash.slice(1));

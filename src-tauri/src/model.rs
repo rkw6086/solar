@@ -132,8 +132,10 @@ pub struct Settings {
     pub attention_volume: f32,
     pub onboarding_complete: bool,
     pub onboarding_step: String,
-    pub onboarding_music: bool,
-    pub onboarding_volume: f32,
+    #[serde(alias = "onboardingMusic")]
+    pub sound_effects: bool,
+    #[serde(alias = "onboardingVolume")]
+    pub sound_effects_volume: f32,
 }
 
 impl Default for Settings {
@@ -147,8 +149,8 @@ impl Default for Settings {
             attention_volume: 0.35,
             onboarding_complete: false,
             onboarding_step: "birth".into(),
-            onboarding_music: true,
-            onboarding_volume: 0.12,
+            sound_effects: true,
+            sound_effects_volume: 0.25,
         }
     }
 }

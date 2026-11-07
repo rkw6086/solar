@@ -110,6 +110,22 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+pub fn stop() -> Result<(), String> {
+    objc2::MainThreadMarker::new().ok_or("Attention sound must stop on the main thread")?;
+    CURRENT_SOUND.with(|current| {
+        if let Some(sound) = current.borrow_mut().take() {
+            sound.stop();
+        }
+    });
+    Ok(())
+}
+
+#[cfg(all(feature = "desktop", not(target_os = "macos")))]
+pub fn stop() -> Result<(), String> {
+    Ok(())
+}
+
 /// The synthesizer is portable; native output currently targets macOS.
 #[cfg(all(feature = "desktop", not(target_os = "macos")))]
 pub fn play(orbit_id: &str, requested_volume: f32) -> Result<(), String> {

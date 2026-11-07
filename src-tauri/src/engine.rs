@@ -650,10 +650,10 @@ impl Engine {
         // was opened on an earlier slide must not accidentally rewind it.
         settings.onboarding_complete = previous.onboarding_complete;
         settings.onboarding_step = previous.onboarding_step;
-        settings.onboarding_volume = if settings.onboarding_volume.is_finite() {
-            settings.onboarding_volume.clamp(0.0, 0.5)
+        settings.sound_effects_volume = if settings.sound_effects_volume.is_finite() {
+            settings.sound_effects_volume.clamp(0.0, 0.5)
         } else {
-            0.12
+            0.25
         };
         if previous.experimental_claude && !settings.experimental_claude {
             for profile in self.store.list::<ProviderProfile>("providers")? {

@@ -1,20 +1,6 @@
 use crate::{engine::Engine, model::Settings};
-use serde::Serialize;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-};
+use std::sync::Arc;
 use tauri::{Manager, State};
-
-static MUSIC_EPOCH: AtomicU64 = AtomicU64::new(0);
-static REQUEST_EPOCH: AtomicU64 = AtomicU64::new(0);
-static MUSIC_ACTIVE: AtomicBool = AtomicBool::new(false);
-static MUSIC_LEVEL: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Serialize)]
-pub(crate) struct MusicState {
-    playing: bool,
-}
 
 fn require_main(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
@@ -41,7 +27,7 @@ pub(crate) fn complete_onboarding(
 ) -> Result<Settings, String> {
     require_main(&window)?;
     let settings = engine.complete_onboarding()?;
-    stop_music(&app);
+    stop_effects(&app);
     if settings.desktop_enabled {
         crate::desktop::ensure_sun(&app)?;
     }
@@ -57,96 +43,72 @@ pub(crate) async fn reset_solar(
     confirmed: bool,
 ) -> Result<(), String> {
     require_main(&window)?;
-    stop_music(&app);
+    stop_effects(&app);
     crate::reset::prepare_reset(engine.inner(), confirmed).await?;
     crate::desktop::restart_after_reset(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) async fn set_onboarding_music(
+pub(crate) async fn play_sound_effect(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
-    playing: bool,
-) -> Result<MusicState, String> {
-    require_main(&window)?;
-    let request = REQUEST_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
+    cue: String,
+    variant: Option<u32>,
+) -> Result<bool, String> {
+    if !["click", "ripple", "formation", "wink"].contains(&cue.as_str()) {
+        return Err("Unknown sound effect".into());
+    }
+    if cue != "click" {
+        require_main(&window)?;
+    }
     let (send, receive) = tokio::sync::oneshot::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {
-        let result = if REQUEST_EPOCH.load(Ordering::SeqCst) == request {
-            set_music(&handle, playing)
-        } else {
-            Ok(MusicState { playing: false })
-        };
+        let result = (|| {
+            let settings = handle.state::<Arc<Engine>>().settings()?;
+            if !settings.sound_effects || !window.is_visible().unwrap_or(false) {
+                return Ok(false);
+            }
+            match crate::sound_effects::play(
+                &cue,
+                variant.unwrap_or(0),
+                settings.sound_effects_volume,
+            ) {
+                Ok(()) => Ok(true),
+                Err(_) if cfg!(not(target_os = "macos")) => Ok(false),
+                Err(error) => Err(error),
+            }
+        })();
         let _ = send.send(result);
     })
     .map_err(|error| error.to_string())?;
     receive
         .await
-        .map_err(|_| "Music service stopped".to_owned())?
+        .map_err(|_| "Sound service stopped".to_owned())?
 }
 
-/// Fade rather than cut the music when a user mutes, finishes or hides it.
-fn set_music(app: &tauri::AppHandle, playing: bool) -> Result<MusicState, String> {
-    let settings = app.state::<Arc<Engine>>().settings()?;
-    let playing = playing && settings.onboarding_music;
-    if playing {
-        if !MUSIC_ACTIVE.load(Ordering::SeqCst) {
-            if let Err(error) = crate::space_score::play(0.0) {
-                if cfg!(not(target_os = "macos")) {
-                    return Ok(MusicState { playing: false });
-                }
-                return Err(error);
-            }
-            MUSIC_LEVEL.store(0.0_f64.to_bits(), Ordering::SeqCst);
-        }
-        MUSIC_ACTIVE.store(true, Ordering::SeqCst);
-        fade(app, f64::from(settings.onboarding_volume), false);
-        return Ok(MusicState { playing: true });
-    }
-    MUSIC_ACTIVE.store(false, Ordering::SeqCst);
-    fade(app, 0.0, true);
-    Ok(MusicState { playing: false })
+#[tauri::command]
+pub(crate) fn stop_sound_effects(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    require_main(&window)?;
+    stop_effects(&app);
+    Ok(())
 }
 
-fn fade(app: &tauri::AppHandle, target: f64, stop: bool) {
-    let epoch = MUSIC_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
-    let from = f64::from_bits(MUSIC_LEVEL.load(Ordering::SeqCst));
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        for step in 1..=20 {
-            tokio::time::sleep(std::time::Duration::from_millis(18)).await;
-            if MUSIC_EPOCH.load(Ordering::SeqCst) != epoch {
-                return;
-            }
-            let volume = from + (target - from) * step as f64 / 20.0;
-            let _ = app.run_on_main_thread(move || {
-                if MUSIC_EPOCH.load(Ordering::SeqCst) != epoch {
-                    return;
-                }
-                MUSIC_LEVEL.store(volume.to_bits(), Ordering::SeqCst);
-                let _ = crate::space_score::set_volume(volume as f32);
-                if step == 20 && stop {
-                    let _ = crate::space_score::stop();
-                }
-            });
-        }
-    });
-}
-
-pub(crate) fn stop_music(app: &tauri::AppHandle) {
-    REQUEST_EPOCH.fetch_add(1, Ordering::SeqCst);
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let _ = set_music(&handle, false);
+pub(crate) fn stop_effects(app: &tauri::AppHandle) {
+    let _ = app.run_on_main_thread(|| {
+        let _ = crate::sound_effects::stop();
     });
 }
 
 pub(crate) fn settings_changed(app: &tauri::AppHandle, settings: &Settings) {
-    if !settings.onboarding_music {
-        stop_music(app);
-    } else if MUSIC_ACTIVE.load(Ordering::SeqCst) {
-        fade(app, f64::from(settings.onboarding_volume), false);
+    if !settings.sound_effects {
+        stop_effects(app);
+        let _ = app.run_on_main_thread(|| {
+            let _ = crate::attention_sound::stop();
+        });
     }
 }

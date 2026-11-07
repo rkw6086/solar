@@ -85,8 +85,8 @@ function initialPreview(): PreviewState {
       experimentalClaude: false,
       onboardingComplete: false,
       onboardingStep: "birth",
-      onboardingMusic: true,
-      onboardingVolume: 0.12,
+      soundEffects: true,
+      soundEffectsVolume: 0.25,
     },
   };
 }
@@ -161,8 +161,11 @@ async function previewCommand(
       preview.settings = { ...preview.settings, onboardingComplete: true, onboardingStep: "ready" };
       savePreview();
       return preview.settings;
-    case "set_onboarding_music":
-      return { playing: false };
+    case "play_sound_effect":
+      return false;
+    case "stop_sound_effects":
+    case "set_intro_fullscreen":
+      return;
     case "reset_solar":
       if (args.confirmed !== true) throw new Error("Confirm Reset Solar before continuing.");
       preview = initialPreview();

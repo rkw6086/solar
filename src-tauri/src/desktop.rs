@@ -603,6 +603,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.manage(crate::desktop_intro::IntroWindowState::default());
             let home_dir = app.path().home_dir()?;
             let data_dir =
                 crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
@@ -738,19 +739,28 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    crate::desktop_onboarding::stop_music(window.app_handle());
-                    let _ = window.hide();
+            if window.label() == "main"
+                && let WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                crate::desktop_onboarding::stop_effects(window.app_handle());
+                if let Some(main) = window.app_handle().get_webview_window("main") {
+                    let _ = crate::desktop_intro::set_intro_fullscreen(
+                        window.app_handle().clone(),
+                        main,
+                        false,
+                    );
                 }
+                let _ = window.hide();
             }
         })
         .invoke_handler(tauri::generate_handler![
             crate::desktop_onboarding::reset_solar,
             crate::desktop_onboarding::save_onboarding_progress,
             crate::desktop_onboarding::complete_onboarding,
-            crate::desktop_onboarding::set_onboarding_music,
+            crate::desktop_onboarding::play_sound_effect,
+            crate::desktop_onboarding::stop_sound_effects,
+            crate::desktop_intro::set_intro_fullscreen,
             crate::desktop_attention::get_attention_state,
             crate::desktop_attention::attention_ready,
             crate::desktop_attention::attention_bounds,

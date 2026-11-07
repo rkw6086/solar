@@ -21,13 +21,13 @@ The native preparation hook builds the Swift screen/accessibility helper and sta
 
 ## First launch
 
-Solar opens on black as white ripples gather into a new star. The welcome tour then introduces your Orbits and walks through model connections, the first Orbit, a project folder, and desktop preferences. Each setup step saves real settings and can be skipped or resumed; existing profiles and files are preserved when replaying the tour.
+Solar opens fullscreen on black as white ripples gather into a new star. The welcome tour then introduces your Orbits and walks through model connections, the first Orbit, a project folder, and desktop preferences. The whole tour stays fullscreen and restores the launcher's previous window state when it finishes. Each setup step saves real settings and can be skipped or resumed; existing profiles and files are preserved when replaying the tour.
 
-The welcome uses a restrained retro-console style: white vector geometry, amber/cyan accents, small monospaced labels, and faint stationary screen texture. Design references include the [Tektronix 4010 terminal](https://www.computerhistory.org/brochures/doc-4372956d27050/) and [vintage Roland synthesizers](https://www.roland.com/us/products/ju-06/); the artwork and synthesized score are original.
+The welcome uses a restrained retro-console style: white vector geometry, amber/cyan accents, small monospaced labels, and faint stationary screen texture. Design references include the [Tektronix 4010 terminal](https://www.computerhistory.org/brochures/doc-4372956d27050/) and [vintage Roland synthesizers](https://www.roland.com/us/products/ju-06/); the artwork and synthesized sound effects are original.
 
-The optional soundtrack is the selected melodic-trance theme, with a rolling bass line, softer percussion, and playback slowed by 8% without changing pitch. The 32.594-second recording is bundled in the app and plays offline; its [source and processing notes](src-tauri/assets/audio/README.md) are included with the asset. Music starts at a quiet default level and has separate mute and volume controls. Changes between slides keep the same playing track, and music fades out when the welcome window hides or you finish. Reduced motion skips the moving starburst. Orbit attention chimes remain synthesized locally and have their own sound settings.
+There is no background music. Each ripple reaching the center makes a quiet glass-like drop, followed by a brief airy major chord as the sun forms. The sun then winks and plays a randomly varied Orbit-style chime. Controls have a short, dry click. These effects are synthesized locally and timed from the animation's own timeline; they stop when you hide, skip, or leave the introduction. The design follows Apple's guidance for [subtle, varied interaction sounds that match visual transitions](https://developer.apple.com/videos/play/wwdc2023/10271/). Reduced motion shows a still sun with one short formation cue and skips the animated wink and ripple sounds.
 
-Find **Replay welcome tour**, **Welcome music**, and its volume in **Settings → Welcome experience**. Replay keeps your existing setup. **Settings → Start over → Reset Solar** instead shows one confirmation modal, then stops active work, clears Solar’s saved credentials and all app-managed data, and restarts from the opening animation. Files in external project folders are preserved.
+The welcome's **Sound Effects On / Off** button controls effects throughout Solar, including Orbit chimes. Find **Replay welcome tour**, **Sound effects**, and its volume in **Settings → Welcome experience**. Orbit chimes also retain their own category switch and volume. Replay keeps your existing setup. **Settings → Start over → Reset Solar** instead shows one confirmation modal, then stops active work, clears Solar’s saved credentials and all app-managed data, and restarts from the opening animation. Files in external project folders are preserved.
 
 For the browser-only UI preview, run the following and open the URL Vite prints.
 
@@ -112,6 +112,7 @@ Orbit exports use versioned JSON. Imports receive a fresh identity, require new 
 
 ```sh
 corepack pnpm run build
+corepack pnpm run test:intro
 cargo fmt --all -- --check
 cargo test --workspace --no-default-features
 cargo check -p solar

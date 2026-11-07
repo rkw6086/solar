@@ -29,7 +29,7 @@ fn preconfigured_profiles_are_used_without_adding_starter_orbits() {
     let temporary = tempfile::tempdir().unwrap();
     let store = Store::open_profile(temporary.path()).unwrap();
     let settings = Settings {
-        onboarding_volume: 0.08,
+        sound_effects_volume: 0.08,
         ..Settings::default()
     };
     store.put("settings", "app", &settings).unwrap();
@@ -41,7 +41,7 @@ fn preconfigured_profiles_are_used_without_adding_starter_orbits() {
     let state = engine.bootstrap().unwrap();
     assert_eq!(state.orbits.len(), 1);
     assert_eq!(state.orbits[0].id, "custom");
-    assert_eq!(state.settings.onboarding_volume, 0.08);
+    assert_eq!(state.settings.sound_effects_volume, 0.08);
     for child in [
         "config.toml",
         "orbit.sqlite",
@@ -61,7 +61,7 @@ fn manual_toml_edits_are_authoritative_after_restart() {
     let path = temporary.path().join("config.toml");
     let mut master: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     master["settings"]["maxConcurrent"] = toml::Value::Integer(3);
-    master["settings"]["onboardingVolume"] = toml::Value::Float(0.07);
+    master["settings"]["soundEffectsVolume"] = toml::Value::Float(0.07);
     fs::write(&path, toml::to_string_pretty(&master).unwrap()).unwrap();
     let path = temporary.path().join("orbits/sol/config.toml");
     let mut profile: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -70,7 +70,7 @@ fn manual_toml_edits_are_authoritative_after_restart() {
 
     let engine = Engine::open(temporary.path().into()).unwrap();
     assert_eq!(engine.settings().unwrap().max_concurrent, 3);
-    assert_eq!(engine.settings().unwrap().onboarding_volume, 0.07);
+    assert_eq!(engine.settings().unwrap().sound_effects_volume, 0.07);
     assert_eq!(
         engine.orbit("assistant").unwrap().personality,
         "Patient and precise"

@@ -1671,13 +1671,13 @@ export function App() {
                 </section>
                 <section className="settings-section">
                   <h2>Welcome experience</h2>
-                  <SettingsRow title="Welcome music" description="Quiet background music for the welcome tour.">
-                    <button className={`switch ${data.settings.onboardingMusic !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.onboardingMusic !== false} aria-label="Welcome music" onClick={() => void action("save_settings", { settings: { ...data.settings, onboardingMusic: data.settings.onboardingMusic === false } })}><span /></button>
+                  <SettingsRow title="Sound effects" description="Clicks, Solar’s introduction, and Orbit sound feedback.">
+                    <button className={`switch ${data.settings.soundEffects !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.soundEffects !== false} aria-label="Sound effects" onClick={() => void action("save_settings", { settings: { ...data.settings, soundEffects: data.settings.soundEffects === false } })}><span /></button>
                   </SettingsRow>
-                  <SettingsRow title="Welcome music volume" description="Independent of Orbit notification chimes.">
+                  <SettingsRow title="Sound effects volume" description="Intro and click volume. Orbit chimes have their own volume.">
                     <label className="attention-volume">
-                      <input type="range" min="0" max="0.5" step="0.01" aria-label="Welcome music volume" value={Number(data.settings.onboardingVolume ?? 0.12)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, onboardingVolume: Number(event.target.value) } })} />
-                      <output>{Math.round(Number(data.settings.onboardingVolume ?? 0.12) * 200)}%</output>
+                      <input type="range" min="0" max="0.5" step="0.01" aria-label="Sound effects volume" value={Number(data.settings.soundEffectsVolume ?? 0.25)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, soundEffectsVolume: Number(event.target.value) } })} />
+                      <output>{Math.round(Number(data.settings.soundEffectsVolume ?? 0.25) * 200)}%</output>
                     </label>
                   </SettingsRow>
                   <SettingsRow title="Welcome tour" description="Replay Solar’s origin and revisit setup. Your existing profiles and connections stay in place.">
