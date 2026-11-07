@@ -92,6 +92,6 @@ mod tests {
         assert_eq!(settings.onboarding_step, "birth");
         assert!(!settings.onboarding_complete);
         assert!(settings.onboarding_music);
-        assert_eq!(settings.onboarding_volume, 0.22);
+        assert_eq!(settings.onboarding_volume, 0.12);
     }
 }

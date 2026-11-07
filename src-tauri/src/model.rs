@@ -148,7 +148,7 @@ impl Default for Settings {
             onboarding_complete: false,
             onboarding_step: "birth".into(),
             onboarding_music: true,
-            onboarding_volume: 0.22,
+            onboarding_volume: 0.12,
         }
     }
 }

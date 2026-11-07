@@ -1671,13 +1671,13 @@ export function App() {
                 </section>
                 <section className="settings-section">
                   <h2>Welcome experience</h2>
-                  <SettingsRow title="Welcome music" description="Play a quiet, upbeat synthwave theme during the welcome tour.">
+                  <SettingsRow title="Welcome music" description="Quiet background music for the welcome tour.">
                     <button className={`switch ${data.settings.onboardingMusic !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.onboardingMusic !== false} aria-label="Welcome music" onClick={() => void action("save_settings", { settings: { ...data.settings, onboardingMusic: data.settings.onboardingMusic === false } })}><span /></button>
                   </SettingsRow>
                   <SettingsRow title="Welcome music volume" description="Independent of Orbit notification chimes.">
                     <label className="attention-volume">
-                      <input type="range" min="0" max="0.5" step="0.025" aria-label="Welcome music volume" value={Number(data.settings.onboardingVolume ?? 0.22)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, onboardingVolume: Number(event.target.value) } })} />
-                      <output>{Math.round(Number(data.settings.onboardingVolume ?? 0.22) * 200)}%</output>
+                      <input type="range" min="0" max="0.5" step="0.01" aria-label="Welcome music volume" value={Number(data.settings.onboardingVolume ?? 0.12)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, onboardingVolume: Number(event.target.value) } })} />
+                      <output>{Math.round(Number(data.settings.onboardingVolume ?? 0.12) * 200)}%</output>
                     </label>
                   </SettingsRow>
                   <SettingsRow title="Welcome tour" description="Replay Solar’s origin and revisit setup. Your existing profiles and connections stay in place.">

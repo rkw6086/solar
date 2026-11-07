@@ -71,11 +71,6 @@ pub(crate) async fn set_onboarding_music(
 ) -> Result<MusicState, String> {
     require_main(&window)?;
     let request = REQUEST_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
-    if playing {
-        tokio::task::spawn_blocking(crate::space_score::prepare)
-            .await
-            .map_err(|_| "Could not prepare welcome music")?;
-    }
     let (send, receive) = tokio::sync::oneshot::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {
@@ -92,7 +87,7 @@ pub(crate) async fn set_onboarding_music(
         .map_err(|_| "Music service stopped".to_owned())?
 }
 
-/// Fade rather than cut the seamless loop when a user mutes, finishes or hides it.
+/// Fade rather than cut the music when a user mutes, finishes or hides it.
 fn set_music(app: &tauri::AppHandle, playing: bool) -> Result<MusicState, String> {
     let settings = app.state::<Arc<Engine>>().settings()?;
     let playing = playing && settings.onboarding_music;

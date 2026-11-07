@@ -648,7 +648,7 @@ impl Engine {
         settings.onboarding_volume = if settings.onboarding_volume.is_finite() {
             settings.onboarding_volume.clamp(0.0, 0.5)
         } else {
-            0.22
+            0.12
         };
         if previous.experimental_claude && !settings.experimental_claude {
             for profile in self.store.list::<ProviderProfile>("providers")? {

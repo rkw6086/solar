@@ -86,7 +86,7 @@ function initialPreview(): PreviewState {
       onboardingComplete: false,
       onboardingStep: "birth",
       onboardingMusic: true,
-      onboardingVolume: 0.22,
+      onboardingVolume: 0.12,
     },
   };
 }
