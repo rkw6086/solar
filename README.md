@@ -43,11 +43,13 @@ The browser preview uses clearly labeled, isolated local sample data. Model call
 2. Edit an Orbit and assign its connection and model. The starter roles are personal assistant, researcher, and QA.
 3. Choose its tool categories and autonomy. Add a project folder and explicitly grant membership to Orbits that should share it.
 4. Open an individual conversation or create a group with a lead Orbit. The lead can delegate to members of that group.
-5. Use **Bring Orbits to desktop**, or click the sun. Drag characters to place them and click one to open a mini-chat.
+5. Use **Bring Orbits to desktop**, or click the sun. Planets expand into fixed slots around it; drag the sun to move the whole group, and click a planet to open its mini-chat.
 
-The launcher closes into the menu bar. Quit from the menu-bar menu to stop Solar and its owned tool processes.
+The launcher closes into the menu bar. Sun and planet widgets appear while the launcher is hidden; opening the launcher hides them and closes popup chats. **Bring Orbits to desktop** hides the launcher and expands the planets. Each expansion uses the same slots for the same Orbit roster, and the whole group stays together at display edges. Quit from the menu-bar menu to stop Solar and its owned tool processes.
 
 When an Orbit needs permission, encounters a task problem, or finishes your request, it peeks down from the top of the display. Solar uses the built-in display when available, reads the actual camera-housing safe area, and keeps the character and controls below the notch. Displays without a notch use a top-center panel below the menu bar. Opening the alert takes you to the relevant conversation; dismissing it never approves a tool. Multiple alerts queue, with permission requests first.
+
+When that conversation is already visible in the launcher or a popup chat, Solar skips its alert and chime. Approval controls remain in the chat, and unrelated conversations can still notify you.
 
 While the Orbits are collapsed, each Orbit plays its own stable, synthesized five-note signature. Every chime lasts **800 milliseconds**, including its release tail. **Settings → Attention sound** controls sound and volume, and the Orbit picker previews each character's alert. Reduced motion also applies to the peek animation. Sound playback uses macOS; browser/Linux previews show the animation without native audio playback.
 

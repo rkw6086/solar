@@ -30,7 +30,9 @@ pub(crate) struct AttentionState {
 
 fn state(app: &tauri::AppHandle) -> Result<AttentionState, String> {
     let engine = app.state::<Arc<Engine>>();
-    let items = engine.attention_items()?;
+    let items = unseen_items(engine.inner(), engine.attention_items()?, |item| {
+        crate::desktop::attention_is_visible(app, item)
+    })?;
     let settings = engine.settings()?;
     Ok(AttentionState {
         current: items.first().cloned(),
@@ -39,6 +41,25 @@ fn state(app: &tauri::AppHandle) -> Result<AttentionState, String> {
         reduced_motion: settings.reduced_motion,
         sound_enabled: settings.sound_effects && settings.attention_sound,
     })
+}
+
+// An open chat already contains the update or approval controls. Consume only
+// its notification, so closing that chat does not replay an already-seen alert.
+// Approval records and task authorization remain owned by the engine.
+fn unseen_items(
+    engine: &Engine,
+    items: Vec<AttentionItem>,
+    mut chat_is_visible: impl FnMut(&AttentionItem) -> bool,
+) -> Result<Vec<AttentionItem>, String> {
+    let mut pending = Vec::with_capacity(items.len());
+    for item in items {
+        if !item.id.starts_with("preview:") && chat_is_visible(&item) {
+            engine.dismiss_attention(&item.id)?;
+        } else {
+            pending.push(item);
+        }
+    }
+    Ok(pending)
 }
 
 #[tauri::command]
@@ -172,7 +193,17 @@ pub(crate) fn refresh(app: &tauri::AppHandle) {
 }
 
 fn present(app: &tauri::AppHandle) -> Result<(), String> {
+    let previously_presented = PRESENTED
+        .lock()
+        .map_err(|_| "Attention state unavailable")?
+        .clone();
     let snapshot = state(app)?;
+    let current_was_removed = previously_presented
+        .as_ref()
+        .is_some_and(|id| snapshot.items.iter().all(|item| item.id != *id));
+    if current_was_removed {
+        let _ = crate::attention_sound::stop();
+    }
     let revision = REVISION.fetch_add(1, Ordering::SeqCst) + 1;
     let engine = app.state::<Arc<Engine>>();
     let settings = engine.settings()?;
@@ -190,6 +221,10 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
             window
                 .emit("solar://attention", &snapshot)
                 .map_err(|e| e.to_string())?;
+            if current_was_removed {
+                window.hide().map_err(|error| error.to_string())?;
+                return Ok(());
+            }
             let app = app.clone();
             let delay = if snapshot.reduced_motion { 0 } else { 190 };
             tauri::async_runtime::spawn(async move {
@@ -307,4 +342,88 @@ fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
     #[cfg(not(target_os = "macos"))]
     window.show().map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Approval, now};
+
+    fn item(id: &str, conversation: &str, kind: &str) -> AttentionItem {
+        AttentionItem {
+            id: id.into(),
+            orbit_id: "assistant".into(),
+            task_id: "task".into(),
+            conversation_id: conversation.into(),
+            kind: kind.into(),
+            title: "Update".into(),
+            created_at: now(),
+        }
+    }
+
+    #[test]
+    fn visible_chat_consumes_its_alert_without_answering_an_approval() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(directory.path().into()).unwrap();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        engine.approvals.lock().unwrap().insert(
+            "approval".into(),
+            (
+                Approval {
+                    id: "approval".into(),
+                    task_id: "task".into(),
+                    orbit_id: "assistant".into(),
+                    tool: "shell_run".into(),
+                    arguments: serde_json::json!({}),
+                },
+                sender,
+            ),
+        );
+        engine
+            .request_attention(item("approval:approval", "open-chat", "approval"))
+            .unwrap();
+
+        assert!(
+            unseen_items(&engine, engine.attention_items().unwrap(), |_| true)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(engine.approvals.lock().unwrap().len(), 1);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        // Hiding the chat cannot resurrect a notification that was seen there.
+        assert!(
+            unseen_items(&engine, engine.attention_items().unwrap(), |_| false)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn another_chat_and_explicit_previews_keep_their_notifications() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(directory.path().into()).unwrap();
+        for item in [
+            item("visible", "open-chat", "message"),
+            item("unrelated", "another-chat", "message"),
+            item("preview:sample", "", "message"),
+        ] {
+            engine.request_attention(item).unwrap();
+        }
+        let pending = unseen_items(&engine, engine.attention_items().unwrap(), |item| {
+            assert!(!item.id.starts_with("preview:"));
+            item.conversation_id == "open-chat"
+        })
+        .unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["preview:sample", "unrelated"]
+        );
+        assert_eq!(engine.attention_items().unwrap().len(), 2);
+    }
 }

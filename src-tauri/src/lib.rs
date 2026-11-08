@@ -24,7 +24,11 @@ mod desktop;
 #[cfg(feature = "desktop")]
 mod desktop_attention;
 #[cfg(feature = "desktop")]
+mod desktop_chat;
+#[cfg(feature = "desktop")]
 mod desktop_intro;
+#[cfg(any(feature = "desktop", test))]
+mod desktop_layout;
 #[cfg(feature = "desktop")]
 mod desktop_logging;
 #[cfg(feature = "desktop")]

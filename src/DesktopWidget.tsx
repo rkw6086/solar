@@ -196,13 +196,10 @@ export function DesktopWidget({
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
-        onPointerDown={drag.onPointerDown}
-        onPointerMove={drag.onPointerMove}
-        onClick={(event) => {
-          if (event.detail === 0 || drag.wasClick())
-            void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
-              setFailure(errorText(reason)),
-            );
+        onClick={() => {
+          void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
+            setFailure(errorText(reason)),
+          );
         }}
       >
         <Planet color={orbit.color} size={88} name={orbit.name} busy={busy} />

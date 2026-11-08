@@ -387,6 +387,7 @@ async function previewCommand(
       return orbit;
     }
     case "set_desktop_expanded":
+    case "set_active_chat":
       return;
     case "open_orbit_chat":
       window.location.hash = `chat/${String(args.orbitId)}`;

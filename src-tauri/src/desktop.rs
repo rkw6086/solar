@@ -17,6 +17,8 @@ use tauri_plugin_opener::OpenerExt;
 type AppState<'a> = State<'a, Arc<Engine>>;
 static EXPANDED: AtomicBool = AtomicBool::new(false);
 static SUN_REQUESTED: AtomicBool = AtomicBool::new(false);
+static LAUNCHER_OPEN: AtomicBool = AtomicBool::new(true);
+static COMPANIONS_HIDDEN: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
 static ANIMATING: AtomicBool = AtomicBool::new(false);
 static ANIMATION_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -33,7 +35,8 @@ fn widget_ready(window: tauri::WebviewWindow) -> Result<(), String> {
         .lock()
         .map_err(|_| "Widget state unavailable")?
         .insert(label.to_owned());
-    if label == "sun" && SUN_REQUESTED.load(Ordering::SeqCst) {
+    if label == "sun" && SUN_REQUESTED.load(Ordering::SeqCst) && !launcher_open(window.app_handle())
+    {
         window.show().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -179,16 +182,7 @@ fn save_settings(
     if settings.desktop_enabled {
         ensure_sun(&app)?;
     } else {
-        SUN_REQUESTED.store(false, Ordering::SeqCst);
-        EXPANDED.store(false, Ordering::SeqCst);
-        engine.desktop_expanded.store(false, Ordering::SeqCst);
-        ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst);
-        ANIMATING.store(false, Ordering::SeqCst);
-        for (label, window) in app.webview_windows() {
-            if label == "sun" || label.starts_with("orbit-") {
-                let _ = window.hide();
-            }
-        }
+        hide_companions(&app);
     }
     engine.changed();
     crate::desktop_attention::refresh(&app);
@@ -247,21 +241,23 @@ pub(crate) fn open_full_chat(app: tauri::AppHandle, conversation_id: String) -> 
     .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn save_position(engine: AppState<'_>, orbit_id: String, x: f64, y: f64) -> Result<(), String> {
-    let mut orbit = engine.orbit(&orbit_id)?;
-    orbit.x = Some(x);
-    orbit.y = Some(y);
-    engine.save_orbit(orbit)?;
-    Ok(())
-}
-#[tauri::command]
 fn set_desktop_expanded(
     app: tauri::AppHandle,
     engine: AppState<'_>,
     expanded: bool,
 ) -> Result<(), String> {
-    if !engine.settings()?.onboarding_complete {
+    let settings = engine.settings()?;
+    if !settings.onboarding_complete {
         return Err("Finish or skip the welcome tour before opening desktop Orbits".into());
+    }
+    if expanded && !settings.desktop_enabled {
+        return Err("Enable desktop companions in Settings before opening desktop Orbits".into());
+    }
+    if expanded {
+        COMPANIONS_HIDDEN.store(false, Ordering::SeqCst);
+        if launcher_open(&app) {
+            hide_launcher(&app)?;
+        }
     }
     ensure_sun(&app)?;
     EXPANDED.store(expanded, Ordering::SeqCst);
@@ -271,25 +267,28 @@ fn set_desktop_expanded(
     let sun = app
         .get_webview_window("sun")
         .ok_or("Desktop sun is unavailable")?;
+    let (bounds, formation_scale) = desktop_screen(&app, &sun);
     let sun_position = sun
         .outer_position()
         .map_err(|e| e.to_string())?
-        .to_logical::<f64>(sun.scale_factor().map_err(|e| e.to_string())?);
-    let origin = (sun_position.x + 40.0, sun_position.y + 40.0);
+        .to_logical::<f64>(formation_scale);
+    let mut orbits: Vec<_> = engine
+        .bootstrap()?
+        .orbits
+        .into_iter()
+        .filter(|o| o.enabled)
+        .collect();
+    orbits.sort_by(|a, b| a.id.cmp(&b.id));
+    let layout = crate::desktop_layout::orbit_layout(
+        bounds,
+        (sun_position.x, sun_position.y),
+        if expanded { orbits.len() } else { 0 },
+    );
+    position_window(&sun, layout.sun, formation_scale)?;
+    let origin = (layout.sun.0 + 40.0, layout.sun.1 + 40.0);
     let mut movements = Vec::new();
     if expanded {
-        let orbits: Vec<_> = engine
-            .bootstrap()?
-            .orbits
-            .into_iter()
-            .filter(|o| o.enabled)
-            .collect();
-        let count = orbits.len().max(1);
-        for (index, orbit) in orbits.iter().enumerate() {
-            let angle = std::f64::consts::TAU * index as f64 / count as f64;
-            let x = orbit.x.unwrap_or(origin.0 + angle.cos() * 150.0);
-            let y = orbit.y.unwrap_or(origin.1 + angle.sin() * 150.0);
-            let target = clamp_to_screen(&app, x, y, 112.0, 112.0);
+        for (orbit, target) in orbits.iter().zip(layout.planets) {
             let label = format!("orbit-{}", orbit.id);
             if app.get_webview_window(&label).is_none() {
                 create_companion(
@@ -301,10 +300,8 @@ fn set_desktop_expanded(
                 )?;
             }
             if let Some(window) = app.get_webview_window(&label) {
-                window
-                    .set_position(tauri::LogicalPosition::new(origin.0, origin.1))
-                    .map_err(|e| e.to_string())?;
-                movements.push((window, origin, target, Some(orbit.id.clone())));
+                position_window(&window, origin, formation_scale)?;
+                movements.push((window, origin, target));
             }
         }
     } else {
@@ -313,13 +310,13 @@ fn set_desktop_expanded(
                 let start = window
                     .outer_position()
                     .map_err(|e| e.to_string())?
-                    .to_logical::<f64>(window.scale_factor().map_err(|e| e.to_string())?);
-                movements.push((window, (start.x, start.y), origin, None));
+                    .to_logical::<f64>(formation_scale);
+                movements.push((window, (start.x, start.y), origin));
             }
         }
     }
     let reduced_motion = engine.settings()?.reduced_motion;
-    let owned_engine = engine.inner().clone();
+    let animation_app = app.clone();
     tauri::async_runtime::spawn(async move {
         if expanded {
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
@@ -332,7 +329,7 @@ fn set_desktop_expanded(
                     .map(|widgets| {
                         movements
                             .iter()
-                            .all(|(window, _, _, _)| widgets.contains(window.label()))
+                            .all(|(window, _, _)| widgets.contains(window.label()))
                     })
                     .unwrap_or(false);
                 if ready || std::time::Instant::now() >= deadline {
@@ -344,7 +341,7 @@ fn set_desktop_expanded(
                 return;
             }
             // A failed webview must stay hidden rather than exposing a blank window.
-            movements.retain(|(window, _, _, _)| {
+            movements.retain(|(window, _, _)| {
                 let ready = READY_WIDGETS
                     .lock()
                     .map(|widgets| widgets.contains(window.label()))
@@ -360,9 +357,18 @@ fn set_desktop_expanded(
                 }
                 ready
             });
-            for (window, _, _, _) in &movements {
-                let _ = window.show();
-            }
+            let windows = movements
+                .iter()
+                .map(|(window, _, _)| window.clone())
+                .collect::<Vec<_>>();
+            let show_app = animation_app.clone();
+            let _ = animation_app.run_on_main_thread(move || {
+                if ANIMATION_EPOCH.load(Ordering::SeqCst) == epoch && !launcher_open(&show_app) {
+                    for window in windows {
+                        let _ = window.show();
+                    }
+                }
+            });
             // Give newly visible surfaces a presentation cycle before moving them.
             tokio::time::sleep(Duration::from_millis(32)).await;
         }
@@ -373,12 +379,42 @@ fn set_desktop_expanded(
             }
             let progress = step as f64 / steps as f64;
             let eased = 1.0 - (1.0 - progress).powi(3);
-            for (window, from, to, _) in &movements {
-                let _ = window.set_position(tauri::LogicalPosition::new(
-                    from.0 + (to.0 - from.0) * eased,
-                    from.1 + (to.1 - from.1) * eased,
-                ));
-            }
+            let positions = movements
+                .iter()
+                .map(|(window, from, to)| {
+                    (
+                        window.clone(),
+                        (
+                            from.0 + (to.0 - from.0) * eased,
+                            from.1 + (to.1 - from.1) * eased,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let move_app = animation_app.clone();
+            let initial_sun = layout.sun;
+            let _ = animation_app.run_on_main_thread(move || {
+                if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&move_app) {
+                    return;
+                }
+                let shift = move_app
+                    .get_webview_window("sun")
+                    .and_then(|sun| sun.outer_position().ok())
+                    .map(|p| {
+                        (
+                            f64::from(p.x) / formation_scale - initial_sun.0,
+                            f64::from(p.y) / formation_scale - initial_sun.1,
+                        )
+                    })
+                    .unwrap_or((0.0, 0.0));
+                for (window, position) in positions {
+                    let _ = position_window(
+                        &window,
+                        (position.0 + shift.0, position.1 + shift.1),
+                        formation_scale,
+                    );
+                }
+            });
             if !reduced_motion {
                 tokio::time::sleep(Duration::from_millis(16)).await;
             }
@@ -386,20 +422,19 @@ fn set_desktop_expanded(
         if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
             return;
         }
-        for (window, _, to, orbit_id) in movements {
-            if expanded {
-                if let Some(id) = orbit_id {
-                    if let Ok(mut orbit) = owned_engine.orbit(&id) {
-                        orbit.x = Some(to.0);
-                        orbit.y = Some(to.1);
-                        let _ = owned_engine.store.put("orbits", &id, &orbit);
-                    }
-                }
-            } else {
-                let _ = window.hide();
+        let finish_app = animation_app.clone();
+        let _ = animation_app.run_on_main_thread(move || {
+            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&finish_app) {
+                return;
             }
-        }
-        ANIMATING.store(false, Ordering::SeqCst);
+            if !expanded {
+                for (window, _, _) in movements {
+                    let _ = window.hide();
+                }
+            }
+            ANIMATING.store(false, Ordering::SeqCst);
+            let _ = align_companions(&finish_app);
+        });
     });
     let _ = app.emit("solar://desktop", expanded);
     engine.changed();
@@ -413,15 +448,49 @@ pub(crate) fn open_orbit_chat(
     orbit_id: String,
 ) -> Result<(), String> {
     let orbit = engine.orbit(&orbit_id)?;
+    if launcher_open(&app) {
+        let conversation = engine
+            .bootstrap()?
+            .conversations
+            .into_iter()
+            .find(|c| c.orbit_ids.len() == 1 && c.orbit_ids[0] == orbit_id)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                engine.create_conversation(
+                    vec![orbit_id.clone()],
+                    orbit_id.clone(),
+                    orbit.name.clone(),
+                    None,
+                )
+            })?;
+        return open_full_chat(app, conversation.id);
+    }
     let label = format!("chat-{orbit_id}");
     if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
+        window.set_focus().map_err(|e| e.to_string())?;
+        crate::desktop_attention::refresh(&app);
+        return Ok(());
     }
     let position = app
         .get_webview_window(&format!("orbit-{orbit_id}"))
         .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)))
         .map(|(p, s)| p.to_logical::<f64>(s));
+    let conversation = engine
+        .bootstrap()?
+        .conversations
+        .into_iter()
+        .find(|c| c.orbit_ids.len() == 1 && c.orbit_ids[0] == orbit_id)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            engine.create_conversation(
+                vec![orbit_id.clone()],
+                orbit_id.clone(),
+                orbit.name.clone(),
+                None,
+            )
+        })?;
+    crate::desktop_chat::register_popup(&app, &label, &conversation);
     let mut builder = WebviewWindowBuilder::new(
         &app,
         &label,
@@ -438,7 +507,61 @@ pub(crate) fn open_orbit_chat(
         let (x, y) = clamp_to_screen(&app, p.x + 90.0, p.y - 180.0, 410.0, 560.0);
         builder = builder.position(x, y);
     }
-    builder.build().map_err(|e| e.to_string())?;
+    if let Err(error) = builder.build() {
+        crate::desktop_chat::clear_window(&app, &label);
+        return Err(error.to_string());
+    }
+    crate::desktop_attention::refresh(&app);
+    Ok(())
+}
+
+pub(crate) fn launcher_open(_: &tauri::AppHandle) -> bool {
+    LAUNCHER_OPEN.load(Ordering::SeqCst)
+}
+
+pub(crate) fn attention_is_visible(app: &tauri::AppHandle, item: &AttentionItem) -> bool {
+    crate::desktop_chat::attention_is_visible(app, item)
+}
+
+fn hide_companions(app: &tauri::AppHandle) {
+    SUN_REQUESTED.store(false, Ordering::SeqCst);
+    EXPANDED.store(false, Ordering::SeqCst);
+    ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst);
+    ANIMATING.store(false, Ordering::SeqCst);
+    if let Some(engine) = app.try_state::<Arc<Engine>>() {
+        engine.desktop_expanded.store(false, Ordering::SeqCst);
+        engine.changed();
+    }
+    for (label, window) in app.webview_windows() {
+        if label == "sun" || label.starts_with("orbit-") {
+            let _ = window.hide();
+        }
+    }
+    let _ = app.emit("solar://desktop", false);
+}
+
+fn set_launcher_presence(app: &tauri::AppHandle, open: bool) {
+    let was_open = LAUNCHER_OPEN.swap(open, Ordering::SeqCst);
+    if open {
+        hide_companions(app);
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("chat-") {
+                let _ = window.hide();
+                let _ = window.close();
+            }
+        }
+    } else if was_open && !COMPANIONS_HIDDEN.load(Ordering::SeqCst) {
+        let _ = ensure_sun(app);
+    }
+    crate::desktop_attention::refresh(app);
+}
+
+fn hide_launcher(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Launcher window is unavailable")?;
+    window.hide().map_err(|e| e.to_string())?;
+    set_launcher_presence(app, false);
     Ok(())
 }
 
@@ -446,8 +569,98 @@ fn show_launcher(app: &tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or("Launcher window is unavailable")?;
+    set_launcher_presence(app, true);
+    window.unminimize().map_err(|e| e.to_string())?;
     window.show().map_err(|e| e.to_string())?;
     window.set_focus().map_err(|e| e.to_string())
+}
+
+fn desktop_screen(
+    app: &tauri::AppHandle,
+    sun: &tauri::WebviewWindow,
+) -> (crate::desktop_layout::Rect, f64) {
+    let monitor = sun
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area();
+        (
+            crate::desktop_layout::Rect {
+                x: f64::from(area.position.x) / scale,
+                y: f64::from(area.position.y) / scale,
+                width: f64::from(area.size.width) / scale,
+                height: f64::from(area.size.height) / scale,
+            },
+            scale,
+        )
+    } else {
+        (
+            crate::desktop_layout::Rect {
+                x: 0.0,
+                y: 28.0,
+                width: 1440.0,
+                height: 872.0,
+            },
+            1.0,
+        )
+    }
+}
+
+fn position_window(
+    window: &tauri::WebviewWindow,
+    position: (f64, f64),
+    scale: f64,
+) -> Result<(), String> {
+    let target = tauri::PhysicalPosition::new(
+        (position.0 * scale).round() as i32,
+        (position.1 * scale).round() as i32,
+    );
+    let current = window.outer_position().map_err(|e| e.to_string())?;
+    if current != target {
+        window.set_position(target).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn align_companions(app: &tauri::AppHandle) -> Result<(), String> {
+    if ANIMATING.load(Ordering::SeqCst) || launcher_open(app) {
+        return Ok(());
+    }
+    let Some(sun) = app.get_webview_window("sun") else {
+        return Ok(());
+    };
+    let engine = app.state::<Arc<Engine>>();
+    let (bounds, formation_scale) = desktop_screen(app, &sun);
+    let mut orbits: Vec<_> = engine
+        .bootstrap()?
+        .orbits
+        .into_iter()
+        .filter(|o| o.enabled)
+        .collect();
+    orbits.sort_by(|a, b| a.id.cmp(&b.id));
+    let p = sun
+        .outer_position()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(formation_scale);
+    let expanded = EXPANDED.load(Ordering::SeqCst);
+    let layout = crate::desktop_layout::orbit_layout(
+        bounds,
+        (p.x, p.y),
+        if expanded { orbits.len() } else { 0 },
+    );
+    position_window(&sun, layout.sun, formation_scale)?;
+    if expanded {
+        for (orbit, target) in orbits.iter().zip(layout.planets) {
+            if let Some(window) = app.get_webview_window(&format!("orbit-{}", orbit.id)) {
+                position_window(&window, target, formation_scale)?;
+            }
+        }
+    }
+    engine.store.put("desktop", "sun", &layout.sun)?;
+    Ok(())
 }
 
 fn clamp_to_screen(app: &tauri::AppHandle, x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
@@ -527,44 +740,26 @@ fn create_companion(
         {
             widgets.remove(&owned_label);
         }
-        if let WindowEvent::Moved(position) = event {
-            if ANIMATING.load(Ordering::SeqCst)
-                || (owned_label.starts_with("orbit-") && !EXPANDED.load(Ordering::SeqCst))
-            {
-                return;
-            }
-            if owned_label == "sun" {
-                if let Some(window) = app_for_event.get_webview_window("sun") {
-                    if let Ok(scale) = window.scale_factor() {
-                        let logical = position.to_logical::<f64>(scale);
-                        let _ = app_for_event.state::<Arc<Engine>>().store.put(
-                            "desktop",
-                            "sun",
-                            &(logical.x, logical.y),
-                        );
-                    }
-                }
-            }
-            if let Some(id) = owned_label.strip_prefix("orbit-") {
-                if let Some(window) = app_for_event.get_webview_window(&owned_label) {
-                    if let Ok(scale) = window.scale_factor() {
-                        let logical = position.to_logical::<f64>(scale);
-                        let engine = app_for_event.state::<Arc<Engine>>();
-                        if let Ok(mut orbit) = engine.orbit(id) {
-                            orbit.x = Some(logical.x);
-                            orbit.y = Some(logical.y);
-                            let _ = engine.store.put("orbits", id, &orbit);
-                        }
-                    }
-                }
-            }
+        if matches!(
+            event,
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            let _ = align_companions(&app_for_event);
         }
     });
     Ok(())
 }
 
 pub(crate) fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
-    if !app.state::<Arc<Engine>>().settings()?.onboarding_complete {
+    let settings = app.state::<Arc<Engine>>().settings()?;
+    if launcher_open(app)
+        || COMPANIONS_HIDDEN.load(Ordering::SeqCst)
+        || !settings.desktop_enabled
+        || !settings.onboarding_complete
+    {
+        if let Some(window) = app.get_webview_window("sun") {
+            let _ = window.hide();
+        }
         return Ok(());
     }
     SUN_REQUESTED.store(true, Ordering::SeqCst);
@@ -589,8 +784,13 @@ pub(crate) fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
             .ok()
             .flatten()
             .map(|m| {
-                let size = m.size().to_logical::<f64>(m.scale_factor());
-                (size.width - 235.0, size.height - 245.0)
+                let area = m.work_area();
+                let scale = m.scale_factor();
+                (
+                    f64::from(area.position.x) / scale + f64::from(area.size.width) / scale - 235.0,
+                    f64::from(area.position.y) / scale + f64::from(area.size.height) / scale
+                        - 245.0,
+                )
             })
             .unwrap_or((100.0, 100.0))
     });
@@ -617,6 +817,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(crate::desktop_intro::IntroWindowState::default());
+            app.manage(crate::desktop_chat::ChatPresence::default());
             let home_dir = app.path().home_dir()?;
             let data_dir =
                 crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
@@ -697,12 +898,8 @@ pub fn run() {
                         let _ = show_launcher(app);
                     }
                     "hide" => {
-                        let engine = app.state::<Arc<Engine>>();
-                        let _ = set_desktop_expanded(app.clone(), engine, false);
-                        SUN_REQUESTED.store(false, Ordering::SeqCst);
-                        if let Some(sun) = app.get_webview_window("sun") {
-                            let _ = sun.hide();
-                        }
+                        COMPANIONS_HIDDEN.store(true, Ordering::SeqCst);
+                        hide_companions(app);
                     }
                     "quit" => app.exit(0),
                     _ => {}
@@ -751,6 +948,18 @@ pub fn run() {
                         }
                     }
                     attention_ticks += 1;
+                    if attention_ticks.is_multiple_of(10) {
+                        let visibility_app = app_handle.clone();
+                        let _ = app_handle.run_on_main_thread(move || {
+                            if let Some(main) = visibility_app.get_webview_window("main") {
+                                let open = main.is_visible().unwrap_or(false)
+                                    && !main.is_minimized().unwrap_or(false);
+                                if open != launcher_open(&visibility_app) {
+                                    set_launcher_presence(&visibility_app, open);
+                                }
+                            }
+                        });
+                    }
                     if attention_ticks == 50 {
                         attention_ticks = 0;
                         if app_handle
@@ -765,6 +974,10 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::Destroyed) {
+                crate::desktop_chat::clear_window(window.app_handle(), window.label());
+                crate::desktop_attention::refresh(window.app_handle());
+            }
             if window.label() == "main"
                 && let WindowEvent::CloseRequested { api, .. } = event
             {
@@ -777,10 +990,21 @@ pub fn run() {
                         false,
                     );
                 }
-                let _ = window.hide();
+                let _ = hide_launcher(window.app_handle());
+            } else if window.label() == "main"
+                && matches!(event, WindowEvent::Focused(_) | WindowEvent::Resized(_))
+            {
+                let open =
+                    window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
+                set_launcher_presence(window.app_handle(), open);
+            } else if window.label().starts_with("chat-")
+                && matches!(event, WindowEvent::Focused(_) | WindowEvent::Resized(_))
+            {
+                crate::desktop_attention::refresh(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::desktop_chat::set_active_chat,
             crate::desktop_logging::report_frontend_event,
             crate::desktop_onboarding::reset_solar,
             crate::desktop_onboarding::save_onboarding_progress,
@@ -825,13 +1049,16 @@ pub fn run() {
             open_launcher,
             open_external_url,
             open_full_chat,
-            save_position,
             set_desktop_expanded,
             open_orbit_chat
         ])
         .build(tauri::generate_context!())
         .expect("Solar could not start")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                let _ = show_launcher(app);
+            }
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 if !QUITTING.swap(true, Ordering::SeqCst) {
                     api.prevent_exit();

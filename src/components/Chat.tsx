@@ -18,6 +18,9 @@ import { activeTask, errorText, isProviderConfigured } from "../types";
 import type { Bootstrap, Conversation, Message } from "../types";
 import { Planet } from "./Planet";
 
+let presenceRevision = Date.now() * 1_000;
+const nextPresenceRevision = () => (presenceRevision = Math.max(presenceRevision + 1, Date.now() * 1_000));
+
 export function Chat({
   conversation,
   data,
@@ -60,6 +63,20 @@ export function Chat({
     (provider) =>
       provider.id === orbit?.providerId && isProviderConfigured(provider),
   );
+
+  useEffect(() => {
+    if (!native) return;
+    void api("set_active_chat", {
+      conversationId: conversation.id,
+      revision: nextPresenceRevision(),
+    }).catch(() => {});
+    return () => {
+      void api("set_active_chat", {
+        conversationId: null,
+        revision: nextPresenceRevision(),
+      }).catch(() => {});
+    };
+  }, [conversation.id]);
 
   useEffect(() => {
     const sequence = ++currentRequest.current;
