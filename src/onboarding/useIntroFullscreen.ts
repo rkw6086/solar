@@ -24,9 +24,9 @@ function release(lease: symbol): Promise<void> {
   return reconcile();
 }
 
-/** Lease native fullscreen for the entire welcome tour, including setup forms. */
+/** Lease a borderless, screen-sized window for the welcome tour and setup forms. */
 export function useIntroFullscreen() {
-  const lease = useRef(Symbol("welcome-fullscreen"));
+  const lease = useRef(Symbol("welcome-screen"));
   const released = useRef(false);
   const [ready, setReady] = useState(!native);
   const [error, setError] = useState("");
@@ -44,7 +44,7 @@ export function useIntroFullscreen() {
           setError("");
         }
       }).catch((reason) => {
-        // Fullscreen failure should not stop setup in the existing window.
+        // A window-presentation failure should not stop setup.
         if (!disposed) {
           setReady(true);
           setError(errorText(reason));

@@ -21,7 +21,7 @@ The native preparation hook builds the Swift screen/accessibility helper and sta
 
 ## First launch
 
-Solar opens fullscreen on black as white ripples gather into a new star. The welcome tour then introduces your Orbits and walks through model connections, the first Orbit, a project folder, and desktop preferences. The whole tour stays fullscreen and restores the launcher's previous window state when it finishes. Each setup step saves real settings and can be skipped or resumed; existing profiles and files are preserved when replaying the tour.
+Solar opens a borderless, screen-sized window on black as white ripples gather into a new star. The welcome tour then introduces your Orbits and walks through model connections, the first Orbit, a project folder, and desktop preferences. The whole tour uses that window without entering macOS fullscreen or creating a fullscreen Space, then restores the launcher's previous size, position, and window controls. Each setup step saves real settings and can be skipped or resumed; existing profiles and files are preserved when replaying the tour.
 
 The welcome uses a restrained retro-console style: white vector geometry, amber/cyan accents, small monospaced labels, and faint stationary screen texture. Design references include the [Tektronix 4010 terminal](https://www.computerhistory.org/brochures/doc-4372956d27050/) and [vintage Roland synthesizers](https://www.roland.com/us/products/ju-06/); the artwork and synthesized sound effects are original.
 
