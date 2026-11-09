@@ -11,11 +11,23 @@ use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn fixture(responses: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
+    fixture_with_status(
+        responses
+            .into_iter()
+            .map(|response| (200, response))
+            .collect(),
+    )
+    .await
+}
+
+async fn fixture_with_status(
+    responses: Vec<(u16, String)>,
+) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for response in responses {
+        for (status, response) in responses {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = Vec::new();
             let mut buffer = [0u8; 4096];
@@ -43,7 +55,7 @@ async fn fixture(responses: Vec<String>) -> (String, tokio::task::JoinHandle<Vec
             }
             requests.push(serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap());
             let wire = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} Test\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response.len(),
                 response
             );
@@ -245,6 +257,281 @@ async fn cancelling_an_approval_preserves_tool_pairs_for_queued_followup() {
             .all(|item| item.task_id != first.id),
         "cancelled tasks must not leave approval or completion alerts"
     );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn denied_or_revoked_tool_grants_never_execute_in_a_rig_run() {
+    for revoke in [false, true] {
+        let call = json!({"role":"assistant","tool_calls":[{"index":0,"id":"denied-memory","type":"function","function":{"name":"memory_save","arguments":"{\"content\":\"Must not be saved\"}"}}]});
+        let (url, server) = fixture(vec![
+            response(call, "tool_calls"),
+            response(json!({"content":"The action was not allowed."}), "stop"),
+        ])
+        .await;
+        let directory = tempfile::tempdir().unwrap();
+        let engine = Engine::open(directory.path().into()).unwrap();
+        common::add_assistant(&engine);
+        configure(&engine, url, true).await;
+        let chat = engine
+            .create_conversation(
+                vec!["assistant".into()],
+                "assistant".into(),
+                "Denied".into(),
+                None,
+            )
+            .unwrap();
+        let task = engine.send_message(&chat.id, "Save a fact".into()).unwrap();
+        let approval = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(approval) = engine.bootstrap().unwrap().approvals.first().cloned() {
+                    break approval;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        if revoke {
+            let mut orbit = engine.orbit("assistant").unwrap();
+            orbit.tool_grants.retain(|grant| grant != "memory");
+            engine.save_orbit(orbit).unwrap();
+        }
+        if revoke {
+            // Saving a less-permissive profile deliberately cancels active work.
+            // A later request must see the interrupted call/result pair, not replay it.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if engine
+                        .bootstrap()
+                        .unwrap()
+                        .tasks
+                        .iter()
+                        .any(|item| item.id == task.id && item.status == "cancelled")
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let followup = engine
+                .send_message(&chat.id, "Continue after the permission change".into())
+                .unwrap();
+            finished(&engine, &followup.id).await;
+        } else {
+            engine.resolve_approval(&approval.id, false).unwrap();
+            finished(&engine, &task.id).await;
+        }
+        let requests = tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let results: Vec<_> = requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["tool_call_id"], "denied-memory");
+        let content = results[0]["content"].as_str().unwrap();
+        assert!(if revoke {
+            content.contains("not replayed")
+        } else {
+            content.contains("Permission")
+        });
+        assert!(engine.memories(Some("assistant"), None).unwrap().is_empty());
+        assert!(engine.bootstrap().unwrap().approvals.is_empty());
+        engine.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn rig_retries_a_transient_model_failure_without_duplicating_the_request() {
+    let (url, server) = fixture_with_status(vec![
+        (503, "temporary upstream failure".into()),
+        (
+            200,
+            response(json!({"content":"The request succeeded."}), "stop"),
+        ),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Retry".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Do this once".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0], requests[1],
+        "a transport retry must reuse the pending model request"
+    );
+    assert_eq!(
+        requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "user" && message["content"] == "Do this once")
+            .count(),
+        1
+    );
+    let messages = engine.messages(&chat.id).unwrap();
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .count(),
+        1
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message.role == "assistant"
+                && message.content == "The request succeeded.")
+            .count(),
+        1
+    );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn rig_group_delegation_keeps_private_history_and_releases_the_model_slot() {
+    let delegate = json!({"role":"assistant","tool_calls":[{"index":0,"id":"delegate-call","type":"function","function":{"name":"orbit_delegate","arguments":"{\"orbitId\":\"researcher\",\"task\":\"Remember a private finding and report it\"}"}}]});
+    let memory = json!({"role":"assistant","tool_calls":[{"index":0,"id":"child-memory","type":"function","function":{"name":"memory_save","arguments":"{\"content\":\"Private researcher finding\"}"}}]});
+    let (url, server) = fixture(vec![
+        response(delegate, "tool_calls"),
+        response(memory, "tool_calls"),
+        response(json!({"content":"The research is complete."}), "stop"),
+        response(json!({"content":"I have the researcher's result."}), "stop"),
+        response(
+            json!({"content":"Continuing the lead conversation."}),
+            "stop",
+        ),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    let mut child = engine.orbit("assistant").unwrap();
+    child.id = "researcher".into();
+    child.name = "Lyra".into();
+    engine.save_orbit(child).unwrap();
+    let mut settings = engine.settings().unwrap();
+    settings.max_concurrent = 1;
+    engine.save_settings(settings).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into(), "researcher".into()],
+            "assistant".into(),
+            "Research group".into(),
+            None,
+        )
+        .unwrap();
+    let first = engine
+        .send_message(&chat.id, "Ask Lyra to research this".into())
+        .unwrap();
+    finished(&engine, &first.id).await;
+    assert!(engine.memories(Some("assistant"), None).unwrap().is_empty());
+    assert_eq!(engine.memories(Some("researcher"), None).unwrap().len(), 1);
+    let tasks = engine.bootstrap().unwrap().tasks;
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|task| task.status == "completed"));
+    let second = engine.send_message(&chat.id, "Continue".into()).unwrap();
+    finished(&engine, &second.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.len(), 5);
+    let followup = requests[4]["messages"].to_string();
+    assert!(followup.contains("delegate-call"));
+    assert!(followup.contains("The research is complete."));
+    assert!(
+        !followup.contains("child-memory"),
+        "child transcript must not overwrite the lead's history"
+    );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn rig_rejects_invalid_tool_batches_then_allows_a_corrected_retry() {
+    let calls = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"valid-memory","type":"function","function":{"name":"memory_save","arguments":"{\"content\":\"Do not execute invalid batch\"}"}},
+        {"index":1,"id":"invented-call","type":"function","function":{"name":"invented_tool","arguments":"{}"}}
+    ]});
+    let (url, server) = fixture(vec![
+        response(calls, "tool_calls"),
+        response(json!({"role":"assistant","tool_calls":[{"index":0,"id":"retry-memory","type":"function","function":{"name":"memory_save","arguments":"{\"content\":\"A valid fact\"}"}}]}), "tool_calls"),
+        response(json!({"content":"I used the available tool."}), "stop"),
+    ]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Invalid tool".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Save the fact".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let results: Vec<_> = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().any(|message| {
+        message["tool_call_id"] == "valid-memory"
+            && message["content"]
+                .as_str()
+                .unwrap()
+                .contains("not executed")
+    }));
+    assert!(
+        results
+            .iter()
+            .any(|message| message["tool_call_id"] == "invented-call"
+                && message["content"].as_str().unwrap().contains("[ERROR]"))
+    );
+    assert!(
+        requests[2]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["role"] == "tool" && message["tool_call_id"] == "retry-memory")
+    );
+    let memories = engine.memories(Some("assistant"), None).unwrap();
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0].content, "A valid fact");
     engine.shutdown().await;
 }
 

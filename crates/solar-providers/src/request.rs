@@ -63,7 +63,7 @@ pub(crate) fn build_completion_request(
     })
 }
 
-fn convert_message(
+pub(crate) fn convert_message(
     message: ConversationMessage,
     encode_images_as_base64: bool,
 ) -> Result<Message, AgentError> {

@@ -3503,6 +3503,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rig-agent"
+version = "0.41.0"
+source = "git+https://github.com/0xPlaygrounds/rig.git?rev=1f9547774edb4c269be991ac42eb043fd7b6e87f#1f9547774edb4c269be991ac42eb043fd7b6e87f"
+dependencies = [
+ "async-stream",
+ "fastrand",
+ "futures",
+ "http",
+ "indexmap 2.14.2",
+ "rig-core",
+ "rig-derive",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-futures",
+]
+
+[[package]]
 name = "rig-core"
 version = "0.41.0"
 source = "git+https://github.com/0xPlaygrounds/rig.git?rev=1f9547774edb4c269be991ac42eb043fd7b6e87f#1f9547774edb4c269be991ac42eb043fd7b6e87f"
@@ -4191,6 +4212,7 @@ dependencies = [
  "http",
  "rand 0.8.8",
  "reqwest",
+ "rig-agent",
  "rig-core",
  "security-framework",
  "serde",

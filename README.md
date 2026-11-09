@@ -155,10 +155,12 @@ Configure Developer ID signing and Apple notarization credentials using Tauri's 
 
 ## Architecture and license
 
-- `crates/solar-agent-core` contains Galaxy-derived, UI-independent runtime contracts and the durable provider-run state machine.
-- `crates/solar-providers` contains selected Rig adapters, request/stream translation, credential services, and provider regression fixtures.
+- `crates/solar-agent-core` contains Galaxy-derived, UI-independent runtime contracts. Its old provider-run format remains readable for interrupted-task recovery; new Orbit tasks use Rig’s agent state machine.
+- `crates/solar-providers` contains selected Rig adapters, request/stream translation, credential services, and provider regression fixtures. `RigOrbitRun` uses Rig’s serializable `AgentRun` for the model/tool loop and canonical conversation history, with a small receipt journal for host actions.
 - `crates/solar-tools` contains local tool implementations, MCP transports, browser sessions, and the native macOS bridge.
 - `src-tauri` owns authorization, persistence, scheduling, Orbit collaboration, desktop windows, and the frontend command boundary.
 - `src` contains the React interface and code-drawn pixel-art characters.
+
+Solar drives Rig’s documented step interface so each tool call still passes through current Orbit grants, project membership, user approval, and cancellation. The host supplies the Orbit preamble and tools, and explicitly executes approved work; `AgentRunner` hooks are not implicitly invoked by this step interface. On restart, unfinished work is closed with correlated tool results and is never automatically replayed.
 
 Solar is licensed under AGPL-3.0-only. Galaxy-derived crates retain their provenance and license files. Rig is pinned to the Galaxy-compatible revision recorded in their manifests. Original Solar UI code and assets are distributed under the same project license.

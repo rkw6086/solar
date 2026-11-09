@@ -6,7 +6,7 @@ use futures::{StreamExt, future::BoxFuture};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use solar_agent_core::*;
-use solar_providers::ProviderKind;
+use solar_providers::{OrbitStep, ProviderKind, RigOrbitRun};
 use solar_tools::{ToolContext, ToolOutput};
 use std::{
     collections::BTreeSet,
@@ -46,11 +46,61 @@ struct HistoryOrigin {
 
 #[derive(Serialize, Deserialize)]
 struct RunJournal {
-    run: ProviderRun,
+    run: JournalRun,
     history_key: Option<String>,
     user_message_id: Option<String>,
     #[serde(default)]
     model_origin: Option<HistoryOrigin>,
+}
+
+// Read old journals only to close their outstanding calls during restart recovery.
+// Every newly executed task uses Rig's agent state machine.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum JournalRun {
+    Rig(RigOrbitRun),
+    Legacy(ProviderRun),
+}
+
+impl JournalRun {
+    fn history(&self) -> Result<Vec<ConversationMessage>, String> {
+        match self {
+            Self::Rig(run) => run.history(),
+            Self::Legacy(run) => Ok(run.transcript().to_vec()),
+        }
+    }
+
+    fn interrupted(&self) -> bool {
+        match self {
+            Self::Rig(run) => run.interruption().is_some(),
+            Self::Legacy(run) => matches!(
+                run.state(),
+                ProviderRunState::Cancelled { .. } | ProviderRunState::Failed { .. }
+            ),
+        }
+    }
+
+    fn recover(&mut self) -> Result<(), String> {
+        let reason = "Solar restarted. Pending external actions were interrupted and have not been replayed.";
+        match self {
+            Self::Rig(run) => {
+                // Conversion also validates that the persisted transcript can be read.
+                run.history()?;
+                if !run.is_terminal() {
+                    run.interrupt(reason)?;
+                }
+            }
+            Self::Legacy(run) => {
+                run.validate_restored_state()
+                    .map_err(|error| error.to_string())?;
+                if !run.is_terminal() {
+                    run.fail(ProviderRunFailureKind::Restore, reason)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 struct TaskGuard {
@@ -433,23 +483,24 @@ impl Engine {
         if orbit.model.trim().is_empty() {
             return Err("Choose a model for this Orbit in its settings".into());
         }
-        let mut run = ProviderRun::new(
+        let mut run = RigOrbitRun::new(
             ctx.task.id.clone(),
             ctx.history.clone(),
-            orbit.provider_id.clone(),
-            ProviderRunLimits {
-                max_model_turns: Some(if ctx.ancestry.len() > 1 { 16 } else { 32 }),
-                max_model_retries_per_turn: 2,
-            },
-        );
-        let result = tokio::time::timeout(Duration::from_secs(30*60),self.clone().drive_steps(ctx,&mut run)).await
-            .unwrap_or_else(|_| { ctx.token.cancel(); Err("Task reached its 30-minute limit. Review progress and send another request to continue.".into()) });
+            if ctx.ancestry.len() > 1 { 16 } else { 32 },
+        )?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(30 * 60),
+            self.clone().drive_steps(ctx, &mut run),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            ctx.token.cancel();
+            Err("Task reached its 30-minute limit. Review progress and send another request to continue.".into())
+        });
         if let Err(error) = &result {
-            if ctx.token.is_cancelled() {
-                let _ = run.cancel("Cancelled");
-            } else {
-                let _ = run.fail(ProviderRunFailureKind::ExternalWork, error.clone());
-            }
+            // Close unfinished tool calls without replaying a host action. Rig owns
+            // the transcript and call protocol; Solar owns stop/restart policy.
+            run.interrupt(error.clone())?;
         }
         self.persist_history(ctx, &run)?;
         result
@@ -458,130 +509,155 @@ impl Engine {
     async fn drive_steps(
         self: Arc<Self>,
         ctx: &mut RunContext,
-        run: &mut ProviderRun,
+        run: &mut RigOrbitRun,
     ) -> Result<String, String> {
-        let mut final_text = String::new();
         let mut failures = 0;
         loop {
             self.scope_orbits(ctx)?;
             let orbit = self.orbit(&ctx.task.orbit_id)?;
             if ctx.token.is_cancelled() {
-                let _ = run.cancel("Cancelled");
+                run.interrupt("Cancelled")?;
                 self.checkpoint(ctx, run)?;
                 return Err("Cancelled".into());
             }
-            let step = run.next_step().map_err(|e| e.to_string())?;
+            let step = run.next_step()?;
             self.checkpoint(ctx, run)?;
             match step {
-                Some(ProviderRunStep::CallModel(call)) => {
-                    ctx.task.summary = format!("{} is thinking", orbit.name);
-                    ctx.task.status = "running".into();
-                    self.update_task(&ctx.task)?;
-                    let profile = self.provider(&orbit.provider_id)?;
-                    if profile.kind == ProviderKind::Claude && !self.settings()?.experimental_claude
-                    {
-                        return Err("Experimental Claude subscription access is disabled".into());
-                    }
-                    let runtime = self.providers.runtime(&profile, &orbit.model).await?;
-                    let tools = self.available_tools(ctx).await?;
-                    let mut request = TurnRequest::new(orbit.model.clone(), call.messages);
-                    request.system_prompt = Some(self.system_prompt(&orbit, &ctx.conversation)?);
-                    request.tools = tools.clone();
-                    request.conversation_id = Some(ctx.conversation.id.clone());
-                    let started = Instant::now();
-                    task_event(
-                        &ctx.task,
-                        "info",
-                        "model_call_started",
-                        "Model call started",
-                        json!({
-                            "work_id": call.work_id,
-                            "provider_id": orbit.provider_id,
-                            "model": orbit.model,
-                            "retry_attempt": call.retry_attempt,
-                            "tool_count": tools.len(),
-                        }),
-                    );
-                    let completed = self.model_turn(ctx, runtime.clone(), request).await;
-                    match completed {
-                        Ok(turn) => {
-                            task_event(
-                                &ctx.task,
-                                "info",
-                                "model_call_finished",
-                                "Model call finished",
-                                json!({
-                                    "work_id": call.work_id,
-                                    "retry_attempt": call.retry_attempt,
-                                    "duration_ms": started.elapsed().as_millis(),
-                                    "tool_call_count": turn.tool_calls.len(),
-                                    "usage": turn.usage,
-                                    "stop_reason": match &turn.stop_reason {
-                                        StopReason::Completed => "completed",
-                                        StopReason::Cancelled => "cancelled",
-                                        StopReason::MaxTokens => "max_tokens",
-                                        StopReason::ContextWindowExceeded => "context_window_exceeded",
-                                        StopReason::Refusal => "refusal",
-                                        StopReason::ToolLoopLimit => "tool_loop_limit",
-                                        StopReason::Other(_) => "other",
-                                    },
-                                }),
-                            );
-                            final_text = turn
-                                .assistant_content
-                                .iter()
-                                .filter_map(|p| {
-                                    if let ContentPart::Text(t) = p {
-                                        Some(t.as_str())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            run.accept_model_turn(&call.work_id, turn)
-                                .map_err(|e| e.to_string())?;
+                OrbitStep::Model { messages, turn } => {
+                    // A transport retry drives the same pending Rig model step. It
+                    // never creates another user message or executes a tool twice.
+                    let mut retry_attempt = 0u32;
+                    loop {
+                        self.scope_orbits(ctx)?;
+                        if ctx.token.is_cancelled() {
+                            return Err("Cancelled".into());
                         }
-                        Err(error) => {
-                            task_event(
-                                &ctx.task,
-                                "warn",
-                                "model_call_failed",
-                                "Model call failed",
-                                json!({
-                                    "work_id": call.work_id,
-                                    "retry_attempt": call.retry_attempt,
-                                    "duration_ms": started.elapsed().as_millis(),
-                                    "error_kind": error.kind,
-                                    "recoverable": error.recoverable,
-                                }),
+                        let orbit = self.orbit(&ctx.task.orbit_id)?;
+                        ctx.task.summary = format!("{} is thinking", orbit.name);
+                        ctx.task.status = "running".into();
+                        self.update_task(&ctx.task)?;
+                        let profile = self.provider(&orbit.provider_id)?;
+                        if profile.kind == ProviderKind::Claude
+                            && !self.settings()?.experimental_claude
+                        {
+                            return Err(
+                                "Experimental Claude subscription access is disabled".into()
                             );
-                            let disposition = run
-                                .register_model_failure(&call.work_id, error)
-                                .map_err(|e| e.to_string())?;
-                            if matches!(disposition, ModelFailureDisposition::RetryScheduled) {
+                        }
+                        let runtime = self.providers.runtime(&profile, &orbit.model).await?;
+                        let tools = self.available_tools(ctx).await?;
+                        let mut request = TurnRequest::new(orbit.model.clone(), messages.clone());
+                        request.system_prompt =
+                            Some(self.system_prompt(&orbit, &ctx.conversation)?);
+                        request.tools = tools.clone();
+                        request.conversation_id = Some(ctx.conversation.id.clone());
+                        let started = Instant::now();
+                        task_event(
+                            &ctx.task,
+                            "info",
+                            "model_call_started",
+                            "Model call started",
+                            json!({
+                                "work_id": format!("{}:{turn}", run.id()),
+                                "provider_id": orbit.provider_id,
+                                "model": orbit.model,
+                                "retry_attempt": retry_attempt,
+                                "tool_count": tools.len(),
+                            }),
+                        );
+                        match self.model_turn(ctx, runtime, request).await {
+                            Ok(completed) => {
+                                task_event(
+                                    &ctx.task,
+                                    "info",
+                                    "model_call_finished",
+                                    "Model call finished",
+                                    json!({
+                                        "work_id": format!("{}:{turn}", run.id()),
+                                        "retry_attempt": retry_attempt,
+                                        "duration_ms": started.elapsed().as_millis(),
+                                        "tool_call_count": completed.tool_calls.len(),
+                                        "usage": completed.usage,
+                                        "stop_reason": match &completed.stop_reason {
+                                            StopReason::Completed => "completed",
+                                            StopReason::Cancelled => "cancelled",
+                                            StopReason::MaxTokens => "max_tokens",
+                                            StopReason::ContextWindowExceeded => "context_window_exceeded",
+                                            StopReason::Refusal => "refusal",
+                                            StopReason::ToolLoopLimit => "tool_loop_limit",
+                                            StopReason::Other(_) => "other",
+                                        },
+                                    }),
+                                );
+                                let incomplete = if completed.tool_calls.is_empty()
+                                    && !matches!(completed.stop_reason, StopReason::Completed)
+                                {
+                                    Some(format!(
+                                        "Model stopped before completion: {:?}",
+                                        completed.stop_reason
+                                    ))
+                                } else {
+                                    None
+                                };
+                                run.accept_model_turn(completed)?;
+                                // Persist accepted content before any later host work.
+                                self.checkpoint(ctx, run)?;
+                                if let Some(error) = incomplete {
+                                    return Err(error);
+                                }
+                                break;
+                            }
+                            Err(error) => {
+                                task_event(
+                                    &ctx.task,
+                                    "warn",
+                                    "model_call_failed",
+                                    "Model call failed",
+                                    json!({
+                                        "work_id": format!("{}:{turn}", run.id()),
+                                        "retry_attempt": retry_attempt,
+                                        "duration_ms": started.elapsed().as_millis(),
+                                        "error_kind": error.kind,
+                                        "recoverable": error.recoverable,
+                                    }),
+                                );
+                                if ctx.token.is_cancelled()
+                                    || error.kind == AgentErrorKind::Cancelled
+                                {
+                                    return Err("Cancelled".into());
+                                }
+                                if !error.recoverable {
+                                    return Err(error.message);
+                                }
+                                if retry_attempt >= 2 {
+                                    return Err(format!(
+                                        "provider model call failed after {retry_attempt} retries: {}",
+                                        error.message
+                                    ));
+                                }
+                                let delay = 2u64.pow(retry_attempt);
+                                retry_attempt += 1;
                                 task_event(
                                     &ctx.task,
                                     "info",
                                     "model_retry_scheduled",
                                     "Model retry scheduled",
                                     json!({
-                                        "work_id": call.work_id,
-                                        "retry_attempt": call.retry_attempt + 1,
-                                        "delay_seconds": 2u64.pow(call.retry_attempt.min(4)),
+                                        "work_id": format!("{}:{turn}", run.id()),
+                                        "retry_attempt": retry_attempt,
+                                        "delay_seconds": delay,
                                     }),
                                 );
-                                tokio::select! { _ = ctx.token.cancelled() => return Err("Cancelled".into()), _ = tokio::time::sleep(Duration::from_secs(2u64.pow(call.retry_attempt.min(4)))) => {} }
+                                tokio::select! {
+                                    _ = ctx.token.cancelled() => return Err("Cancelled".into()),
+                                    _ = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                                }
                             }
                         }
                     }
                 }
-                Some(ProviderRunStep::DispatchTools(batch)) => {
-                    for pending in &batch.calls {
-                        if pending.state.result().is_some() {
-                            continue;
-                        }
-                        let call = &pending.call;
+                OrbitStep::Tools { calls } => {
+                    for call in &calls {
                         ctx.task.summary = format!("{} · {}", orbit.name, call.name);
                         self.update_task(&ctx.task)?;
                         let allowed = self.authorize(ctx, call).await?;
@@ -590,8 +666,7 @@ impl Engine {
                         }
                         let started = Instant::now();
                         let result = if allowed {
-                            run.start_tool(&batch.work_id, &call.id)
-                                .map_err(|e| e.to_string())?;
+                            run.record_tool_started(&call.id)?;
                             self.checkpoint(ctx, run)?;
                             task_event(
                                 &ctx.task,
@@ -599,7 +674,7 @@ impl Engine {
                                 "tool_started",
                                 "Tool execution started",
                                 json!({
-                                    "work_id": batch.work_id,
+                                    "work_id": format!("{}:{}", run.id(), run.turn()),
                                     "tool_call_id": call.id,
                                     "tool_name": call.name,
                                 }),
@@ -618,7 +693,7 @@ impl Engine {
                             "tool_finished",
                             "Tool execution finished",
                             json!({
-                                "work_id": batch.work_id,
+                                "work_id": format!("{}:{}", run.id(), run.turn()),
                                 "tool_call_id": call.id,
                                 "tool_name": call.name,
                                 "status": if !allowed { "denied" } else if result.is_ok() { "success" } else { "error" },
@@ -633,9 +708,9 @@ impl Engine {
                                     output
                                         .images
                                         .into_iter()
-                                        .map(|i| ToolResultImage {
-                                            data: i.data,
-                                            mime_type: i.mime_type,
+                                        .map(|image| ToolResultImage {
+                                            data: image.data,
+                                            mime_type: image.mime_type,
                                         })
                                         .collect(),
                                     ToolResultStatus::Success,
@@ -660,55 +735,34 @@ impl Engine {
                             "tool",
                             format!("{}\n{}", call.name, content),
                         )?;
-                        run.complete_tool(
-                            &batch.work_id,
-                            ToolResult {
-                                call_id: call.id.clone(),
-                                content,
-                                images,
-                                status,
-                            },
-                        )
-                        .map_err(|e| e.to_string())?;
+                        run.record_tool_result(ToolResult {
+                            call_id: call.id.clone(),
+                            content,
+                            images,
+                            status,
+                        })?;
                         self.checkpoint(ctx, run)?;
                     }
-                    run.commit_tool_batch(&batch.work_id)
-                        .map_err(|e| e.to_string())?;
+                    run.commit_tool_batch()?;
                     self.persist_history(ctx, run)?;
                     if failures >= 4 {
                         return Err("Several tool attempts failed. Review the activity and adjust permissions or the request.".into());
                     }
                 }
-                Some(ProviderRunStep::Done(outcome)) => {
+                OrbitStep::Done { text } => {
                     self.persist_history(ctx, run)?;
-                    return match outcome {
-                        ProviderRunOutcome::Completed(_) => Ok(final_text),
-                        ProviderRunOutcome::Cancelled { .. } => Err("Cancelled".into()),
-                        ProviderRunOutcome::Failed(failure) => Err(failure.message),
-                    };
-                }
-                None => {
-                    let work_id = run
-                        .active_work_id()
-                        .ok_or("Run reached an invalid completion state")?
-                        .clone();
-                    if let ProviderRunState::AwaitingDriver { stop_reason, .. } = run.state()
-                        && !matches!(stop_reason, StopReason::Completed)
-                    {
-                        return Err(format!("Model stopped before completion: {stop_reason:?}"));
-                    }
-                    run.complete(&work_id).map_err(|e| e.to_string())?;
+                    return Ok(text);
                 }
             }
         }
     }
 
-    fn checkpoint(&self, ctx: &RunContext, run: &ProviderRun) -> Result<(), String> {
+    fn checkpoint(&self, ctx: &RunContext, run: &RigOrbitRun) -> Result<(), String> {
         self.store.put(
             "runs",
             &ctx.task.id,
             &RunJournal {
-                run: run.clone(),
+                run: JournalRun::Rig(run.clone()),
                 history_key: ctx
                     .user_message_id
                     .as_ref()
@@ -723,13 +777,7 @@ impl Engine {
         let Some(mut journal) = self.store.get::<RunJournal>("runs", &task.id)? else {
             return Ok(());
         };
-        journal
-            .run
-            .validate_restored_state()
-            .map_err(|e| e.to_string())?;
-        if !journal.run.is_terminal() {
-            journal.run.fail(ProviderRunFailureKind::Restore,"Solar restarted. Pending external actions were interrupted and have not been replayed.").map_err(|e| e.to_string())?;
-        }
+        journal.run.recover()?;
         if let Some(key) = &journal.history_key {
             let latest: Option<String> = self.store.get("last_user", key)?;
             let messages = self.messages(&task.conversation_id)?;
@@ -742,12 +790,12 @@ impl Engine {
         self.persist_journal(&task.id, &journal)
     }
 
-    fn persist_history(&self, ctx: &RunContext, run: &ProviderRun) -> Result<(), String> {
+    fn persist_history(&self, ctx: &RunContext, run: &RigOrbitRun) -> Result<(), String> {
         // Delegated requests have their own task transcript and never overwrite the lead's history.
         self.persist_journal(
             &ctx.task.id,
             &RunJournal {
-                run: run.clone(),
+                run: JournalRun::Rig(run.clone()),
                 history_key: if ctx.ancestry.len() == 1 {
                     Some(format!("{}_{}", ctx.conversation.id, ctx.task.orbit_id))
                 } else {
@@ -766,11 +814,8 @@ impl Engine {
             serde_json::to_value(journal).map_err(|e| e.to_string())?,
         )];
         if let Some(key) = &journal.history_key {
-            let mut history = journal.run.transcript().to_vec();
-            if matches!(
-                journal.run.state(),
-                ProviderRunState::Cancelled { .. } | ProviderRunState::Failed { .. }
-            ) {
+            let mut history = journal.run.history()?;
+            if journal.run.interrupted() {
                 history.push(ConversationMessage {role:MessageRole::User,content:MessageContent::Text("[Solar task state] The preceding task stopped. Its unfinished actions are not authorized to continue automatically. Follow the user's next request and ask before retrying actions with an uncertain outcome.".into())});
             }
             documents.push((
@@ -1474,8 +1519,7 @@ mod tests {
         assert!(!granted(&orbit, "mcp__files__read"));
     }
 
-    #[test]
-    fn restart_terminalizes_pending_tools_and_preserves_their_ids() {
+    fn check_restart_terminalizes_pending_tools(legacy: bool) {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
         crate::test_support::add_assistant(&engine);
@@ -1501,34 +1545,43 @@ mod tests {
             user_message_id: Some(user.id.clone()),
         };
         engine.store.put("tasks", &task.id, &task).unwrap();
-        let mut run = ProviderRun::new(
-            task.id.clone(),
-            vec![ConversationMessage {
-                role: MessageRole::User,
-                content: MessageContent::Text(user.content.clone()),
+        let history = vec![ConversationMessage {
+            role: MessageRole::User,
+            content: MessageContent::Text(user.content.clone()),
+        }];
+        let completed = CompletedModelTurn {
+            assistant_content: vec![],
+            tool_calls: vec![ToolCall {
+                id: "unfinished-tool".into(),
+                name: "memory_save".into(),
+                arguments: json!({"content":"value"}),
             }],
-            "test",
-            ProviderRunLimits::default(),
-        );
-        let Some(ProviderRunStep::CallModel(call)) = run.next_step().unwrap() else {
-            panic!("model call expected")
+            usage: Usage::default(),
+            stop_reason: StopReason::Completed,
+            advertised_tools: BTreeSet::from(["memory_save".into()]),
         };
-        run.accept_model_turn(
-            &call.work_id,
-            CompletedModelTurn {
-                assistant_content: vec![],
-                tool_calls: vec![ToolCall {
-                    id: "unfinished-tool".into(),
-                    name: "memory_save".into(),
-                    arguments: json!({"content":"value"}),
-                }],
-                usage: Usage::default(),
-                stop_reason: StopReason::Completed,
-                advertised_tools: BTreeSet::from(["memory_save".into()]),
-            },
-        )
-        .unwrap();
-        run.next_step().unwrap();
+        let run = if legacy {
+            let mut run = ProviderRun::new(
+                task.id.clone(),
+                history,
+                "test",
+                ProviderRunLimits::default(),
+            );
+            let Some(ProviderRunStep::CallModel(call)) = run.next_step().unwrap() else {
+                panic!("model call expected")
+            };
+            run.accept_model_turn(&call.work_id, completed).unwrap();
+            run.next_step().unwrap();
+            JournalRun::Legacy(run)
+        } else {
+            let mut run = RigOrbitRun::new(task.id.clone(), history, 32).unwrap();
+            assert!(matches!(run.next_step().unwrap(), OrbitStep::Model { .. }));
+            run.accept_model_turn(completed).unwrap();
+            assert!(matches!(run.next_step().unwrap(), OrbitStep::Tools { .. }));
+            // Simulate a crash after dispatch, when the host action outcome is uncertain.
+            run.record_tool_started("unfinished-tool").unwrap();
+            JournalRun::Rig(run)
+        };
         let key = format!("{}_assistant", conversation.id);
         engine
             .store
@@ -1557,5 +1610,15 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(restored.bootstrap().unwrap().tasks[0].status, "interrupted");
+    }
+
+    #[test]
+    fn legacy_restart_terminalizes_pending_tools_and_preserves_their_ids() {
+        check_restart_terminalizes_pending_tools(true);
+    }
+
+    #[test]
+    fn rig_restart_terminalizes_pending_tools_and_preserves_their_ids() {
+        check_restart_terminalizes_pending_tools(false);
     }
 }
