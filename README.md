@@ -35,17 +35,19 @@ For the browser-only UI preview, run the following and open the URL Vite prints.
 corepack pnpm run dev
 ```
 
-The browser preview uses clearly labeled, isolated local sample data. Model calls and operating-system tools execute in the desktop application.
+The browser preview uses isolated local data and starts with no Orbits, just like the desktop app. Model calls and operating-system tools execute in the desktop application.
 
 ## First session
 
 1. Open **Connections** and configure LiteLLM, an OpenAI-compatible endpoint, or subscription sign-in.
-2. Edit an Orbit and assign its connection and model. The starter roles are personal assistant, researcher, and QA.
+2. Create your first Orbit and give it a name, specialty, personality, connection, and model. Solar does not create Orbits automatically; the builder offers optional personal assistant, researcher, and QA templates.
 3. Choose its tool categories and autonomy. Add a project folder and explicitly grant membership to Orbits that should share it.
 4. Open an individual conversation or create a group with a lead Orbit. The lead can delegate to members of that group.
 5. Use **Bring Orbits to desktop**, or click the sun. Planets expand into fixed slots around it; drag the sun to move the whole group, and click a planet to open its mini-chat.
 
 The launcher closes into the menu bar. Sun and planet widgets appear while the launcher is hidden; opening the launcher hides them and closes popup chats. **Bring Orbits to desktop** hides the launcher and expands the planets. Each expansion uses the same slots for the same Orbit roster, and the whole group stays together at display edges. Quit from the menu-bar menu to stop Solar and its owned tool processes.
+
+The launcher's **Solar system** home shows your star and the Orbits you create moving on paths with resonant periods. Select a planet to open its chat. With no Orbits, the star invites you to create your first teammate. Returning from a conversation also shows the system above your conversation history. Motion pauses when you interact with the planets or hide the page, and respects reduced-motion preferences. Existing Orbit profiles are preserved.
 
 When an Orbit needs permission, encounters a task problem, or finishes your request, it peeks down from the top of the display. Solar uses the built-in display when available, reads the actual camera-housing safe area, and keeps the character and controls below the notch. Displays without a notch use a top-center panel below the menu bar. Opening the alert takes you to the relevant conversation; dismissing it never approves a tool. Multiple alerts queue, with permission requests first.
 

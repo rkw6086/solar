@@ -26,49 +26,8 @@ interface PreviewState extends Bootstrap {
 const now = () => new Date().toISOString();
 
 function initialPreview(): PreviewState {
-  const base = {
-    providerId: "",
-    model: "",
-    autonomy: "ask" as const,
-    projectIds: [],
-    enabled: true,
-  };
   return {
-    orbits: [
-      {
-        ...base,
-        id: "nova",
-        name: "Nova",
-        role: "Personal assistant",
-        personality: "Warm, thoughtful, and practical.",
-        instructions:
-          "Help organize tasks and turn plans into clear next steps.",
-        color: "#e8aa62",
-        toolGrants: ["files", "collaboration"],
-      },
-      {
-        ...base,
-        id: "atlas",
-        name: "Atlas",
-        role: "Researcher",
-        personality: "Curious, precise, and open-minded.",
-        instructions:
-          "Investigate questions, compare evidence, and cite original sources.",
-        color: "#83b6ab",
-        toolGrants: ["web", "browser", "collaboration"],
-      },
-      {
-        ...base,
-        id: "pixel",
-        name: "Pixel",
-        role: "QA specialist",
-        personality: "Observant, patient, and constructively skeptical.",
-        instructions:
-          "Test behavior, reproduce issues, and report findings with evidence.",
-        color: "#a49acc",
-        toolGrants: ["files", "browser", "screen", "collaboration"],
-      },
-    ],
+    orbits: [],
     providers: [],
     projects: [],
     conversations: [],

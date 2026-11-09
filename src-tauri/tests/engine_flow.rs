@@ -1,4 +1,6 @@
 #![cfg(not(target_os = "macos"))]
+mod common;
+
 use serde_json::{Value, json};
 use solar::{
     engine::{Engine, ProviderDraft},
@@ -115,6 +117,7 @@ async fn normal_entrypoint_waits_for_approval_executes_tool_and_preserves_follow
     .await;
     let directory = tempfile::tempdir().unwrap();
     let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
     configure(&engine, url, true).await;
     let chat = engine
         .create_conversation(
@@ -187,6 +190,7 @@ async fn cancelling_an_approval_preserves_tool_pairs_for_queued_followup() {
     .await;
     let directory = tempfile::tempdir().unwrap();
     let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
     configure(&engine, url, true).await;
     let chat = engine
         .create_conversation(
@@ -248,6 +252,7 @@ async fn cancelling_an_approval_preserves_tool_pairs_for_queued_followup() {
 async fn disabled_and_deleted_orbits_do_not_leave_failure_alerts() {
     let directory = tempfile::tempdir().unwrap();
     let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
     let chat = engine
         .create_conversation(
             vec!["assistant".into()],
@@ -302,6 +307,7 @@ async fn disabled_and_deleted_orbits_do_not_leave_failure_alerts() {
 fn import_strips_authority_and_private_memory_stays_scoped() {
     let directory = tempfile::tempdir().unwrap();
     let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
     let mut exported: Value =
         serde_json::from_str(&engine.export_orbit("assistant").unwrap()).unwrap();
     exported["orbit"]["autonomy"] = json!("trusted");

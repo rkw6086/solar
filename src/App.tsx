@@ -48,6 +48,7 @@ import type {
   Routine,
 } from "./types";
 import { Planet } from "./components/Planet";
+import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
 import { ResetSolar } from "./components/ResetSolar";
@@ -62,6 +63,7 @@ import {
 } from "./components/Forms";
 
 type Page =
+  | "home"
   | "orbits"
   | "conversations"
   | "projects"
@@ -83,6 +85,7 @@ type Dialog =
   | { kind: "export"; json: string };
 
 const navigation: { id: Page; label: string; icon: typeof Sun }[] = [
+  { id: "home", label: "Solar system", icon: Sun },
   { id: "orbits", label: "Your Orbits", icon: OrbitIcon },
   { id: "conversations", label: "Conversations", icon: MessageCircle },
   { id: "projects", label: "Projects", icon: Folder },
@@ -137,7 +140,7 @@ function PageHeading({
 
 export function App() {
   const { data, loading, error: loadError, refresh } = useSolar();
-  const [page, setPage] = useState<Page>("orbits");
+  const [page, setPage] = useState<Page>("home");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [error, setError] = useState("");
@@ -388,6 +391,7 @@ export function App() {
       data={data}
       refresh={refresh}
       initialStep={replayWelcome ? "birth" : undefined}
+      onNavigate={(destination) => go(destination === "orbits" ? "home" : destination)}
       onComplete={() => { void refresh().then(() => setReplayWelcome(false)); }}
     /></Suspense>;
   }
@@ -397,7 +401,7 @@ export function App() {
       <aside className="sidebar">
         <button
           className="brand"
-          onClick={() => go("orbits")}
+          onClick={() => go("home")}
           aria-label="Solar home"
         >
           <Sun size={29} strokeWidth={1.6} />
@@ -458,6 +462,15 @@ export function App() {
               />
             </button>
           ))}
+          {!data.orbits.length && (
+            <button
+              className="sidebar-orbit"
+              onClick={() => setDialog({ kind: "orbit" })}
+            >
+              <Plus size={18} />
+              <span>Create your first Orbit</span>
+            </button>
+          )}
         </div>
         <div className="sidebar-bottom">
           <button
@@ -538,12 +551,20 @@ export function App() {
           </div>
         ) : (
           <>
+            {page === "home" && (
+              <SolarSystem
+                orbits={data.orbits}
+                onSelectOrbit={(orbit) => void startChat(orbit)}
+                onCreateOrbit={() => setDialog({ kind: "orbit" })}
+                reducedMotion={data.settings.reducedMotion}
+              />
+            )}
             {page === "orbits" && (
               <div className="page-content">
                 <PageHeading
                   eyebrow="YOUR PERSONAL TEAM"
                   title="Your Orbits"
-                  description="Choose an Orbit to chat, or bring a team together."
+                  description={data.orbits.length ? "Choose an Orbit to chat, or bring a team together." : "Create your first Orbit and make it your own."}
                 >
                   <button
                     className="button button-quiet"
@@ -830,6 +851,13 @@ export function App() {
                       New group chat
                     </button>
                   </PageHeading>
+                  <SolarSystem
+                    orbits={data.orbits}
+                    onSelectOrbit={(orbit) => void startChat(orbit)}
+                    onCreateOrbit={() => setDialog({ kind: "orbit" })}
+                    reducedMotion={data.settings.reducedMotion}
+                    compact
+                  />
                   {data.conversations.length ? (
                     <div className="conversation-list">
                       {data.conversations.map((conversation) => (
@@ -871,23 +899,7 @@ export function App() {
                         </button>
                       ))}
                     </div>
-                  ) : (
-                    <Empty
-                      icon={<MessageCircle size={29} />}
-                      title="Start a conversation"
-                      action={
-                        <button
-                          className="button button-primary"
-                          onClick={() => go("orbits")}
-                        >
-                          Meet your Orbits
-                        </button>
-                      }
-                    >
-                      Each conversation keeps its messages, tool results, and
-                      team contributions together.
-                    </Empty>
-                  )}
+                  ) : null}
                 </div>
               ))}
             {page === "projects" && (

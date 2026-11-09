@@ -193,6 +193,15 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("solar");
         let engine = Engine::open(root.clone()).unwrap();
+        crate::test_support::add_assistant(&engine);
+        engine
+            .create_conversation(
+                vec!["assistant".into()],
+                "assistant".into(),
+                "Before reset".into(),
+                None,
+            )
+            .unwrap();
         assert!(prepare_reset(&engine, false).await.is_err());
         assert!(root.join("solar.sqlite").exists());
         assert!(!engine.resetting.load(Ordering::SeqCst));
@@ -204,7 +213,8 @@ mod tests {
         assert!(apply_pending_reset(&root).unwrap());
         assert!(!apply_pending_reset(&root).unwrap());
         let fresh = Engine::open(root).unwrap();
-        assert_eq!(fresh.bootstrap().unwrap().orbits.len(), 3);
+        assert!(fresh.bootstrap().unwrap().orbits.is_empty());
+        assert!(fresh.bootstrap().unwrap().conversations.is_empty());
         assert!(!fresh.settings().unwrap().onboarding_complete);
     }
 
@@ -224,6 +234,7 @@ mod tests {
                 description: String::new(),
             })
             .unwrap();
+        crate::test_support::add_assistant(&engine);
         let workspace = engine.workspace("assistant").unwrap();
         fs::create_dir_all(&workspace).unwrap();
         fs::write(workspace.join("erase.txt"), "Solar scratch work").unwrap();

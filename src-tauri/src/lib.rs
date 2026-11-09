@@ -37,3 +37,6 @@ mod desktop_onboarding;
 mod sound_effects;
 #[cfg(feature = "desktop")]
 pub use desktop::run;
+
+#[cfg(test)]
+mod test_support;

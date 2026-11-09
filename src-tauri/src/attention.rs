@@ -181,6 +181,7 @@ mod tests {
     fn dismissing_an_alert_never_approves_a_tool() {
         let temp = tempfile::tempdir().unwrap();
         let engine = Engine::open(temp.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let (sender, mut receiver) = tokio::sync::oneshot::channel();
         let approval = Approval {
             id: "a".into(),
@@ -210,6 +211,7 @@ mod tests {
     fn finishing_an_approval_removes_only_its_alert() {
         let temp = tempfile::tempdir().unwrap();
         let engine = Engine::open(temp.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         engine
             .request_attention(item("approval:a", "approval"))
             .unwrap();

@@ -184,7 +184,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     setEditor({ kind: "orbit", value: draft });
   }
 
-  const title = labels[step];
+  const title = step === "orbit" && !data.orbits.length ? "Create your first Orbit" : labels[step];
   const next = steps[Math.min(index + 1, steps.length - 1)];
   const setupStep = ["connection", "orbit", "workspace"].includes(step);
 
@@ -212,7 +212,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           <span className="onboarding-eyebrow">{setupStep ? "MAKE YOURSELF AT HOME" : step === "ready" ? "YOUR UNIVERSE IS READY" : "WELCOME TO SOLAR"} <span>0{index}</span></span>
           <h1 ref={heading} tabIndex={-1}>{title}</h1>
           {step === "welcome" && <>
-            <p className="onboarding-lead">A team of thoughtful specialists.<br />A place for each of them in your day.</p>
+            <p className="onboarding-lead">Build a team of thoughtful specialists.<br />Give each a place in your day.</p>
             <p>Each Orbit has a name, a personality, and one or two things it does especially well. Talk to one on its own, or bring a few together.</p>
             <div className="onboarding-note"><Heart size={17} /><span>More than a role. A teammate you make your own.</span></div>
             <Later>Rename and shape them any time in <strong>Your Orbits</strong>.</Later>
@@ -229,7 +229,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "desktop" && <>
             <p className="onboarding-lead">Close the launcher.<br />Keep your team nearby.</p>
-            <p>The sun stays on your desktop while Solar runs. Click it to let your Orbits out, drag them to a comfortable spot, and click one for a quick chat.</p>
+            <p>The sun stays on your desktop while Solar runs. Click it to let your Orbits out, drag the sun to move the whole team, and click an Orbit for a quick chat.</p>
             <div className="onboarding-note"><Sparkles size={17} /><span>When they need you, they peek down from the top of your screen with their own little chime.</span></div>
             <Later>Change companions, chimes, and motion in <strong>Settings</strong>. Quit Solar from its menu-bar menu.</Later>
           </>}
@@ -241,7 +241,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "orbit" && <>
             <p className="onboarding-lead">A familiar face.<br />Your kind of help.</p>
-            <p>Choose a starter and make it yours: name, specialties, personality, model, and what it can do. Start with Ask first if you want to review every tool action.</p>
+            <p>Solar starts with no Orbits. Build your first teammate with a name, specialties, personality, model, and tools. You can start from a blank profile or choose an optional role template. Ask first lets you review every tool action.</p>
             <Later>Edit profiles, add teammates, and choose their tools in <strong>Your Orbits</strong>.</Later>
           </>}
           {step === "workspace" && <>
@@ -252,9 +252,9 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "ready" && <>
             <p className="onboarding-lead">Start small.<br />Let good things grow.</p>
-            <p>Try a question, make a plan, or ask an Orbit to help with a project. You can return to this welcome from Settings whenever you like.</p>
+            <p>{data.orbits.length ? "Try a question, make a plan, or ask an Orbit to help with a project." : "Your star is waiting. Create your first Orbit from the Solar system home when you’re ready."} You can return to this welcome from Settings whenever you like.</p>
             <div className="onboarding-summary">
-              <span><Check size={14} />{enabledOrbits.length} {enabledOrbits.length === 1 ? "Orbit" : "Orbits"} ready to meet</span>
+              <span>{enabledOrbits.length ? <Check size={14} /> : <Plus size={14} />}{enabledOrbits.length ? `${enabledOrbits.length} ${enabledOrbits.length === 1 ? "Orbit" : "Orbits"} ready to meet` : "Create your first Orbit whenever you’re ready"}</span>
               <span><Globe2 size={14} />{data.providers.length ? `${data.providers.length} ${data.providers.length === 1 ? "connection" : "connections"} saved` : "Model connection can be added later"}</span>
               <span><Folder size={14} />{data.projects.length ? `${data.projects.length} ${data.projects.length === 1 ? "project" : "projects"} saved` : "Projects are optional"}</span>
             </div>
@@ -263,10 +263,10 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
         </div>
 
         <div className={`onboarding-visual onboarding-visual-${step}`}>
-          {step === "welcome" && <div className="onboarding-family" aria-label="A few of the Orbits you can shape">
-            <div className="onboarding-family-orbit family-one"><Planet color="#edb56d" name="Your assistant" size={125} /><strong>Your assistant</strong><small>Thoughtful. Organized.</small></div>
-            <div className="onboarding-family-orbit family-two"><Planet color="#90d9c8" name="Your researcher" size={100} /><strong>Your researcher</strong><small>Curious. Clear.</small></div>
-            <div className="onboarding-family-orbit family-three"><Planet color="#b9a8e9" name="Your QA specialist" size={88} /><strong>Your QA specialist</strong><small>Observant. Thorough.</small></div>
+          {step === "welcome" && <div className="onboarding-family" aria-label="Examples of Orbits you could create">
+            <div className="onboarding-family-orbit family-one"><Planet color="#edb56d" name="Example assistant" size={125} /><strong>An assistant</strong><small>Thoughtful. Organized.</small></div>
+            <div className="onboarding-family-orbit family-two"><Planet color="#90d9c8" name="Example researcher" size={100} /><strong>A researcher</strong><small>Curious. Clear.</small></div>
+            <div className="onboarding-family-orbit family-three"><Planet color="#b9a8e9" name="Example QA specialist" size={88} /><strong>A QA specialist</strong><small>Observant. Thorough.</small></div>
             <span className="onboarding-orbit-ring ring-one" /><span className="onboarding-orbit-ring ring-two" />
           </div>}
           {step === "team" && <div className="onboarding-team-demo">
@@ -302,10 +302,10 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
             {selectedOrbit ? <>
               <div className="onboarding-orbit-showcase" style={{ "--onboarding-orbit-color": selectedOrbit.color } as CSSProperties}><Planet color={selectedOrbit.color} name={selectedOrbit.name} size={114} /></div>
               <h2>{selectedOrbit.name}</h2><p>{selectedOrbit.role}</p>
-              <label className="field"><span>Start with an Orbit</span><select aria-label="Choose your first Orbit" value={selectedOrbit.id} onChange={(event) => setSelectedOrbitId(event.target.value)}>{enabledOrbits.map((orbit) => <option value={orbit.id} key={orbit.id}>{orbit.name} · {orbit.role}</option>)}</select></label>
+              <label className="field"><span>Your Orbits</span><select aria-label="Choose an Orbit to edit" value={selectedOrbit.id} onChange={(event) => setSelectedOrbitId(event.target.value)}>{enabledOrbits.map((orbit) => <option value={orbit.id} key={orbit.id}>{orbit.name} · {orbit.role}</option>)}</select></label>
               <button type="button" className="button button-primary" onClick={editFirstOrbit}><Settings2 size={15} />Shape this Orbit</button>
               <small>{selectedOrbit.providerId && selectedOrbit.model ? `Assigned model: ${selectedOrbit.model}` : "Choose a connection and model in their profile."}</small>
-            </> : <><Planet color="#edb56d" name="A new Orbit" size={100} /><h2>A teammate of your own</h2><button type="button" className="button button-primary" onClick={() => setEditor({ kind: "orbit" })}><Plus size={15} />Create an Orbit</button></>}
+            </> : <><Planet sun color="#edb56d" name="Solar" size={100} /><h2>A teammate of your own</h2><p>Choose who joins your Solar system. No Orbits are created for you.</p><button type="button" className="button button-primary" onClick={() => setEditor({ kind: "orbit" })}><Plus size={15} />{data.orbits.length ? "Create an Orbit" : "Create your first Orbit"}</button></>}
           </div>}
           {step === "workspace" && <div className="onboarding-setup-card">
             <div className="onboarding-card-heading"><Folder size={19} /><h2>Your projects</h2></div>

@@ -126,64 +126,19 @@ impl Engine {
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_operations: tokio::sync::RwLock::new(()),
         });
-        engine.seed()?;
+        engine.initialize_profile()?;
         engine.recover()?;
         Ok(engine)
     }
 
-    fn seed(&self) -> Result<(), String> {
-        if self.store.get::<bool>("meta", "initialized")?.is_some() {
-            return Ok(());
-        }
-        if !self.store.list::<Orbit>("orbits")?.is_empty() {
-            return self.store.put("meta", "initialized", &true);
-        }
-        let tools = ["files", "web", "memory", "collaboration"];
-        for (key, name, role, personality, color) in [
-            (
-                "assistant",
-                "Sol",
-                "Personal assistant",
-                "Warm, organized, thoughtful. Turn open loops into clear next steps.",
-                "#f5b45b",
-            ),
-            (
-                "researcher",
-                "Lyra",
-                "Researcher",
-                "Curious, rigorous, clear about uncertainty. Cite primary sources and distinguish evidence from inference.",
-                "#8fdac6",
-            ),
-            (
-                "qa",
-                "Nova",
-                "Quality assurance",
-                "Methodical, observant, constructive. Reproduce issues and report exact evidence.",
-                "#b5a1ec",
-            ),
-        ] {
-            let orbit = Orbit {
-                id: key.into(),
-                name: name.into(),
-                role: role.into(),
-                personality: personality.into(),
-                instructions: String::new(),
-                color: color.into(),
-                model: String::new(),
-                provider_id: String::new(),
-                autonomy: "workspace".into(),
-                tool_grants: tools.iter().map(|s| (*s).into()).collect(),
-                project_ids: Vec::new(),
-                x: None,
-                y: None,
-                enabled: true,
-            };
-            self.store.put("orbits", key, &orbit)?;
-        }
+    fn initialize_profile(&self) -> Result<(), String> {
+        // Orbits are always created explicitly by the user. In particular, an
+        // empty profile after first launch, reset, or deleting the final Orbit
+        // must stay empty when Solar starts again.
         if self.store.get::<Settings>("settings", "app")?.is_none() {
             self.store.put("settings", "app", &Settings::default())?;
         }
-        self.store.put("meta", "initialized", &true)
+        Ok(())
     }
 
     fn recover(&self) -> Result<(), String> {

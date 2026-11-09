@@ -1290,6 +1290,7 @@ mod tests {
     fn missing_runtime_rejects_work_before_saving_messages_or_tasks() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let conversation = engine
             .create_conversation(
                 vec!["assistant".into()],
@@ -1322,6 +1323,7 @@ mod tests {
     fn desktop_task_from_thread_without_tokio_reaches_a_terminal_state() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         // A missing local provider exercises scheduling and the async run
         // boundary without contacting any model service or needing credentials.
         let mut orbit = engine.orbit("assistant").unwrap();
@@ -1366,6 +1368,7 @@ mod tests {
     fn cancelled_queued_input_is_excluded_from_future_requests() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let chat = engine
             .create_conversation(
                 vec!["assistant".into()],
@@ -1403,6 +1406,7 @@ mod tests {
     fn provider_switch_strips_reasoning_only_from_request_projection() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let chat = engine
             .create_conversation(
                 vec!["assistant".into()],
@@ -1474,6 +1478,7 @@ mod tests {
     fn restart_terminalizes_pending_tools_and_preserves_their_ids() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let conversation = engine
             .create_conversation(
                 vec!["assistant".into()],

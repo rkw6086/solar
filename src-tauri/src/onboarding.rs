@@ -64,7 +64,8 @@ mod tests {
         engine.complete_onboarding().unwrap();
         let reopened = Engine::open(temp.path().into()).unwrap();
         assert!(reopened.settings().unwrap().onboarding_complete);
-        assert_eq!(reopened.bootstrap().unwrap().orbits.len(), 3);
+        assert!(reopened.bootstrap().unwrap().orbits.is_empty());
+        assert!(reopened.bootstrap().unwrap().conversations.is_empty());
         assert!(reopened.bootstrap().unwrap().providers.is_empty());
     }
 

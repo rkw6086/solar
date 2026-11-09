@@ -365,6 +365,7 @@ mod tests {
     fn visible_chat_consumes_its_alert_without_answering_an_approval() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         let (sender, mut receiver) = tokio::sync::oneshot::channel();
         engine.approvals.lock().unwrap().insert(
             "approval".into(),
@@ -405,6 +406,7 @@ mod tests {
     fn another_chat_and_explicit_previews_keep_their_notifications() {
         let directory = tempfile::tempdir().unwrap();
         let engine = Engine::open(directory.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
         for item in [
             item("visible", "open-chat", "message"),
             item("unrelated", "another-chat", "message"),

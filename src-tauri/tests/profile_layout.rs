@@ -1,3 +1,5 @@
+mod common;
+
 use solar::{
     engine::Engine,
     model::{Memory, Orbit, Settings},
@@ -57,6 +59,7 @@ fn preconfigured_profiles_are_used_without_adding_starter_orbits() {
 fn manual_toml_edits_are_authoritative_after_restart() {
     let temporary = tempfile::tempdir().unwrap();
     let engine = Engine::open(temporary.path().into()).unwrap();
+    common::add_assistant(&engine);
     drop(engine);
     let path = temporary.path().join("config.toml");
     let mut master: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -81,6 +84,7 @@ fn manual_toml_edits_are_authoritative_after_restart() {
 fn private_memory_is_in_the_orbit_database_and_survives_a_display_rename() {
     let temporary = tempfile::tempdir().unwrap();
     let engine = Engine::open(temporary.path().into()).unwrap();
+    common::add_assistant(&engine);
     engine
         .save_memory(Memory {
             id: "private-note".into(),
@@ -114,4 +118,38 @@ fn private_memory_is_in_the_orbit_database_and_survives_a_display_rename() {
     let engine = Engine::open(temporary.path().into()).unwrap();
     assert_eq!(engine.orbit("assistant").unwrap().name, "Renamed Assistant");
     assert_eq!(engine.memories(Some("assistant"), None).unwrap().len(), 1);
+}
+
+#[test]
+fn fresh_profile_stays_empty_until_an_orbit_is_created() {
+    let temporary = tempfile::tempdir().unwrap();
+    let engine = Engine::open(temporary.path().into()).unwrap();
+    let state = engine.bootstrap().unwrap();
+    assert!(state.orbits.is_empty());
+    assert!(state.conversations.is_empty());
+    assert!(state.providers.is_empty());
+    assert!(!state.settings.onboarding_complete);
+    assert_eq!(
+        fs::read_dir(temporary.path().join("orbits"))
+            .unwrap()
+            .count(),
+        0
+    );
+    drop(engine);
+
+    let engine = Engine::open(temporary.path().into()).unwrap();
+    assert!(engine.bootstrap().unwrap().orbits.is_empty());
+    assert!(engine.bootstrap().unwrap().conversations.is_empty());
+    common::add_assistant(&engine);
+    assert_eq!(engine.bootstrap().unwrap().orbits.len(), 1);
+    assert!(engine.bootstrap().unwrap().conversations.is_empty());
+    drop(engine);
+
+    let engine = Engine::open(temporary.path().into()).unwrap();
+    assert_eq!(engine.bootstrap().unwrap().orbits.len(), 1);
+    engine.delete_orbit("assistant").unwrap();
+    drop(engine);
+    let engine = Engine::open(temporary.path().into()).unwrap();
+    assert!(engine.bootstrap().unwrap().orbits.is_empty());
+    assert!(engine.bootstrap().unwrap().conversations.is_empty());
 }
