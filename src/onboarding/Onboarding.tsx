@@ -223,7 +223,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
             <ul className="onboarding-feature-list">
               <li><LockKeyhole size={17} /><span><strong>Private by default.</strong> Each Orbit has its own workspace and memory.</span></li>
               <li><Folder size={17} /><span><strong>Shared when you choose.</strong> Give selected Orbits access to a project.</span></li>
-              <li><ShieldCheck size={17} /><span><strong>You set the limits.</strong> Tools and approvals control what they may do.</span></li>
+              <li><ShieldCheck size={17} /><span><strong>You choose when they ask.</strong> All tools are available; approvals and project access stay in your control.</span></li>
             </ul>
             <Later>Groups live in <strong>Conversations</strong>. Permissions live in each Orbit’s profile.</Later>
           </>}
@@ -241,8 +241,8 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "orbit" && <>
             <p className="onboarding-lead">A familiar face.<br />Your kind of help.</p>
-            <p>Solar starts with no Orbits. Build your first teammate with a name, specialties, personality, model, and tools. You can start from a blank profile or choose an optional role template. Ask first lets you review every tool action.</p>
-            <Later>Edit profiles, add teammates, and choose their tools in <strong>Your Orbits</strong>.</Later>
+            <p>Solar starts with no Orbits. Build your first teammate with a name, specialties, personality, and model. All tools are available. Review the original and recommended prompt before creating them. Ask first lets you review every tool action.</p>
+            <Later>Edit profiles, add teammates, and change approval preferences in <strong>Your Orbits</strong>.</Later>
           </>}
           {step === "workspace" && <>
             <p className="onboarding-lead">Make room for<br />something meaningful.</p>

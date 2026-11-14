@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   ArrowLeft,
@@ -9,7 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api, native } from "../api";
-import { errorText, tools } from "../types";
+import { errorText } from "../types";
 import type {
   Bootstrap,
   Conversation,
@@ -19,11 +19,13 @@ import type {
   Project,
   Provider,
   ProviderKind,
+  PromptAnalysis,
   Routine,
   Settings,
 } from "../types";
 import { Modal } from "./Modal";
 import { Planet } from "./Planet";
+import { PromptReview } from "./PromptReview";
 
 const colors = [
   "#e8aa62",
@@ -103,7 +105,7 @@ const starters = [
     instructions:
       "Help organize tasks, make plans, and turn open loops into clear next steps.",
     color: colors[0],
-    toolGrants: ["files", "collaboration"],
+    toolGrants: ["*"],
   },
   {
     name: "Atlas",
@@ -112,7 +114,7 @@ const starters = [
     instructions:
       "Investigate questions, compare evidence, cite primary sources, and clearly explain uncertainty.",
     color: colors[1],
-    toolGrants: ["web", "browser", "collaboration"],
+    toolGrants: ["*"],
   },
   {
     name: "Pixel",
@@ -121,7 +123,7 @@ const starters = [
     instructions:
       "Test behavior, reproduce issues, and document findings with clear evidence and reproduction steps.",
     color: colors[2],
-    toolGrants: ["files", "browser", "screen", "collaboration"],
+    toolGrants: ["*"],
   },
 ];
 
@@ -148,24 +150,80 @@ export function OrbitForm({
       model: "",
       providerId: data.providers[0]?.id ?? "",
       autonomy: "ask",
-      toolGrants: ["collaboration"],
+      toolGrants: ["*"],
       projectIds: [],
       enabled: true,
     },
   );
   const status = useSubmit(onSaved);
+  const [analysis, setAnalysis] = useState<PromptAnalysis | null>(null);
+  const [promptChoice, setPromptChoice] = useState<"original" | "recommended">("original");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState("");
+  const request = useRef<string | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const draft = useRef(orbit);
+  draft.current = orbit;
+  function cancelAnalysis() {
+    const requestId = request.current;
+    request.current = null;
+    if (requestId) void api("cancel_orbit_prompt_analysis", { requestId }).catch(() => {});
+  }
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; cancelAnalysis(); };
+  }, []);
+  function updateDraft(patch: Partial<Orbit>) {
+    cancelAnalysis();
+    setAnalyzing(false);
+    setAnalysis(null);
+    setPromptChoice("original");
+    setAnalysisError("");
+    setOrbit((current) => ({ ...current, ...patch }));
+  }
   function update<K extends keyof Orbit>(key: K, value: Orbit[K]) {
-    setOrbit((current) => ({ ...current, [key]: value }));
+    updateDraft({ [key]: value });
+  }
+  async function generateRecommendation() {
+    if (existing || analyzing) return;
+    const requestId = id();
+    const original = draft.current;
+    request.current = requestId;
+    setAnalyzing(true);
+    setAnalysisError("");
+    try {
+      const result = await api<PromptAnalysis>("analyze_orbit_prompt", {
+        orbit: original, requestId, useModel: true, generation: generation.current++,
+      });
+      if (mounted.current && request.current === requestId && draft.current === original) {
+        setAnalysis(result);
+      }
+    } catch (failure) {
+      if (mounted.current && request.current === requestId) setAnalysisError(errorText(failure));
+    } finally {
+      if (mounted.current && request.current === requestId) {
+        request.current = null;
+        setAnalyzing(false);
+      }
+    }
   }
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (step === 0) {
-      setStep(1);
+    if (!existing && step < 2) {
+      setStep(step + 1);
+      if (step === 1) void generateRecommendation();
       return;
     }
+    cancelAnalysis();
+    setAnalyzing(false);
     void status.submit(() =>
       api("save_orbit", {
-        orbit: { ...orbit, name: orbit.name.trim(), role: orbit.role.trim() },
+        orbit: {
+          ...orbit, name: orbit.name.trim(), role: orbit.role.trim(), toolGrants: ["*"],
+          instructions: !existing && promptChoice === "recommended" && analysis
+            ? analysis.recommendedInstructions : orbit.instructions,
+        },
       }),
     );
   }
@@ -223,9 +281,14 @@ export function OrbitForm({
                 <span className={step === 1 ? "current" : ""}>
                   2 · Working together
                 </span>
+                <span className={step === 2 ? "current" : ""}>3 · Review prompt</span>
               </div>
             )}
-            {step === 0 ? (
+            {step === 2 && !existing ? (
+              <PromptReview orbit={orbit} analysis={analysis} selected={promptChoice}
+                busy={analyzing} error={analysisError} onSelect={setPromptChoice}
+                onGenerate={() => void generateRecommendation()} />
+            ) : step === 0 ? (
               <>
                 <label className="field">
                   <span>Start with a specialty</span>
@@ -235,9 +298,7 @@ export function OrbitForm({
                         key={starter.role}
                         type="button"
                         className={`starter ${orbit.role === starter.role ? "selected" : ""}`}
-                        onClick={() =>
-                          setOrbit((current) => ({ ...current, ...starter }))
-                        }
+                        onClick={() => updateDraft(starter)}
                       >
                         {starter.role}
                       </button>
@@ -383,50 +444,18 @@ export function OrbitForm({
                       Ask first — approve each tool action
                     </option>
                     <option value="workspace">
-                      Workspace — act within granted tools and folders
+                      Workspace — use tools, ask before host actions
                     </option>
                     <option value="trusted">
-                      Trusted — use all explicitly granted tools
+                      Trusted — use available tools without asking
                     </option>
                   </select>
                 </label>
-                <fieldset className="tool-options">
-                  <legend>Tools they can request</legend>
-                  {tools.map((tool) => (
-                    <label className="check-row" key={tool.id}>
-                      <input
-                        type="checkbox"
-                        checked={orbit.toolGrants.includes(tool.id)}
-                        onChange={(event) =>
-                          update(
-                            "toolGrants",
-                            event.target.checked
-                              ? [...orbit.toolGrants, tool.id]
-                              : orbit.toolGrants.filter(
-                                  (value) => value !== tool.id,
-                                ),
-                          )
-                        }
-                      />
-                      <span>
-                        <strong>{tool.name}</strong>
-                        <small>{tool.description}</small>
-                      </span>
-                    </label>
-                  ))}
-                </fieldset>
-                {orbit.toolGrants.some((tool) =>
-                  ["shell", "mcp", "computer"].includes(tool),
-                ) && (
-                  <div className="notice">
-                    <ShieldCheck size={17} />
-                    <p>
-                      Shell commands, third-party tools, and computer control
-                      can affect your Mac. Solar checks the task’s permissions
-                      before each action.
-                    </p>
-                  </div>
-                )}
+                <div className="notice">
+                  <ShieldCheck size={17} />
+                  <p>Every Orbit can use all available tools. Your autonomy setting controls approvals. Project access and explicit screen sharing still apply.</p>
+                </div>
+                {!existing && <p className="prompt-review-next-note">Review prompt uses the selected model to suggest clearer instructions. Only this draft is sent and no tools are run. Without a model connection, Solar uses a local template.</p>}
                 {data.projects.length > 0 && (
                   <fieldset className="project-checks">
                     <legend>Shared project access</legend>
@@ -471,14 +500,15 @@ export function OrbitForm({
         ) : (
           <FormFooter
             {...status}
-            label={existing ? "Save Orbit" : "Welcome to Solar"}
+            busy={status.busy}
+            label={existing ? "Save Orbit" : step === 1 ? "Review prompt" : "Welcome to Solar"}
             onClose={onClose}
           >
             {!existing && (
               <button
                 className="button button-quiet"
                 type="button"
-                onClick={() => setStep(0)}
+                onClick={() => { cancelAnalysis(); setAnalyzing(false); setStep(step - 1); }}
               >
                 <ArrowLeft size={14} /> Back
               </button>
@@ -1217,7 +1247,7 @@ export function McpForm({
                 <ShieldCheck size={17} />
                 <p>
                   A local MCP server executes code on your computer. Connect
-                  software you trust and grant its tools to Orbits explicitly.
+                  software you trust. Connected tools become available to all Orbits and follow their approval preferences.
                 </p>
               </div>
             </>

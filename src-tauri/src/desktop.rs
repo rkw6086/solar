@@ -1004,6 +1004,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            crate::orbit_prompt::analyze_orbit_prompt,
+            crate::orbit_prompt::cancel_orbit_prompt_analysis,
             crate::desktop_chat::set_active_chat,
             crate::desktop_logging::report_frontend_event,
             crate::desktop_onboarding::reset_solar,

@@ -2,7 +2,7 @@
 
 Your personal team of Orbits, at home on your desktop.
 
-Solar is a local Rust and Tauri application with a React/TypeScript interface. Each Orbit has a role, personality, model connection, private memory, workspace, and tool permissions. A pixel-art sun gathers your Orbits and brings them onto the desktop.
+Solar is a local Rust and Tauri application with a React/TypeScript interface. Each Orbit has a role, personality, model connection, private memory, workspace, and approval preferences. A pixel-art sun gathers your Orbits and brings them onto the desktop.
 
 ## Develop
 
@@ -41,9 +41,11 @@ The browser preview uses isolated local data and starts with no Orbits, just lik
 
 1. Open **Connections** and configure LiteLLM, an OpenAI-compatible endpoint, or subscription sign-in.
 2. Create your first Orbit and give it a name, specialty, personality, connection, and model. Solar does not create Orbits automatically; the builder offers optional personal assistant, researcher, and QA templates.
-3. Choose its tool categories and autonomy. Add a project folder and explicitly grant membership to Orbits that should share it.
+3. Choose when it should ask for approval. Every Orbit can request all available tools. Add a project folder and grant membership to Orbits that should share it; assigned projects are available even in individual chats with no selected project.
 4. Open an individual conversation or create a group with a lead Orbit. The lead can delegate to members of that group.
 5. Use **Bring Orbits to desktop**, or click the sun. Planets expand into fixed slots around it; drag the sun to move the whole group, and click a planet to open its mini-chat.
+
+Creating an Orbit includes a **Review prompt** step. Solar shows your original prompt and analyzes it with the selected model, then offers a recommended version with reasons for the changes. You can keep your original, select the recommendation, or regenerate it. Only the chosen instructions are saved when you create the Orbit. If no model is selected, the recommendation uses a clearly labeled local template. Editing an existing Orbit does not invoke prompt analysis.
 
 The launcher closes into the menu bar. Sun and planet widgets appear while the launcher is hidden; opening the launcher hides them and closes popup chats. **Bring Orbits to desktop** hides the launcher and expands the planets. Each expansion uses the same slots for the same Orbit roster, and the whole group stays together at display edges. Quit from the menu-bar menu to stop Solar and its owned tool processes.
 
@@ -88,13 +90,15 @@ Rust panics use a separate priority delivery attempt capped at 700 milliseconds.
 
 Built-in tools cover scoped file listing, reading, writing and search, HTTP retrieval, a dedicated Chromium browser, shell commands, MCP tools, screen capture, and macOS application inspection/control. Browser automation requires an installed Chrome or Chromium and uses a separate profile for each Orbit.
 
-**Ask** prompts for every tool. **Workspace** allows granted, scoped tools and asks for host execution. **Trusted** allows granted host tools automatically. Every delegated action remains subject to all participating Orbits' grants and shared-project membership.
+Every Orbit receives the built-in and connected MCP tool definitions; legacy tool-category selections no longer hide tools. **Ask** prompts for every tool. **Workspace** allows scoped tools and asks for host execution. **Trusted** allows host tools automatically. Delegated work inherits approval requirements and can access only project folders shared by the participating Orbits. Screen capture still requires explicit screen sharing.
+
+An Orbit’s assigned projects are listed in its context and through `project_list`, with names, IDs, descriptions, and folder paths. File tools can access those folders without selecting a project for the conversation. `shell_run` accepts `workingDirectory` for running commands in an assigned project.
 
 Built-in file operations use directory capabilities and reject path/symlink escapes. Shell programs, browser processes, and locally installed MCP servers run with the user's host privileges after authorization. Their working directories are not an OS sandbox. Native OS containment of arbitrary third-party executables still requires separate macOS qualification.
 
 Screen sharing begins only through a user action and macOS's content picker. Application/window sharing supports observation. Computer control requires whole-display sharing and Accessibility authorization, and is bounded to that display. Sharing stops at task completion or through Solar or the system stop control.
 
-MCP supports local stdio and remote Streamable HTTP. Add the server in Connections, enable it, connect it, and grant MCP access to the desired Orbit. Server-initiated sampling and elicitation return explicit unsupported-capability errors.
+MCP supports local stdio and remote Streamable HTTP. Add the server in Connections, enable it, and connect it; its tools become available to every Orbit. Server-initiated sampling and elicitation return explicit unsupported-capability errors.
 
 ## Local data and task recovery
 
@@ -155,12 +159,14 @@ Configure Developer ID signing and Apple notarization credentials using Tauri's 
 
 ## Architecture and license
 
+Remote Orbit hosting is planned in [the native host and relay design](docs/remote-orbits.md), including guided SSH setup using existing SSH configuration, password fallback, launchd services, encrypted pairing, activity, and notifications. The [CloudFormation host template](infra/cloudformation/README.md) prepares an AWS machine for later deployment. Remote services are not implemented or deployed by this change.
+
 - `crates/solar-agent-core` contains Galaxy-derived, UI-independent runtime contracts. Its old provider-run format remains readable for interrupted-task recovery; new Orbit tasks use Rig’s agent state machine.
 - `crates/solar-providers` contains selected Rig adapters, request/stream translation, credential services, and provider regression fixtures. `RigOrbitRun` uses Rig’s serializable `AgentRun` for the model/tool loop and canonical conversation history, with a small receipt journal for host actions.
 - `crates/solar-tools` contains local tool implementations, MCP transports, browser sessions, and the native macOS bridge.
 - `src-tauri` owns authorization, persistence, scheduling, Orbit collaboration, desktop windows, and the frontend command boundary.
 - `src` contains the React interface and code-drawn pixel-art characters.
 
-Solar drives Rig’s documented step interface so each tool call still passes through current Orbit grants, project membership, user approval, and cancellation. The host supplies the Orbit preamble and tools, and explicitly executes approved work; `AgentRunner` hooks are not implicitly invoked by this step interface. On restart, unfinished work is closed with correlated tool results and is never automatically replayed.
+Solar drives Rig’s documented step interface so each tool call still passes through current project access, approval preferences, and cancellation. The host supplies the Orbit preamble and tools, and explicitly executes approved work; `AgentRunner` hooks are not implicitly invoked by this step interface. On restart, unfinished work is closed with correlated tool results and is never automatically replayed.
 
 Solar is licensed under AGPL-3.0-only. Galaxy-derived crates retain their provenance and license files. Rig is pinned to the Galaxy-compatible revision recorded in their manifests. Original Solar UI code and assets are distributed under the same project license.

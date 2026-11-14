@@ -258,10 +258,6 @@ impl Engine {
                     || previous.provider_id != orbit.provider_id
                     || previous.model != orbit.model
                     || previous
-                        .tool_grants
-                        .iter()
-                        .any(|grant| !orbit.tool_grants.contains(grant))
-                    || previous
                         .project_ids
                         .iter()
                         .any(|project| !orbit.project_ids.contains(project))
@@ -833,6 +829,7 @@ impl Engine {
     }
 
     pub async fn shutdown(&self) {
+        crate::orbit_prompt::cancel_all_analyses();
         if let Ok(active) = self.active.lock() {
             for token in active.values() {
                 token.cancel();

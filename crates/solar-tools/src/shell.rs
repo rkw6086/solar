@@ -9,8 +9,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![definition(
         "shell_run",
-        "Run a shell command after an explicit host-execution grant. This can access the host beyond approved file-tool folders. Output, time and process lifetime are bounded.",
-        json!({"command":{"type":"string"},"shell":{"type":"string","enum":["/bin/sh","/bin/bash","/bin/zsh"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
+        "Run a shell command after host execution is approved. Optional workingDirectory must be the Orbit workspace or an assigned project folder. The command itself can access the host beyond file-tool folders. Output, time and process lifetime are bounded.",
+        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Orbit workspace. Defaults to the Orbit workspace."},"shell":{"type":"string","enum":["/bin/sh","/bin/bash","/bin/zsh"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
         &["command"],
     )]
 }
@@ -34,11 +34,36 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
             .clamp(1, 300),
     );
     let workspace = std::fs::canonicalize(&context.workspace).map_err(|e| e.to_string())?;
+    let working_directory = if let Some(path) = args.get("workingDirectory") {
+        let path = path
+            .as_str()
+            .ok_or("workingDirectory must be a string path")?;
+        let path = std::path::Path::new(path);
+        let candidate = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            workspace.join(path)
+        };
+        let candidate = std::fs::canonicalize(candidate)
+            .map_err(|error| format!("Cannot open shell working directory: {error}"))?;
+        let allowed = std::iter::once(&workspace)
+            .chain(context.allowed_roots.iter())
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|root| candidate.starts_with(root)));
+        if !allowed || !candidate.is_dir() {
+            return Err(
+                "Shell working directory must be inside the Orbit workspace or an assigned project"
+                    .into(),
+            );
+        }
+        candidate
+    } else {
+        workspace.clone()
+    };
     let environment = managed_environment(&context.data_directory)?;
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg("-c")
         .arg(command)
-        .current_dir(&workspace)
+        .current_dir(working_directory)
         .env_clear()
         .env(
             "PATH",
@@ -180,6 +205,47 @@ mod tests {
                 .contains("timed out")
         );
         assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[tokio::test]
+    async fn shell_can_start_in_an_assigned_project_but_not_an_unassigned_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let context = ToolContext {
+            orbit_id: "test".into(),
+            workspace: root.path().into(),
+            data_directory: root.path().into(),
+            allowed_roots: vec![project.path().into()],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+        };
+        let result = execute(
+            &json!({"command":"pwd", "workingDirectory":project.path()}),
+            &context,
+        )
+        .await
+        .unwrap();
+        let result: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            project.path().canonicalize().unwrap().to_string_lossy()
+        );
+        assert!(
+            execute(
+                &json!({"command":"pwd", "workingDirectory":outside.path()}),
+                &context
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            execute(&json!({"command":"pwd", "workingDirectory":42}), &context)
+                .await
+                .unwrap_err()
+                .contains("must be a string")
+        );
     }
 
     #[tokio::test]

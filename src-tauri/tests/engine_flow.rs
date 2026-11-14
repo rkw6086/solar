@@ -4,7 +4,7 @@ mod common;
 use serde_json::{Value, json};
 use solar::{
     engine::{Engine, ProviderDraft},
-    model::Memory,
+    model::{Memory, Project},
 };
 use solar_providers::{ProviderKind, ProviderProfile};
 use std::{sync::Arc, time::Duration};
@@ -261,7 +261,7 @@ async fn cancelling_an_approval_preserves_tool_pairs_for_queued_followup() {
 }
 
 #[tokio::test]
-async fn denied_or_revoked_tool_grants_never_execute_in_a_rig_run() {
+async fn denial_or_revoked_project_never_executes_in_a_rig_run() {
     for revoke in [false, true] {
         let call = json!({"role":"assistant","tool_calls":[{"index":0,"id":"denied-memory","type":"function","function":{"name":"memory_save","arguments":"{\"content\":\"Must not be saved\"}"}}]});
         let (url, server) = fixture(vec![
@@ -273,6 +273,20 @@ async fn denied_or_revoked_tool_grants_never_execute_in_a_rig_run() {
         let engine = Engine::open(directory.path().into()).unwrap();
         common::add_assistant(&engine);
         configure(&engine, url, true).await;
+        let project_folder = tempfile::tempdir().unwrap();
+        if revoke {
+            engine
+                .save_project(Project {
+                    id: "revoked-project".into(),
+                    name: "Project".into(),
+                    directory: project_folder.path().to_string_lossy().into(),
+                    description: String::new(),
+                })
+                .unwrap();
+            let mut orbit = engine.orbit("assistant").unwrap();
+            orbit.project_ids = vec!["revoked-project".into()];
+            engine.save_orbit(orbit).unwrap();
+        }
         let chat = engine
             .create_conversation(
                 vec!["assistant".into()],
@@ -294,7 +308,7 @@ async fn denied_or_revoked_tool_grants_never_execute_in_a_rig_run() {
         .unwrap();
         if revoke {
             let mut orbit = engine.orbit("assistant").unwrap();
-            orbit.tool_grants.retain(|grant| grant != "memory");
+            orbit.project_ids.clear();
             engine.save_orbit(orbit).unwrap();
         }
         if revoke {
@@ -468,6 +482,102 @@ async fn rig_group_delegation_keeps_private_history_and_releases_the_model_slot(
         !followup.contains("child-memory"),
         "child transcript must not overwrite the lead's history"
     );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn all_tools_and_assigned_project_folders_work_in_an_individual_chat() {
+    let project_folder = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project_folder.path().join("notes.txt"),
+        "Assigned project content",
+    )
+    .unwrap();
+    let calls = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"list-projects","type":"function","function":{"name":"project_list","arguments":"{}"}},
+        {"index":1,"id":"read-project","type":"function","function":{"name":"files_read","arguments":json!({"path":project_folder.path().join("notes.txt")}).to_string()}},
+        {"index":2,"id":"shell-project","type":"function","function":{"name":"shell_run","arguments":json!({"command":"pwd","workingDirectory":project_folder.path()}).to_string()}}
+    ]});
+    let (url, server) = fixture(vec![
+        response(calls, "tool_calls"),
+        response(json!({"content":"The project is accessible."}), "stop"),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    engine
+        .save_project(Project {
+            id: "assigned-project".into(),
+            name: "Assigned project".into(),
+            directory: project_folder.path().to_string_lossy().into(),
+            description: "Fixture project".into(),
+        })
+        .unwrap();
+    let mut orbit = engine.orbit("assistant").unwrap();
+    orbit.tool_grants.clear(); // Legacy profiles must not hide any tool categories.
+    orbit.project_ids = vec!["assigned-project".into()];
+    orbit.autonomy = "trusted".into();
+    engine.save_orbit(orbit).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Project access".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Read my project and run pwd there".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let tool_names: Vec<_> = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect();
+    for name in [
+        "shell_run",
+        "files_read",
+        "project_list",
+        "screen_capture",
+        "computer_click",
+        "web_fetch",
+        "orbit_delegate",
+    ] {
+        assert!(tool_names.contains(&name), "missing advertised tool {name}");
+    }
+    let messages = requests[0]["messages"].to_string();
+    assert!(messages.contains("assigned-project"));
+    assert!(messages.contains(&project_folder.path().to_string_lossy().to_string()));
+    let results = requests[1]["messages"].as_array().unwrap();
+    let result = |id: &str| {
+        results
+            .iter()
+            .find(|message| message["role"] == "tool" && message["tool_call_id"] == id)
+            .unwrap()["content"]
+            .as_str()
+            .unwrap()
+    };
+    assert!(result("list-projects").contains("assigned-project"));
+    assert!(result("read-project").contains("Assigned project content"));
+    assert!(
+        result("shell-project").contains(
+            &project_folder
+                .path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        )
+    );
+    assert!(engine.bootstrap().unwrap().approvals.is_empty());
     engine.shutdown().await;
 }
 

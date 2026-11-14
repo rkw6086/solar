@@ -108,6 +108,7 @@ pub async fn prepare_reset(engine: &Arc<Engine>, confirmed: bool) -> Result<(), 
         if let Ok(active) = engine.active.lock() {
             for token in active.values() { token.cancel(); }
         }
+        crate::orbit_prompt::cancel_all_analyses();
         let _operations = tokio::time::timeout(Duration::from_secs(10), engine.reset_operations.write()).await
             .map_err(|_| "Solar is still finishing a connection or screen-sharing request. No local data was erased. Finish that request and try again.".to_owned())?;
         tokio::time::timeout(Duration::from_secs(10), engine.shutdown()).await

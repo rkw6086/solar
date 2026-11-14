@@ -470,7 +470,7 @@ export function Chat({
         <p className="composer-caption">
           {compact
             ? "Enter to send · Shift + Enter for a new line"
-            : "Orbits use only the tools and shared context you grant them. Verify important work."}
+            : "All tools are available. Your approval preferences and project access still apply. Verify important work."}
         </p>
       </div>
     </section>

@@ -18,6 +18,15 @@ export interface Orbit {
   enabled: boolean;
 }
 
+export interface PromptAnalysis {
+  originalPrompt: string;
+  recommendedPrompt: string;
+  recommendedInstructions: string;
+  analysis: string[];
+  source: "model" | "template";
+  notice: string;
+}
+
 export interface Provider {
   id: string;
   name: string;

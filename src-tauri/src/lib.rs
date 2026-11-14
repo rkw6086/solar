@@ -4,6 +4,7 @@ pub mod engine;
 mod logging_credentials;
 pub mod model;
 mod onboarding;
+mod orbit_prompt;
 mod profile_config;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 mod remote_logging;

@@ -12,6 +12,7 @@
     "check": "tsc -b --pretty false",
     "test:intro": "node --test src/onboarding/birthTimeline.test.mjs",
     "test:system": "node --test src/components/solarSystemMotion.test.mjs",
+    "test:prompt": "node --test src/components/orbitPrompt.test.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "node node_modules/@tauri-apps/cli/tauri.js"
   },

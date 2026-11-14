@@ -780,14 +780,8 @@ export function App() {
                           {orbit.personality || orbit.instructions}
                         </p>
                         <div className="tool-tags">
-                          {orbit.toolGrants.slice(0, 3).map((tool) => (
-                            <span key={tool}>
-                              {tool === "collaboration" ? "Teamwork" : tool}
-                            </span>
-                          ))}
-                          {orbit.toolGrants.length > 3 && (
-                            <span>+{orbit.toolGrants.length - 3}</span>
-                          )}
+                          <span>All tools</span>
+                          <span>{orbit.autonomy === "ask" ? "Ask first" : orbit.autonomy === "trusted" ? "Trusted" : "Workspace"}</span>
                         </div>
                         <div className="orbit-card-footer">
                           <button onClick={() => void startChat(orbit)}>

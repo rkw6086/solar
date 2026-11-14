@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Solar native Linux host foundation (Amazon Linux 2023 x86_64).
+  Creates EC2 infrastructure and private ~/.solar directories only; it does not
+  download or start a Solar host/relay binary. Deploy a verified release over
+  SSH after the remote host implementation is ready. No public relay port opens.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network and administrator access
+        Parameters: [VpcId, SubnetId, AdminCidr, KeyPairName]
+      - Label:
+          default: Host sizing
+        Parameters: [InstanceType, RootVolumeGiB, LatestAmiId]
+      - Label:
+          default: Optional management
+        Parameters: [EnableSessionManager]
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC containing the selected subnet.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      Existing public subnet in VpcId with an Internet Gateway route. This
+      template does not create a VPC, NAT gateway, or Internet Gateway.
+  AdminCidr:
+    Type: String
+    Description: >-
+      Administrator public IPv4 CIDR allowed to SSH; require /24 through /32,
+      ideally the current administrator address /32. No world-open SSH default.
+    AllowedPattern: '^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(2[4-9]|3[0-2])$'
+    ConstraintDescription: Supply a valid IPv4 network with a /24 to /32 mask.
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair; its private key stays on the administrator computer.
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.small, t3.medium, t3.large]
+    Description: x86_64 host for remote API models; no local GPU model implied.
+  RootVolumeGiB:
+    Type: Number
+    Default: 32
+    MinValue: 16
+    MaxValue: 1024
+    Description: Encrypted gp3 root volume size, including /home/solar/.solar.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: AWS-maintained Amazon Linux 2023 x86_64 AMI parameter.
+  EnableSessionManager:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: >-
+      Opt in to an instance IAM role with AmazonSSMManagedInstanceCore for
+      Session Manager administrative access. Not required for Solar or SSH.
+
+Conditions:
+  UseSessionManager: !Equals [!Ref EnableSessionManager, 'true']
+
+Resources:
+  HostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      GroupDescription: Solar host administrator SSH only; no inbound Orbit/relay traffic
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: Administrator SSH
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+      SecurityGroupEgress:
+        - Description: Outbound relay, model APIs, DNS, updates, and user tool network access
+          IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ssh'
+        - Key: Application
+          Value: Solar
+
+  SessionManagerRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Condition: UseSessionManager
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: Application
+          Value: Solar
+
+  SessionManagerProfile:
+    Type: AWS::IAM::InstanceProfile
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Condition: UseSessionManager
+    Properties:
+      Roles: [!Ref SessionManagerRole]
+
+  Host:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !If [UseSessionManager, !Ref SessionManagerProfile, !Ref 'AWS::NoValue']
+      InstanceInitiatedShutdownBehavior: stop
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+        InstanceMetadataTags: disabled
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId: !Ref SubnetId
+          GroupSet: [!Ref HostSecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref RootVolumeGiB
+            Encrypted: true
+            DeleteOnTermination: true
+      CreditSpecification:
+        CPUCredits: standard
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euo pipefail
+          umask 077
+          # No credentials or app release URLs belong in EC2 user data.
+          if ! id solar >/dev/null 2>&1; then
+            useradd --create-home --home-dir /home/solar --shell /sbin/nologin solar
+          fi
+          install -d -m 0700 -o solar -g solar /home/solar/.solar
+          install -d -m 0700 -o solar -g solar /home/solar/.solar/bin
+          install -d -m 0700 -o solar -g solar /home/solar/.solar/orbits
+          install -d -m 0700 -o solar -g solar /home/solar/.solar/remote
+          install -d -m 0700 -o solar -g solar /home/solar/.solar/logs
+          printf '%s\n' 'Infrastructure ready. No Solar service binary is installed.' > /home/solar/.solar/provisioning-status.txt
+          chown solar:solar /home/solar/.solar/provisioning-status.txt
+          chmod 0600 /home/solar/.solar/provisioning-status.txt
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-host'
+        - Key: Application
+          Value: Solar
+
+Outputs:
+  HostInstanceId:
+    Description: EC2 instance ID; verify instance and cloud-init readiness before app deployment.
+    Value: !Ref Host
+  HostPublicIp:
+    Description: May change after stop/start; no Elastic IP is allocated.
+    Value: !GetAtt Host.PublicIp
+  SshCommand:
+    Description: Use an existing SSH alias or pass the local EC2 private key with -i.
+    Value: !Sub 'ssh -o StrictHostKeyChecking=ask ec2-user@${Host.PublicIp}'
+  SessionManagerCommand:
+    Condition: UseSessionManager
+    Description: Requires Session Manager permission and the local AWS CLI/plugin.
+    Value: !Sub 'aws ssm start-session --target ${Host} --region ${AWS::Region}'
+  ServiceHome:
+    Description: Data path owned by the unprivileged Solar service account.
+    Value: /home/solar/.solar
+  ReadinessCheck:
+    Description: Run through the guided SSH installer after EC2 passes status checks.
+    Value: 'cloud-init status --wait && sudo test -d /home/solar/.solar && uname -m'
+  RetentionNotice:
+    Description: Retaining the host avoids deleting data when removing/replacing the stack.
+    Value: >-
+      EC2 and its security group/optional IAM resources are retained on stack
+      deletion/replacement. EC2 continues accruing charges.
+      Back up /home/solar/.solar before manual termination, which deletes the root volume.

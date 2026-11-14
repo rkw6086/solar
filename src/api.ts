@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { reportDiagnostic } from "./diagnostics";
+import { localPromptReview } from "./components/orbitPrompt";
 import type {
   AttentionItem,
   AttentionState,
@@ -108,6 +109,13 @@ async function previewCommand(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   switch (command) {
+    case "analyze_orbit_prompt": {
+      const orbit = args.orbit as Orbit;
+      if (preview.orbits.some((item) => item.id === orbit.id)) throw new Error("Prompt analysis is available while creating a new Orbit.");
+      return localPromptReview(orbit, Number(args.generation) || 0);
+    }
+    case "cancel_orbit_prompt_analysis":
+      return;
     case "get_bootstrap":
       return { ...structuredClone(preview), attentionItems: structuredClone(previewAttention) };
     case "save_onboarding_progress": {
