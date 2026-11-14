@@ -1,7 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { reportDiagnostic } from "./diagnostics";
-import { localPromptReview } from "./components/orbitPrompt";
 import type {
   AttentionItem,
   AttentionState,
@@ -109,10 +108,17 @@ async function previewCommand(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   switch (command) {
-    case "analyze_orbit_prompt": {
-      const orbit = args.orbit as Orbit;
-      if (preview.orbits.some((item) => item.id === orbit.id)) throw new Error("Prompt analysis is available while creating a new Orbit.");
-      return localPromptReview(orbit, Number(args.generation) || 0);
+    case "create_orbit": {
+      const draft = args.orbit as Orbit;
+      if (preview.orbits.some((item) => item.id === draft.id)) throw new Error("This Orbit already exists.");
+      if (!draft.name.trim() || !draft.personality.trim() || !draft.tasks?.trim()) throw new Error("Name, personality, and tasks are required.");
+      if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model to create your Orbit.");
+      // Browser preview simulates creation locally. Native creation uses the selected model.
+      const orbit = { ...draft, name: draft.name.trim(), role: "Personal Orbit",
+        instructions: `${draft.tasks.trim()}\n\nUse available tools to complete the user's request. Gather evidence, respect their boundaries, and report outcomes clearly.` };
+      preview.orbits = [...preview.orbits, orbit];
+      savePreview();
+      return orbit;
     }
     case "cancel_orbit_prompt_analysis":
       return;
@@ -185,9 +191,22 @@ async function previewCommand(
       savePreview();
       return orbit;
     }
+    case "reset_orbit": {
+      if (args.confirmed !== true) throw new Error("Confirm before clearing this Orbit's saved data.");
+      const privateIds = new Set(preview.conversations.filter((chat) => chat.orbitIds.length === 1 && chat.orbitIds[0] === args.orbitId).map((chat) => chat.id));
+      preview.conversations = preview.conversations.filter((chat) => !privateIds.has(chat.id));
+      preview.messages = preview.messages.filter((message) => !privateIds.has(message.conversationId));
+      preview.memories = preview.memories.filter((memory) => memory.orbitId !== args.orbitId);
+      preview.tasks = preview.tasks.filter((task) => task.orbitId !== args.orbitId);
+      previewAttention = previewAttention.filter((item) => item.orbitId !== args.orbitId);
+      savePreview();
+      emitPreviewAttention();
+      return;
+    }
     case "delete_orbit":
       preview.orbits = preview.orbits.filter((orbit) => orbit.id !== args.id);
       previewAttention = previewAttention.filter((item) => item.orbitId !== args.id);
+      if ([`chat/${String(args.id)}`, `orbit/${String(args.id)}`].includes(window.location.hash.slice(1))) window.location.hash = "";
       savePreview();
       emitPreviewAttention();
       return;
@@ -358,6 +377,11 @@ async function previewCommand(
       return;
     case "open_orbit_chat":
       window.location.hash = `chat/${String(args.orbitId)}`;
+      return;
+    case "open_orbit_settings":
+      sessionStorage.setItem("solar.preview.edit-orbit", String(args.orbitId));
+      window.location.hash = "";
+      window.dispatchEvent(new CustomEvent("solar-preview-edit-orbit", { detail: { orbitId: args.orbitId } }));
       return;
     case "open_launcher":
       window.location.hash = "";

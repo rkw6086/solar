@@ -178,6 +178,17 @@ impl Engine {
             .get("conversations", conversation_id)?
             .ok_or("Conversation not found")?;
         let orbit = self.orbit(&conversation.lead_orbit_id)?;
+        if self
+            .resetting_orbits
+            .lock()
+            .map_err(|_| "Orbit reset state unavailable")?
+            .contains(&orbit.id)
+        {
+            return Err(
+                "This Orbit is clearing its conversations and memory. Try again in a moment."
+                    .into(),
+            );
+        }
         if !orbit.enabled {
             return Err("This Orbit is disabled".into());
         }
@@ -370,6 +381,9 @@ impl Engine {
                 } else {
                     tokio::select! { _ = ctx.token.cancelled() => return Err("Cancelled".into()), guard = lock.lock_owned() => guard }
                 };
+                if self.resetting_orbits.lock().map_err(|_| "Orbit reset state unavailable")?.contains(&ctx.task.orbit_id) {
+                    return Err("This Orbit is clearing its conversations and memory. Try again in a moment.".into());
+                }
                 ctx.task.status = "running".into();
                 if let Some(user_id) = &ctx.user_message_id { ctx.history = self.history_for(&ctx.conversation, &ctx.task.orbit_id, user_id)?; }
                 self.update_task(&ctx.task)?;

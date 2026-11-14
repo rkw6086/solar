@@ -4,9 +4,11 @@ export type ProviderKind = "openai" | "litellm" | "chatgpt" | "claude";
 export interface Orbit {
   id: string;
   name: string;
+  gender?: string;
   role: string;
   personality: string;
   instructions: string;
+  tasks?: string;
   color: string;
   model: string;
   providerId: string;
@@ -16,15 +18,6 @@ export interface Orbit {
   x?: number;
   y?: number;
   enabled: boolean;
-}
-
-export interface PromptAnalysis {
-  originalPrompt: string;
-  recommendedPrompt: string;
-  recommendedInstructions: string;
-  analysis: string[];
-  source: "model" | "template";
-  notice: string;
 }
 
 export interface Provider {

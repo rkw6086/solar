@@ -45,6 +45,9 @@
 .onboarding-later strong { color: #9ba5a5; font-weight: 500; }
 .onboarding-visual { min-width: 0; min-height: 330px; display: flex; align-items: center; justify-content: center; }
 .onboarding-family { position: relative; width: 420px; height: 365px; }
+.onboarding-empty-system { display: flex; flex-direction: column; align-items: center; gap: 20px; max-width: 310px; text-align: center; }
+.onboarding-empty-system strong { font-size: 16px; color: #e6d8bd; font-weight: 500; }
+.onboarding-empty-system p { font-size: 12px; color: #91a1a4; line-height: 1.8; }
 .onboarding-family-orbit { position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: center; animation: onboarding-float 6s ease-in-out infinite; }
 .onboarding-family-orbit strong { font-weight: 500; font-size: 11px; color: #c9cfca; margin-top: 13px; }
 .onboarding-family-orbit small { font-size: 9px; color: #687779; margin-top: 5px; }

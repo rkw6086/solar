@@ -1,0 +1,14 @@
+.orbit-settings-identity { display: flex; align-items: center; gap: 18px; margin-bottom: 20px; }
+.orbit-settings-identity h3 { font-size: 22px; font-weight: 550; }
+.orbit-settings-identity p, .orbit-settings-data p, .orbit-settings-confirm-copy { color: var(--muted); font-size: 12px; line-height: 1.8; }
+.orbit-settings-summary { display: grid; gap: 16px; margin: 0 0 20px; }
+.orbit-settings-summary dt { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+.orbit-settings-summary dd { margin: 0; color: #d9e0dd; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.orbit-settings-prompt { border: 1px solid var(--border); padding: 12px; border-radius: 7px; margin-bottom: 20px; }
+.orbit-settings-prompt summary { color: #c7d0cb; cursor: pointer; font-size: 12px; }
+.orbit-settings-prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 250px; overflow: auto; font: 11px/1.7 monospace; color: var(--muted); }
+.orbit-settings-data { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); display: grid; gap: 10px; justify-items: start; }
+.orbit-settings-data h3 { font-size: 13px; font-weight: 550; }
+.orbit-settings-danger { background: #bc6460; color: white; }
+.orbit-settings-delete { color: #e79c94; }
+.chat-view .modal-backdrop { position: fixed; z-index: 100; }

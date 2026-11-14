@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
   LoaderCircle,
   ShieldCheck,
   Sparkles,
@@ -19,13 +16,13 @@ import type {
   Project,
   Provider,
   ProviderKind,
-  PromptAnalysis,
   Routine,
   Settings,
 } from "../types";
 import { Modal } from "./Modal";
 import { Planet } from "./Planet";
-import { PromptReview } from "./PromptReview";
+import { ModelPicker } from "./ModelPicker";
+import "./simpleOrbit.css";
 
 const colors = [
   "#e8aa62",
@@ -97,36 +94,6 @@ function FormFooter({
   );
 }
 
-const starters = [
-  {
-    name: "Nova",
-    role: "Personal assistant",
-    personality: "Warm, thoughtful, and practical",
-    instructions:
-      "Help organize tasks, make plans, and turn open loops into clear next steps.",
-    color: colors[0],
-    toolGrants: ["*"],
-  },
-  {
-    name: "Atlas",
-    role: "Researcher",
-    personality: "Curious, precise, and open-minded",
-    instructions:
-      "Investigate questions, compare evidence, cite primary sources, and clearly explain uncertainty.",
-    color: colors[1],
-    toolGrants: ["*"],
-  },
-  {
-    name: "Pixel",
-    role: "QA specialist",
-    personality: "Observant, patient, and constructively skeptical",
-    instructions:
-      "Test behavior, reproduce issues, and document findings with clear evidence and reproduction steps.",
-    color: colors[2],
-    toolGrants: ["*"],
-  },
-];
-
 export function OrbitForm({
   data,
   existing,
@@ -138,383 +105,102 @@ export function OrbitForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [step, setStep] = useState(existing ? 1 : 0);
-  const [orbit, setOrbit] = useState<Orbit>(
-    existing ?? {
-      id: id(),
-      name: "",
-      role: "",
-      personality: "",
-      instructions: "",
-      color: colors[0],
-      model: "",
-      providerId: data.providers[0]?.id ?? "",
-      autonomy: "ask",
-      toolGrants: ["*"],
-      projectIds: [],
-      enabled: true,
-    },
-  );
-  const status = useSubmit(onSaved);
-  const [analysis, setAnalysis] = useState<PromptAnalysis | null>(null);
-  const [promptChoice, setPromptChoice] = useState<"original" | "recommended">("original");
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState("");
+  const [orbit, setOrbit] = useState<Orbit>(() => existing ?? {
+    id: id(), name: "", gender: "", role: "Personal Orbit", personality: "",
+    tasks: "", instructions: "", color: colors[data.orbits.length % colors.length],
+    model: "", providerId: "", autonomy: "ask", toolGrants: ["*"],
+    projectIds: [], enabled: true,
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const request = useRef<string | null>(null);
-  const generation = useRef(0);
   const mounted = useRef(true);
-  const draft = useRef(orbit);
-  draft.current = orbit;
-  function cancelAnalysis() {
+  function cancelCreation() {
     const requestId = request.current;
     request.current = null;
     if (requestId) void api("cancel_orbit_prompt_analysis", { requestId }).catch(() => {});
   }
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; cancelAnalysis(); };
+    return () => { mounted.current = false; cancelCreation(); };
   }, []);
-  function updateDraft(patch: Partial<Orbit>) {
-    cancelAnalysis();
-    setAnalyzing(false);
-    setAnalysis(null);
-    setPromptChoice("original");
-    setAnalysisError("");
-    setOrbit((current) => ({ ...current, ...patch }));
-  }
   function update<K extends keyof Orbit>(key: K, value: Orbit[K]) {
-    updateDraft({ [key]: value });
+    setOrbit((current) => ({ ...current, [key]: value }));
   }
-  async function generateRecommendation() {
-    if (existing || analyzing) return;
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    if (!existing && (!orbit.providerId || !orbit.model)) {
+      setError("Choose a model to create your Orbit.");
+      return;
+    }
+    setBusy(true);
+    setError("");
     const requestId = id();
-    const original = draft.current;
     request.current = requestId;
-    setAnalyzing(true);
-    setAnalysisError("");
     try {
-      const result = await api<PromptAnalysis>("analyze_orbit_prompt", {
-        orbit: original, requestId, useModel: true, generation: generation.current++,
-      });
-      if (mounted.current && request.current === requestId && draft.current === original) {
-        setAnalysis(result);
-      }
+      const draft = { ...orbit, name: orbit.name.trim(), gender: (orbit.gender ?? "").trim(),
+        tasks: (orbit.tasks ?? "").trim(), toolGrants: ["*"] };
+      await api(existing ? "save_orbit" : "create_orbit", existing
+        ? { orbit: draft }
+        : { orbit: draft, requestId });
+      if (mounted.current && request.current === requestId) onSaved();
     } catch (failure) {
-      if (mounted.current && request.current === requestId) setAnalysisError(errorText(failure));
+      if (mounted.current && request.current === requestId) setError(errorText(failure));
     } finally {
       if (mounted.current && request.current === requestId) {
         request.current = null;
-        setAnalyzing(false);
+        setBusy(false);
       }
     }
   }
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!existing && step < 2) {
-      setStep(step + 1);
-      if (step === 1) void generateRecommendation();
-      return;
-    }
-    cancelAnalysis();
-    setAnalyzing(false);
-    void status.submit(() =>
-      api("save_orbit", {
-        orbit: {
-          ...orbit, name: orbit.name.trim(), role: orbit.role.trim(), toolGrants: ["*"],
-          instructions: !existing && promptChoice === "recommended" && analysis
-            ? analysis.recommendedInstructions : orbit.instructions,
-        },
-      }),
-    );
-  }
-  const provider = data.providers.find((item) => item.id === orbit.providerId);
-
   return (
-    <Modal
-      title={existing ? `Meet ${existing.name}, again` : "A new Orbit begins"}
-      subtitle={
-        existing
-          ? "Adjust their character, expertise, and working permissions."
-          : "Every good teammate starts with a little introduction."
-      }
-      onClose={onClose}
-      wide
-    >
-      <form onSubmit={handleSubmit}>
-        <div className="orbit-builder">
-          <aside
-            className="orbit-preview"
-            style={{ "--orbit-color": orbit.color } as React.CSSProperties}
-          >
-            <span className="eyebrow">YOUR NEXT TEAMMATE</span>
-            <div className="orbit-preview-halo">
-              <Planet
-                name={orbit.name || "Your new Orbit"}
-                color={orbit.color}
-                size={156}
-              />
-            </div>
-            <h3>{orbit.name || "Hello, you."}</h3>
-            <p>{orbit.role || "A world of possibility"}</p>
-            <div className="color-picker" aria-label="Character color">
-              {colors.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  aria-label={`Choose ${color}`}
-                  aria-pressed={orbit.color === color}
-                  style={{ background: color }}
-                  onClick={() => update("color", color)}
-                >
-                  {orbit.color === color && <Check size={13} />}
-                </button>
-              ))}
-            </div>
-            <small>Expertise, with a little personality.</small>
-          </aside>
-          <div className="orbit-questions">
-            {!existing && (
-              <div className="step-indicator">
-                <span className={step === 0 ? "current" : "done"}>
-                  1 · Introduction
-                </span>
-                <span className={step === 1 ? "current" : ""}>
-                  2 · Working together
-                </span>
-                <span className={step === 2 ? "current" : ""}>3 · Review prompt</span>
-              </div>
-            )}
-            {step === 2 && !existing ? (
-              <PromptReview orbit={orbit} analysis={analysis} selected={promptChoice}
-                busy={analyzing} error={analysisError} onSelect={setPromptChoice}
-                onGenerate={() => void generateRecommendation()} />
-            ) : step === 0 ? (
-              <>
-                <label className="field">
-                  <span>Start with a specialty</span>
-                  <div className="starter-options">
-                    {starters.map((starter) => (
-                      <button
-                        key={starter.role}
-                        type="button"
-                        className={`starter ${orbit.role === starter.role ? "selected" : ""}`}
-                        onClick={() => updateDraft(starter)}
-                      >
-                        {starter.role}
-                      </button>
-                    ))}
-                  </div>
-                </label>
-                <label className="field">
-                  <span>What should we call them?</span>
-                  <input
-                    required
-                    value={orbit.name}
-                    onChange={(event) => update("name", event.target.value)}
-                    placeholder="e.g. Nova"
-                    maxLength={80}
-                  />
-                </label>
-                <label className="field">
-                  <span>What are their one or two specialties?</span>
-                  <input
-                    required
-                    value={orbit.role}
-                    onChange={(event) => update("role", event.target.value)}
-                    placeholder="Research and clear explanations"
-                    maxLength={180}
-                  />
-                </label>
-                <label className="field">
-                  <span>What should it feel like to work with them?</span>
-                  <textarea
-                    required
-                    rows={2}
-                    value={orbit.personality}
-                    onChange={(event) =>
-                      update("personality", event.target.value)
-                    }
-                    placeholder="Calm, curious, direct, with a dry sense of humor…"
-                  />
-                </label>
-                <label className="field">
-                  <span>What work would you like their help with?</span>
-                  <textarea
-                    required
-                    rows={3}
-                    value={orbit.instructions}
-                    onChange={(event) =>
-                      update("instructions", event.target.value)
-                    }
-                    placeholder="Describe their responsibilities and how a good result looks."
-                  />
-                </label>
-              </>
-            ) : (
-              <>
-                {existing && (
-                  <div className="field-grid">
-                    <label className="field">
-                      <span>Name</span>
-                      <input
-                        required
-                        value={orbit.name}
-                        onChange={(event) => update("name", event.target.value)}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Specialty</span>
-                      <input
-                        required
-                        value={orbit.role}
-                        onChange={(event) => update("role", event.target.value)}
-                      />
-                    </label>
-                  </div>
-                )}
-                {existing && (
-                  <>
-                    <label className="field">
-                      <span>Personality</span>
-                      <textarea
-                        rows={2}
-                        value={orbit.personality}
-                        onChange={(event) =>
-                          update("personality", event.target.value)
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Instructions</span>
-                      <textarea
-                        rows={3}
-                        value={orbit.instructions}
-                        onChange={(event) =>
-                          update("instructions", event.target.value)
-                        }
-                      />
-                    </label>
-                  </>
-                )}
-                <div className="field-grid">
-                  <label className="field">
-                    <span>Model connection</span>
-                    <select
-                      value={orbit.providerId}
-                      onChange={(event) => {
-                        update("providerId", event.target.value);
-                        update("model", "");
-                      }}
-                    >
-                      <option value="">Choose later</option>
-                      {data.providers.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Model</span>
-                    <input
-                      list="orbit-models"
-                      value={orbit.model}
-                      onChange={(event) => update("model", event.target.value)}
-                      placeholder="Select or enter model ID"
-                    />
-                    <datalist id="orbit-models">
-                      {provider?.models.map((model) => (
-                        <option key={model} value={model} />
-                      ))}
-                    </datalist>
-                  </label>
-                </div>
-                <label className="field">
-                  <span>How independently should they work?</span>
-                  <select
-                    value={orbit.autonomy}
-                    onChange={(event) =>
-                      update(
-                        "autonomy",
-                        event.target.value as Orbit["autonomy"],
-                      )
-                    }
-                  >
-                    <option value="ask">
-                      Ask first — approve each tool action
-                    </option>
-                    <option value="workspace">
-                      Workspace — use tools, ask before host actions
-                    </option>
-                    <option value="trusted">
-                      Trusted — use available tools without asking
-                    </option>
-                  </select>
-                </label>
-                <div className="notice">
-                  <ShieldCheck size={17} />
-                  <p>Every Orbit can use all available tools. Your autonomy setting controls approvals. Project access and explicit screen sharing still apply.</p>
-                </div>
-                {!existing && <p className="prompt-review-next-note">Review prompt uses the selected model to suggest clearer instructions. Only this draft is sent and no tools are run. Without a model connection, Solar uses a local template.</p>}
-                {data.projects.length > 0 && (
-                  <fieldset className="project-checks">
-                    <legend>Shared project access</legend>
-                    {data.projects.map((project) => (
-                      <label className="check-row" key={project.id}>
-                        <input
-                          type="checkbox"
-                          checked={orbit.projectIds.includes(project.id)}
-                          onChange={(event) =>
-                            update(
-                              "projectIds",
-                              event.target.checked
-                                ? [...orbit.projectIds, project.id]
-                                : orbit.projectIds.filter(
-                                    (value) => value !== project.id,
-                                  ),
-                            )
-                          }
-                        />
-                        <span>{project.name}</span>
-                      </label>
-                    ))}
-                  </fieldset>
-                )}
-              </>
-            )}
-          </div>
+    <Modal title={existing ? `${existing.name}’s profile` : "Create your Orbit"}
+      subtitle={existing ? "Shape their personality, instructions, and model." : "Tell us who they are and what you’d like their help with."}
+      onClose={onClose} wide>
+      <form onSubmit={(event) => void submit(event)} className="simple-orbit-form">
+        <div className="simple-orbit-heading">
+          <Planet name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
+          <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p></div>
         </div>
-        {step === 0 ? (
-          <footer className="form-footer">
-            <button
-              type="button"
-              className="button button-quiet"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button className="button button-primary" type="submit">
-              Working together <ArrowRight size={15} />
-            </button>
-          </footer>
-        ) : (
-          <FormFooter
-            {...status}
-            busy={status.busy}
-            label={existing ? "Save Orbit" : step === 1 ? "Review prompt" : "Welcome to Solar"}
-            onClose={onClose}
-          >
-            {!existing && (
-              <button
-                className="button button-quiet"
-                type="button"
-                onClick={() => { cancelAnalysis(); setAnalyzing(false); setStep(step - 1); }}
-              >
-                <ArrowLeft size={14} /> Back
-              </button>
-            )}
-          </FormFooter>
-        )}
+        <div className="form-body">
+          <div className="field-grid">
+            <label className="field"><span>Name</span><input required maxLength={100} disabled={busy}
+              autoComplete="off" placeholder="e.g. Nova" value={orbit.name} onChange={(event) => update("name", event.target.value)} /></label>
+            <label className="field"><span>Gender <span className="optional">optional</span></span><input maxLength={200} disabled={busy}
+              placeholder="e.g. female, male, nonbinary, or none" value={orbit.gender ?? ""} onChange={(event) => update("gender", event.target.value)} /></label>
+          </div>
+          <label className="field"><span>Personality</span><textarea required rows={2} maxLength={8000} disabled={busy}
+            placeholder="Warm, curious, direct, with a dry sense of humor…" value={orbit.personality} onChange={(event) => update("personality", event.target.value)} /></label>
+          <label className="field"><span>Tasks</span><textarea required={!existing} rows={3} maxLength={32000} disabled={busy}
+            placeholder="What should they help you do? Include any important boundaries or preferences."
+            value={orbit.tasks ?? ""} onChange={(event) => update("tasks", event.target.value)} /></label>
+          <ModelPicker providers={data.providers} providerId={orbit.providerId} model={orbit.model}
+            required={!existing} disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
+          {!data.providers.some((provider) => provider.models.length) && !existing && (
+            <p className="simple-orbit-note">Add a connection and discover its models in Connections before creating an Orbit.</p>
+          )}
+          {existing ? <>
+            <label className="field"><span>Role</span><input required maxLength={300} disabled={busy}
+              value={orbit.role} onChange={(event) => update("role", event.target.value)} /></label>
+            <label className="field"><span>System instructions</span><textarea rows={7} maxLength={32000} disabled={busy}
+              value={orbit.instructions} onChange={(event) => update("instructions", event.target.value)} />
+              <small>Edit the instructions directly. Saving an existing Orbit does not call a model.</small></label>
+            <label className="field"><span>When should they ask permission?</span>
+              <select value={orbit.autonomy} disabled={busy} onChange={(event) => update("autonomy", event.target.value as Orbit["autonomy"])}>
+                <option value="ask">Ask before every tool action</option>
+                <option value="workspace">Ask before shell, browser, and connected tools</option>
+                <option value="trusted">Use available tools without asking</option>
+              </select></label>
+            {data.projects.length > 0 && <fieldset className="project-checks"><legend>Project access</legend>
+              {data.projects.map((project) => <label className="check-row" key={project.id}><input type="checkbox" disabled={busy}
+                checked={orbit.projectIds.includes(project.id)} onChange={(event) => update("projectIds", event.target.checked
+                  ? [...orbit.projectIds, project.id] : orbit.projectIds.filter((value) => value !== project.id))} /><span>{project.name}</span></label>)}
+            </fieldset>}
+          </> : <p className="simple-orbit-note">Your selected model will turn these details into working instructions. Your Orbit starts with all tools available and asks before acting. You can change its settings any time.</p>}
+          {busy && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />{existing ? "Saving your changes…" : "Creating your Orbit’s instructions…"}</p>}
+        </div>
+        <FormFooter busy={busy} error={error} onClose={onClose} label={existing ? "Save Orbit" : "Create Orbit"} />
       </form>
     </Modal>
   );

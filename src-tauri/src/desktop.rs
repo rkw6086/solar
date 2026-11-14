@@ -221,6 +221,21 @@ fn open_launcher(app: tauri::AppHandle) -> Result<(), String> {
     show_launcher(&app)
 }
 #[tauri::command]
+fn open_orbit_settings(
+    app: tauri::AppHandle,
+    engine: AppState<'_>,
+    orbit_id: String,
+) -> Result<(), String> {
+    engine.orbit(&orbit_id)?;
+    show_launcher(&app)?;
+    app.emit_to(
+        "main",
+        "solar://edit-orbit",
+        serde_json::json!({"orbitId":orbit_id}),
+    )
+    .map_err(|error| error.to_string())
+}
+#[tauri::command]
 fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let parsed = url::Url::parse(&url).map_err(|_| "Invalid link")?;
     if !["http", "https"].contains(&parsed.scheme()) || parsed.host_str().is_none() {
@@ -1004,8 +1019,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            crate::orbit_prompt::analyze_orbit_prompt,
+            crate::orbit_prompt::create_orbit,
             crate::orbit_prompt::cancel_orbit_prompt_analysis,
+            crate::orbit_reset::reset_orbit,
             crate::desktop_chat::set_active_chat,
             crate::desktop_logging::report_frontend_event,
             crate::desktop_onboarding::reset_solar,
@@ -1049,6 +1065,7 @@ pub fn run() {
             connect_mcp,
             delete_mcp_server,
             open_launcher,
+            open_orbit_settings,
             open_external_url,
             open_full_chat,
             set_desktop_expanded,

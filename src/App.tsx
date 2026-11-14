@@ -48,6 +48,7 @@ import type {
   Routine,
 } from "./types";
 import { Planet } from "./components/Planet";
+import { OrbitSettingsPanel } from "./components/OrbitSettingsPanel";
 import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
@@ -76,6 +77,7 @@ type Page =
 const Onboarding = lazy(() => import("./onboarding/Onboarding").then(({ Onboarding }) => ({ default: Onboarding })));
 type Dialog =
   | { kind: "orbit"; value?: Orbit }
+  | { kind: "orbit-settings"; orbitId: string }
   | { kind: "provider"; value?: Provider }
   | { kind: "project"; value?: Project }
   | { kind: "routine"; value?: Routine }
@@ -143,6 +145,7 @@ export function App() {
   const [page, setPage] = useState<Page>("home");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [requestedOrbitSettings, setRequestedOrbitSettings] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
@@ -190,6 +193,42 @@ export function App() {
       cleanup?.();
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (!native) {
+      const pendingOrbitId = sessionStorage.getItem("solar.preview.edit-orbit");
+      if (pendingOrbitId) {
+        sessionStorage.removeItem("solar.preview.edit-orbit");
+        setRequestedOrbitSettings(pendingOrbitId);
+      }
+      const previewEdit = (event: Event) => {
+        sessionStorage.removeItem("solar.preview.edit-orbit");
+        setRequestedOrbitSettings((event as CustomEvent<{ orbitId: string }>).detail.orbitId);
+        void refresh();
+      };
+      window.addEventListener("solar-preview-edit-orbit", previewEdit);
+      return () => window.removeEventListener("solar-preview-edit-orbit", previewEdit);
+    }
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void listen<{ orbitId: string }>("solar://edit-orbit", ({ payload }) => {
+      setRequestedOrbitSettings(payload.orbitId);
+      void refresh();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else cleanup = unlisten;
+    });
+    return () => { disposed = true; cleanup?.(); };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!requestedOrbitSettings) return;
+    if (!data.orbits.some((orbit) => orbit.id === requestedOrbitSettings)) return;
+    setPage("orbits");
+    setConversationId(null);
+    setDialog({ kind: "orbit-settings", orbitId: requestedOrbitSettings });
+    setRequestedOrbitSettings(null);
+  }, [requestedOrbitSettings, data.orbits]);
 
   useEffect(() => {
     const pending = pendingLoginKey ? pendingLoginKey.split(",") : [];
@@ -829,6 +868,7 @@ export function App() {
                   data={data}
                   onBack={() => setConversationId(null)}
                   onConnections={() => go("connections")}
+                  onOrbitChanged={() => { setConversationId(null); void refresh(); }}
                 />
               ) : (
                 <div className="page-content">
@@ -1809,6 +1849,11 @@ export function App() {
           onSaved={saved}
         />
       )}
+      {dialog?.kind === "orbit-settings" && (() => {
+        const orbit = data.orbits.find((item) => item.id === dialog.orbitId);
+        return orbit ? <OrbitSettingsPanel orbit={orbit} data={data}
+          onClose={() => setDialog(null)} onChanged={(change) => { if (change !== "edit") setDialog(null); void refresh(); }} /> : null;
+      })()}
       {dialog?.kind === "provider" && (
         <ProviderForm
           existing={dialog.value}

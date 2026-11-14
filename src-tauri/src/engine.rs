@@ -18,12 +18,14 @@ pub struct Engine {
     pub(crate) data_dir: PathBuf,
     pub(crate) events: broadcast::Sender<AppEvent>,
     pub(crate) active: Mutex<HashMap<String, CancellationToken>>,
+    pub(crate) resetting_orbits: Mutex<HashSet<String>>,
     pub(crate) approvals: Mutex<HashMap<String, (Approval, oneshot::Sender<bool>)>>,
     pub(crate) sharing: Mutex<HashSet<String>>,
     pub(crate) orbit_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) model_active: Mutex<usize>,
     pub(crate) model_notify: Notify,
     conversation_creation: Mutex<()>,
+    orbit_write: Mutex<()>,
     mcp_connected: Mutex<HashSet<String>>,
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
     pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
@@ -113,12 +115,14 @@ impl Engine {
             data_dir,
             events,
             active: Mutex::new(HashMap::new()),
+            resetting_orbits: Mutex::new(HashSet::new()),
             approvals: Mutex::new(HashMap::new()),
             sharing: Mutex::new(HashSet::new()),
             orbit_locks: Mutex::new(HashMap::new()),
             model_active: Mutex::new(0),
             model_notify: Notify::new(),
             conversation_creation: Mutex::new(()),
+            orbit_write: Mutex::new(()),
             mcp_connected: Mutex::new(HashSet::new()),
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
             attention: Mutex::new(crate::attention::AttentionQueue::default()),
@@ -227,7 +231,33 @@ impl Engine {
         })
     }
 
-    pub fn save_orbit(&self, mut orbit: Orbit) -> Result<Orbit, String> {
+    pub fn save_orbit(&self, orbit: Orbit) -> Result<Orbit, String> {
+        let _write = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Orbit storage unavailable")?;
+        self.save_orbit_inner(orbit)
+    }
+
+    pub(crate) fn save_new_orbit(
+        &self,
+        orbit: Orbit,
+        token: &CancellationToken,
+    ) -> Result<Orbit, String> {
+        let _write = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Orbit storage unavailable")?;
+        if token.is_cancelled() {
+            return Err("Orbit creation cancelled".into());
+        }
+        if self.store.get::<Orbit>("orbits", &orbit.id)?.is_some() {
+            return Err("This Orbit already exists. Open its profile to edit it.".into());
+        }
+        self.save_orbit_inner(orbit)
+    }
+
+    fn save_orbit_inner(&self, mut orbit: Orbit) -> Result<Orbit, String> {
         self.ensure_running()?;
         if orbit.id.is_empty() {
             orbit.id = id();
@@ -235,6 +265,9 @@ impl Engine {
         validate_id(&orbit.id)?;
         validate_text(&orbit.name, "Name", 100)?;
         validate_text(&orbit.role, "Role", 300)?;
+        if orbit.gender.len() > 200 || orbit.tasks.len() > 32_000 {
+            return Err("Orbit gender or tasks are too long".into());
+        }
         if orbit.instructions.len() > 32_000 || orbit.personality.len() > 8_000 {
             return Err("Orbit instructions are too long".into());
         }

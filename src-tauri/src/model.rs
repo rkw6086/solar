@@ -15,6 +15,10 @@ pub struct Orbit {
     pub id: String,
     pub name: String,
     pub role: String,
+    #[serde(default)]
+    pub gender: String,
+    #[serde(default)]
+    pub tasks: String,
     pub personality: String,
     pub instructions: String,
     pub color: String,

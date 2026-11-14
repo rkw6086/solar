@@ -511,6 +511,61 @@ impl Store {
         ids.truncate(30);
         Ok(ids)
     }
+
+    /// Clear one Orbit's learned/chat data without changing its profile or files.
+    /// The caller must stop its active work and hold its execution lock first.
+    pub(crate) fn reset_orbit_data(&self, orbit_id: &str) -> Result<(), String> {
+        let mut state = self.0.lock().map_err(|_| "Database lock unavailable")?;
+        let profile = state
+            .profile
+            .as_ref()
+            .ok_or("Orbit reset requires a Solar profile")?;
+        if !profile.locations().contains_key(orbit_id) {
+            return Err("Orbit not found".into());
+        }
+        let private_chats: Vec<String> = query_documents(&state.main, "conversations")?
+            .into_iter()
+            .filter_map(|row| {
+                let value: Value = serde_json::from_str(&row.data).ok()?;
+                let members = value["orbitIds"].as_array()?;
+                (members.len() == 1 && members[0].as_str() == Some(orbit_id)).then_some(row.id)
+            })
+            .collect();
+        // Orbit-private tables contain no other Orbit's or shared project data.
+        let private = state.connection(Some(orbit_id))?;
+        let tx = private.transaction().map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM documents WHERE kind IN ('memories','runs','history','history_origin','last_user')", [])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM messages", [])
+            .map_err(|error| error.to_string())?;
+        tx.execute("DELETE FROM memory_search", [])
+            .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())?;
+
+        // Keep shared group messages/conversations and other Orbits' activity.
+        let tx = state
+            .main
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        for conversation_id in private_chats {
+            tx.execute(
+                "DELETE FROM documents WHERE kind='conversations' AND id=?1",
+                [&conversation_id],
+            )
+            .map_err(|error| error.to_string())?;
+            tx.execute(
+                "DELETE FROM messages WHERE conversation_id=?1",
+                [&conversation_id],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.execute(
+            "DELETE FROM documents WHERE kind='tasks' AND json_extract(data,'$.orbitId')=?1",
+            [orbit_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.commit().map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -523,6 +578,8 @@ mod tests {
             id: id.into(),
             name: name.into(),
             role: "Assistant".into(),
+            gender: String::new(),
+            tasks: String::new(),
             personality: "Calm".into(),
             instructions: String::new(),
             color: "#fff".into(),

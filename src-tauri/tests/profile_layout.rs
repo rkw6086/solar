@@ -12,6 +12,8 @@ fn configured_orbit() -> Orbit {
         id: "custom".into(),
         name: "My Assistant".into(),
         role: "Assistant".into(),
+        gender: String::new(),
+        tasks: String::new(),
         personality: "Thoughtful".into(),
         instructions: String::new(),
         color: "#ffffff".into(),

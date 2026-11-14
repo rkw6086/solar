@@ -40,12 +40,14 @@ The browser preview uses isolated local data and starts with no Orbits, just lik
 ## First session
 
 1. Open **Connections** and configure LiteLLM, an OpenAI-compatible endpoint, or subscription sign-in.
-2. Create your first Orbit and give it a name, specialty, personality, connection, and model. Solar does not create Orbits automatically; the builder offers optional personal assistant, researcher, and QA templates.
+2. Create your first Orbit with a name, optional gender, personality, and tasks. Search all model connections in one field; model labels include their provider. Solar does not create Orbits automatically.
 3. Choose when it should ask for approval. Every Orbit can request all available tools. Add a project folder and grant membership to Orbits that should share it; assigned projects are available even in individual chats with no selected project.
 4. Open an individual conversation or create a group with a lead Orbit. The lead can delegate to members of that group.
 5. Use **Bring Orbits to desktop**, or click the sun. Planets expand into fixed slots around it; drag the sun to move the whole group, and click a planet to open its mini-chat.
 
-Creating an Orbit includes a **Review prompt** step. Solar shows your original prompt and analyzes it with the selected model, then offers a recommended version with reasons for the changes. You can keep your original, select the recommendation, or regenerate it. Only the chosen instructions are saved when you create the Orbit. If no model is selected, the recommendation uses a clearly labeled local template. Editing an existing Orbit does not invoke prompt analysis.
+Press **Create Orbit** and the selected model automatically builds its role and system instructions from your details. There is no prompt review or approval step. A model connection is required; failed or cancelled setup leaves no new Orbit behind. Your original tasks are kept separately from the generated instructions. Model search matches both IDs and provider names, supports multiple search terms, and accepts `*` and `?` wildcards.
+
+Every chat has an Orbit settings button, including desktop popup chats. You can also right-click a desktop planet to open its settings. Edit its role, system instructions, personality, model, project access, and approval preferences. **Reset Orbit** clears its private conversations, memories, and activity while keeping its profile, workspace files, and shared group conversations. **Delete Orbit** removes it from the team. Both actions ask once for confirmation. Earlier saved profiles remain until you remove them; startup and the welcome tour never add default Orbits.
 
 The launcher closes into the menu bar. Sun and planet widgets appear while the launcher is hidden; opening the launcher hides them and closes popup chats. **Bring Orbits to desktop** hides the launcher and expands the planets. Each expansion uses the same slots for the same Orbit roster, and the whole group stays together at display edges. Quit from the menu-bar menu to stop Solar and its owned tool processes.
 

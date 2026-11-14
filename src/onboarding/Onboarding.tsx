@@ -241,7 +241,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "orbit" && <>
             <p className="onboarding-lead">A familiar face.<br />Your kind of help.</p>
-            <p>Solar starts with no Orbits. Build your first teammate with a name, specialties, personality, and model. All tools are available. Review the original and recommended prompt before creating them. Ask first lets you review every tool action.</p>
+            <p>Solar starts with no Orbits. Give your first teammate a name, gender, personality, and tasks, then search for a model. Solar uses that model to build their instructions automatically. Nothing is created until you finish the form.</p>
             <Later>Edit profiles, add teammates, and change approval preferences in <strong>Your Orbits</strong>.</Later>
           </>}
           {step === "workspace" && <>
@@ -263,26 +263,25 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
         </div>
 
         <div className={`onboarding-visual onboarding-visual-${step}`}>
-          {step === "welcome" && <div className="onboarding-family" aria-label="Examples of Orbits you could create">
-            <div className="onboarding-family-orbit family-one"><Planet color="#edb56d" name="Example assistant" size={125} /><strong>An assistant</strong><small>Thoughtful. Organized.</small></div>
-            <div className="onboarding-family-orbit family-two"><Planet color="#90d9c8" name="Example researcher" size={100} /><strong>A researcher</strong><small>Curious. Clear.</small></div>
-            <div className="onboarding-family-orbit family-three"><Planet color="#b9a8e9" name="Example QA specialist" size={88} /><strong>A QA specialist</strong><small>Observant. Thorough.</small></div>
-            <span className="onboarding-orbit-ring ring-one" /><span className="onboarding-orbit-ring ring-two" />
+          {step === "welcome" && <div className="onboarding-empty-system">
+            <Planet sun color="#edb56d" name="Solar" size={150} />
+            <strong>Your Solar system starts empty.</strong>
+            <p>Create exactly the Orbits you want. You can build your first one during setup or do it later.</p>
           </div>}
           {step === "team" && <div className="onboarding-team-demo">
             <div className="onboarding-demo-question"><MessageCircle size={16} />“Help me make this launch a good one.”</div>
             <div className="onboarding-team-members">
-              {[["#edb56d", "Plan", "Your lead"], ["#90d9c8", "Research", "Evidence"], ["#b9a8e9", "Review", "Quality"]].map(([color, name, role], position) => <div className={`onboarding-team-member member-${position}`} key={name}><Planet color={color} size={66} name={name} /><strong>{name}</strong><small>{role}</small></div>)}
+              {[["Plan", "Your lead"], ["Research", "Evidence"], ["Review", "Quality"]].map(([name, role], position) => <div className={`onboarding-team-member member-${position}`} key={name}><Layers3 size={32} /><strong>{name}</strong><small>{role}</small></div>)}
             </div>
             <div className="onboarding-demo-result"><Layers3 size={17} /><span>A clear plan, checked from a few angles.</span><Check size={15} /></div>
             <span className="onboarding-demo-caption">An illustration of how your team works together</span>
           </div>}
           {step === "desktop" && <div className={`onboarding-desktop-demo ${desktopDemoExpanded ? "expanded" : ""}`}>
             <div className="onboarding-desktop-menu"><span /><span /><span /><i>YOUR DESKTOP</i></div>
-            <div className="onboarding-peek-demo"><Planet color="#90d9c8" name="An Orbit asking for attention" size={38} /><span>A little help?</span></div>
+            {data.orbits[0] && <div className="onboarding-peek-demo"><Planet color={data.orbits[0].color} name={data.orbits[0].name} size={38} /><span>A little help?</span></div>}
             <button type="button" className="onboarding-sun-demo" aria-label={desktopDemoExpanded ? "Gather the example Orbits" : "Expand the example Orbits"} aria-expanded={desktopDemoExpanded} onClick={() => setDesktopDemoExpanded((current) => !current)}><Planet sun color="#edb56d" name="Solar" size={87} /></button>
-            {["#edb56d", "#90d9c8", "#b9a8e9"].map((color, position) => <span className={`onboarding-desktop-orbit demo-orbit-${position}`} key={color}><Planet color={color} name="Example Orbit" size={53} /></span>)}
-            <span className="onboarding-desktop-hint">Click the sun. Try it.</span>
+            {data.orbits.slice(0, 3).map((orbit, position) => <span className={`onboarding-desktop-orbit demo-orbit-${position}`} key={orbit.id}><Planet color={orbit.color} name={orbit.name} size={53} /></span>)}
+            <span className="onboarding-desktop-hint">Your own Orbits appear here after you create them.</span>
           </div>}
           {step === "connection" && <div className="onboarding-setup-card">
             <div className="onboarding-card-heading"><Globe2 size={19} /><h2>Model connections</h2></div>

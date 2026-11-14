@@ -7,6 +7,7 @@ import {
   Expand,
   LoaderCircle,
   Monitor,
+  Settings2,
   ShieldCheck,
   Square,
   Users,
@@ -17,6 +18,7 @@ import { api, native } from "../api";
 import { activeTask, errorText, isProviderConfigured } from "../types";
 import type { Bootstrap, Conversation, Message } from "../types";
 import { Planet } from "./Planet";
+import { OrbitSettingsPanel } from "./OrbitSettingsPanel";
 
 let presenceRevision = Date.now() * 1_000;
 const nextPresenceRevision = () => (presenceRevision = Math.max(presenceRevision + 1, Date.now() * 1_000));
@@ -28,6 +30,7 @@ export function Chat({
   compact = false,
   onExpand,
   onConnections,
+  onOrbitChanged,
 }: {
   conversation: Conversation;
   data: Bootstrap;
@@ -35,12 +38,14 @@ export function Chat({
   compact?: boolean;
   onExpand?: () => void;
   onConnections?: () => void;
+  onOrbitChanged?: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sharingBusy, setSharingBusy] = useState(false);
   const [error, setError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const currentRequest = useRef(0);
@@ -169,6 +174,13 @@ export function Chat({
               : (orbit?.role ?? "Orbit conversation")}
           </p>
         </div>
+        {orbit && <button
+          type="button"
+          className="icon-button"
+          onClick={() => setSettingsOpen(true)}
+          aria-label={`Settings for ${orbit.name}`}
+          title={`Settings for ${orbit.name}`}
+        ><Settings2 size={17} /></button>}
         {onExpand && (
           <button
             className="icon-button"
@@ -473,6 +485,8 @@ export function Chat({
             : "All tools are available. Your approval preferences and project access still apply. Verify important work."}
         </p>
       </div>
+      {settingsOpen && orbit && <OrbitSettingsPanel orbit={orbit} data={data}
+        onClose={() => setSettingsOpen(false)} onChanged={(change) => { if (change !== "edit") { setSettingsOpen(false); onOrbitChanged?.(); } }} />}
     </section>
   );
 }

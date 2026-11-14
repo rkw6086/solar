@@ -126,6 +126,7 @@ export function DesktopWidget({
             conversation={conversation}
             data={data}
             compact
+            onOrbitChanged={() => { openingConversation.current = null; setConversation(null); }}
             onExpand={() =>
               void api("open_full_chat", {
                 conversationId: conversation.id,
@@ -201,6 +202,11 @@ export function DesktopWidget({
             setFailure(errorText(reason)),
           );
         }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          void api("open_orbit_settings", { orbitId: orbit.id }).catch((reason) => setFailure(errorText(reason)));
+        }}
+        title={`${orbit.name} · right-click for settings`}
       >
         <Planet color={orbit.color} size={88} name={orbit.name} busy={busy} />
         <span className="orbit-widget-name">

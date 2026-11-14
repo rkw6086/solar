@@ -6,6 +6,8 @@ pub(crate) fn add_assistant(engine: &Engine) {
             id: "assistant".into(),
             name: "Sol".into(),
             role: "Personal assistant".into(),
+            gender: String::new(),
+            tasks: String::new(),
             personality: "Thoughtful and precise".into(),
             instructions: String::new(),
             color: "#f5b45b".into(),

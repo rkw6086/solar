@@ -1,0 +1,8 @@
+.simple-orbit-form .form-body { padding-top: 18px; }
+.simple-orbit-heading { display: flex; align-items: center; gap: 16px; padding: 20px 25px 0; }
+.simple-orbit-heading strong { font-size: 17px; font-weight: 550; }
+.simple-orbit-heading p { margin-top: 7px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.simple-orbit-form .field > span, .simple-orbit-form .model-picker > label { font-size: 12px; }
+.simple-orbit-form .field input, .simple-orbit-form .field textarea { font-size: 13px; }
+.simple-orbit-note { color: #95a4ac; font-size: 12px; line-height: 1.7; margin: 8px 0; }
+.simple-orbit-progress { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: var(--accent); font-size: 12px; }
