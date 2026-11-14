@@ -16,6 +16,7 @@ mod runs;
 #[cfg(any(feature = "desktop", test))]
 mod storage_root;
 pub mod store;
+mod tool_diffs;
 
 #[cfg(feature = "desktop")]
 mod attention_geometry;

@@ -120,6 +120,99 @@ async fn finished(engine: &Arc<Engine>, task_id: &str) {
 }
 
 #[tokio::test]
+async fn shell_activity_streams_then_finishes_with_incremental_git_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let initialized = tokio::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(project.path())
+        .status()
+        .await
+        .unwrap();
+    assert!(initialized.success());
+    std::fs::write(project.path().join("note.txt"), "existing user edit\n").unwrap();
+    let call = json!({"role":"assistant","tool_calls":[{"index":0,"id":"live-shell","type":"function","function":{"name":"shell_run","arguments":json!({
+        "command":"echo 'starting work'; sleep 1; echo 'updated by tool' > note.txt; echo 'done'",
+        "workingDirectory":project.path(),
+    }).to_string()}}]});
+    let (url, server) = fixture(vec![
+        response(call, "tool_calls"),
+        response(json!({"content":"Updated the note."}), "stop"),
+    ])
+    .await;
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    engine
+        .save_project(Project {
+            id: "live-project".into(),
+            name: "Live project".into(),
+            directory: project.path().to_string_lossy().into(),
+            description: String::new(),
+        })
+        .unwrap();
+    let mut orbit = engine.orbit("assistant").unwrap();
+    orbit.autonomy = "trusted".into();
+    orbit.project_ids.push("live-project".into());
+    engine.save_orbit(orbit).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Live tool".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Update the note.".into())
+        .unwrap();
+    let running_id = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let messages = engine.messages(&chat.id).unwrap();
+            if let Some(message) = messages.iter().find(|message| {
+                message.tool_activity.as_ref().is_some_and(|activity| {
+                    activity.status == "running" && activity.output.contains("starting work")
+                })
+            }) {
+                break message.id.clone();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    finished(&engine, &task.id).await;
+    let messages = engine.messages(&chat.id).unwrap();
+    let activities: Vec<_> = messages
+        .iter()
+        .filter(|message| message.tool_activity.is_some())
+        .collect();
+    assert_eq!(activities.len(), 1);
+    assert_eq!(activities[0].id, running_id);
+    let activity = activities[0].tool_activity.as_ref().unwrap();
+    assert_eq!(activity.status, "completed");
+    assert_eq!(activity.exit_code, Some(0));
+    assert!(activity.output.contains("starting work\ndone"));
+    assert_eq!(activity.diffs.len(), 1);
+    assert!(activity.diffs[0].path.ends_with("note.txt"));
+    assert!(activity.diffs[0].patch.contains("-existing user edit"));
+    assert!(activity.diffs[0].patch.contains("+updated by tool"));
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let tool_result = requests[1]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "tool")
+        .unwrap();
+    assert!(tool_result.to_string().contains("exitCode"));
+    assert!(!tool_result.to_string().contains("toolActivity"));
+    engine.shutdown().await;
+}
+
+#[tokio::test]
 async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
     let initial_instructions = "GENERATION_ONE_OBSOLETE_PROMPT";
     let updated_instructions = "GENERATION_TWO_LIVE_PROMPT";

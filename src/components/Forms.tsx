@@ -22,6 +22,8 @@ import type {
 import { Modal } from "./Modal";
 import { Planet } from "./Planet";
 import { ModelPicker } from "./ModelPicker";
+import { OrbitProgress } from "./OrbitProgress";
+import { orbitProfileNeedsGeneration } from "./orbitProfile";
 import "./simpleOrbit.css";
 
 const colors = [
@@ -117,6 +119,7 @@ export function OrbitForm({
   const [error, setError] = useState("");
   const request = useRef<string | null>(null);
   const mounted = useRef(true);
+  const needsGeneration = orbitProfileNeedsGeneration(orbit, existing);
   const cancelSave = useCallback(() => {
     const requestId = request.current;
     request.current = null;
@@ -127,6 +130,7 @@ export function OrbitForm({
     return () => { mounted.current = false; cancelSave(); };
   }, [cancelSave]);
   const close = useCallback(() => {
+    if (request.current) return;
     cancelSave();
     onClose();
   }, [cancelSave, onClose]);
@@ -136,7 +140,7 @@ export function OrbitForm({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    if (!orbit.providerId || !orbit.model) {
+    if (needsGeneration && (!orbit.providerId || !orbit.model)) {
       setError("Choose a model for your Orbit.");
       return;
     }
@@ -159,10 +163,10 @@ export function OrbitForm({
     }
   }
   return (
-    <Modal title={existing ? `${existing.name}’s profile` : "Create your Orbit"}
+    <><Modal title={existing ? `${existing.name}’s profile` : "Create your Orbit"}
       subtitle={existing ? "Shape their personality, tasks, and model." : "Tell us who they are and what you’d like their help with."}
-      onClose={close} wide>
-      <form onSubmit={(event) => void submit(event)} className="simple-orbit-form">
+      onClose={close} wide dismissible={!busy}>
+      <form onSubmit={(event) => void submit(event)} className="simple-orbit-form" inert={busy}>
         <div className="simple-orbit-heading">
           <Planet name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
           <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p></div>
@@ -174,14 +178,14 @@ export function OrbitForm({
             <label className="field"><span>Gender <span className="optional">optional</span></span><input maxLength={200} disabled={busy}
               placeholder="e.g. female, male, nonbinary, or none" value={orbit.gender ?? ""} onChange={(event) => update("gender", event.target.value)} /></label>
           </div>
-          <label className="field"><span>Personality</span><textarea required rows={2} maxLength={8000} disabled={busy}
+          <label className="field"><span>Personality</span><textarea required={needsGeneration} rows={2} maxLength={8000} disabled={busy}
             placeholder="Warm, curious, direct, with a dry sense of humor…" value={orbit.personality} onChange={(event) => update("personality", event.target.value)} /></label>
-          <label className="field"><span>Tasks</span><textarea required rows={3} maxLength={32000} disabled={busy}
+          <label className="field"><span>Tasks</span><textarea required={needsGeneration} rows={3} maxLength={32000} disabled={busy}
             placeholder="What should they help you do? Include any important boundaries or preferences."
             value={orbit.tasks ?? ""} onChange={(event) => update("tasks", event.target.value)} /></label>
           <ModelPicker providers={data.providers} providerId={orbit.providerId} model={orbit.model}
-            required disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
-          {!data.providers.some((provider) => provider.models.length) && (
+            required={needsGeneration} disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
+          {needsGeneration && !data.providers.some((provider) => provider.models.length) && (
             <p className="simple-orbit-note">Add a connection and discover its models in Connections before {existing ? "updating" : "creating"} an Orbit.</p>
           )}
           {existing ? <>
@@ -199,11 +203,11 @@ export function OrbitForm({
                   ? [...orbit.projectIds, project.id] : orbit.projectIds.filter((value) => value !== project.id))} /><span>{project.name}</span></label>)}
             </fieldset>}
           </> : <p className="simple-orbit-note">Your selected model will turn these details into working instructions. Your Orbit starts with all tools available and asks before acting. You can change its settings any time.</p>}
-          {busy && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />{existing ? "Updating Orbit…" : "Creating Orbit…"}</p>}
+          {busy && !needsGeneration && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />Saving settings…</p>}
         </div>
         <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Orbit" : "Create Orbit"} />
       </form>
-    </Modal>
+    </Modal>{busy && needsGeneration && <OrbitProgress name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
   );
 }
 

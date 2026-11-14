@@ -1,0 +1,10 @@
+.orbit-progress-backdrop { position: fixed; inset: 0; z-index: 150; background: rgb(5 10 14 / 74%); backdrop-filter: blur(5px); display: grid; place-items: center; padding: 22px; }
+.orbit-progress-dialog { width: min(420px, 100%); box-sizing: border-box; padding: 30px 26px; text-align: center; border: 1px solid #39464d; border-radius: 18px; background: #182126; box-shadow: 0 25px 90px #0008; outline: none; }
+.orbit-progress-planet { display: flex; justify-content: center; margin-bottom: 20px; }
+.orbit-progress-dialog h2 { font-size: 19px; font-weight: 550; overflow-wrap: anywhere; }
+.orbit-progress-dialog > p { margin-top: 9px; color: #a9b6bb; font-size: 13px; line-height: 1.7; }
+.orbit-progress-status { margin-top: 24px; padding-top: 20px; border-top: 1px solid #334047; color: #e4b87b; display: flex; align-items: center; gap: 12px; text-align: left; min-height: 52px; font-size: 12px; line-height: 1.7; }
+.orbit-progress-status svg { flex: 0 0 auto; }
+.orbit-progress-status span { animation: orbit-progress-appear .3s ease both; }
+@keyframes orbit-progress-appear { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .orbit-progress-status span { animation: none; } }

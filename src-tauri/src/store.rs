@@ -767,6 +767,7 @@ mod tests {
                     role: "user".into(),
                     content: "hello".into(),
                     created_at: now(),
+                    tool_activity: None,
                 })
                 .unwrap();
             assert_eq!(store.messages(conversation_id).unwrap().len(), 1);

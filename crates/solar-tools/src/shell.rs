@@ -1,5 +1,6 @@
 use crate::{
-    ToolContext, ToolDefinition, ToolOutput, definition, managed_environment, required_str,
+    ToolContext, ToolDefinition, ToolOutput, ToolProgress, definition, managed_environment,
+    required_str,
 };
 use serde_json::{Value, json};
 use std::process::Stdio;
@@ -87,8 +88,11 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
     let stderr = child.stderr.take().ok_or("Missing shell stderr")?;
     // Readers are joined inside the same future so cancellation cannot detach them.
     let execution = async {
-        let (status, stdout, stderr) =
-            tokio::join!(child.wait(), read_bounded(stdout), read_bounded(stderr));
+        let (status, stdout, stderr) = tokio::join!(
+            child.wait(),
+            read_bounded(stdout, context.progress.as_ref()),
+            read_bounded(stderr, context.progress.as_ref()),
+        );
         let status = status.map_err(|e| e.to_string())?;
         let (stdout, out_truncated) = stdout?;
         let (stderr, err_truncated) = stderr?;
@@ -124,18 +128,81 @@ impl Drop for ProcessGroup {
     }
 }
 
-async fn read_bounded(mut reader: impl AsyncRead + Unpin) -> Result<(String, bool), String> {
+/// Decode complete UTF-8 sequences only; a pipe read may split a character.
+fn take_display_text(pending: &mut Vec<u8>, eof: bool) -> String {
+    let mut text = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(valid) => {
+                text.push_str(valid);
+                pending.clear();
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                // SAFETY: valid_up_to is guaranteed by Utf8Error.
+                text.push_str(std::str::from_utf8(&pending[..valid]).unwrap());
+                pending.drain(..valid);
+                if let Some(invalid) = error.error_len() {
+                    text.push('�');
+                    pending.drain(..invalid);
+                } else {
+                    if eof && !pending.is_empty() {
+                        text.push('�');
+                        pending.clear();
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    text
+}
+
+fn publish_progress(
+    progress: Option<&tokio::sync::watch::Sender<ToolProgress>>,
+    text: &str,
+    truncated: bool,
+) {
+    if let Some(progress) = progress {
+        progress.send_modify(|current| {
+            let mut end = text
+                .len()
+                .min(131_072usize.saturating_sub(current.output.len()));
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            current.output.push_str(&text[..end]);
+            current.truncated |= truncated || end < text.len();
+        });
+    }
+}
+
+async fn read_bounded(
+    mut reader: impl AsyncRead + Unpin,
+    progress: Option<&tokio::sync::watch::Sender<ToolProgress>>,
+) -> Result<(String, bool), String> {
     let mut bytes = Vec::new();
+    let mut pending = Vec::new();
     let mut buffer = [0; 8192];
     let mut truncated = false;
     loop {
         let count = reader.read(&mut buffer).await.map_err(|e| e.to_string())?;
         if count == 0 {
+            publish_progress(progress, &take_display_text(&mut pending, true), truncated);
             break;
         }
         let remaining = 65_536usize.saturating_sub(bytes.len());
-        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+        let accepted = count.min(remaining);
+        bytes.extend_from_slice(&buffer[..accepted]);
+        pending.extend_from_slice(&buffer[..accepted]);
+        let was_truncated = truncated;
         truncated |= count > remaining;
+        let text = take_display_text(&mut pending, truncated);
+        if !text.is_empty() || truncated != was_truncated {
+            publish_progress(progress, &text, truncated);
+        }
+        // Keep draining after the display limit so a full pipe never deadlocks a process.
     }
     Ok((String::from_utf8_lossy(&bytes).into_owned(), truncated))
 }
@@ -143,6 +210,54 @@ async fn read_bounded(mut reader: impl AsyncRead + Unpin) -> Result<(String, boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn progress_arrives_before_command_finishes_and_survives_cancellation() {
+        let root = tempfile::tempdir().unwrap();
+        let (progress, mut updates) = tokio::sync::watch::channel(ToolProgress::default());
+        let context = ToolContext {
+            orbit_id: "stream-test".into(),
+            workspace: root.path().into(),
+            data_directory: root.path().into(),
+            allowed_roots: vec![],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: Some(progress),
+        };
+        let args = json!({"command":"printf first; sleep 20; printf last"});
+        let execution = execute(&args, &context);
+        tokio::pin!(execution);
+        tokio::select! {
+            result = &mut execution => panic!("command finished before output: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(3), updates.changed()) => result.unwrap().unwrap(),
+        }
+        assert_eq!(updates.borrow().output, "first");
+        context.cancellation.cancel();
+        assert!(execution.await.unwrap_err().contains("cancelled"));
+        assert_eq!(updates.borrow().output, "first");
+    }
+
+    #[tokio::test]
+    async fn progress_preserves_split_utf8_and_bounds_a_flood_without_blocking() {
+        let (progress, updates) = tokio::sync::watch::channel(ToolProgress::default());
+        let (mut writer, reader) = tokio::io::duplex(16);
+        let producer = tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            for byte in "🪐 é".as_bytes() {
+                writer.write_all(&[*byte]).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+            writer.write_all(&vec![b'x'; 100_000]).await.unwrap();
+        });
+        let (output, truncated) = read_bounded(reader, Some(&progress)).await.unwrap();
+        producer.await.unwrap();
+        let latest = updates.borrow();
+        assert!(latest.output.starts_with("🪐 é"));
+        assert_eq!(latest.output, output);
+        assert!(truncated && latest.truncated);
+        assert_eq!(latest.output.len(), 65_536);
+    }
 
     #[tokio::test]
     async fn shell_uses_orbit_storage_for_preferences_cache_and_temporary_files() {
@@ -157,6 +272,7 @@ mod tests {
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         let output = execute(
             &json!({"command":"printf '%s\\n' \"$HOME\" \"$XDG_CACHE_HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$TMPDIR\""}),
@@ -183,6 +299,7 @@ mod tests {
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         assert!(
             execute(&json!({"command":"printf hello"}), &ctx)
@@ -220,6 +337,7 @@ mod tests {
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         let result = execute(
             &json!({"command":"pwd", "workingDirectory":project.path()}),
@@ -259,6 +377,7 @@ mod tests {
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         let token = ctx.cancellation.clone();
         tokio::spawn(async move {

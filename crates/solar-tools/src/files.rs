@@ -258,6 +258,7 @@ mod tests {
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         }
     }
     #[tokio::test]

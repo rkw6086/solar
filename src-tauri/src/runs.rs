@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use solar_agent_core::*;
 use solar_providers::{OrbitStep, ProviderKind, RigOrbitRun};
-use solar_tools::{ToolContext, ToolOutput};
+use solar_tools::{ToolContext, ToolOutput, ToolProgress};
 use std::{
     collections::BTreeSet,
     sync::Arc,
@@ -135,6 +135,162 @@ impl Drop for TaskGuard {
             self.engine.changed();
         }
     }
+}
+
+// This record is separate from the canonical Rig tool result. UI progress must
+// never add partial tool output to the model transcript or remote diagnostics.
+struct ToolActivityRecord {
+    engine: Arc<Engine>,
+    message: Message,
+    finished: bool,
+}
+
+impl ToolActivityRecord {
+    fn new(engine: Arc<Engine>, ctx: &RunContext, call: &ToolCall) -> Result<Self, String> {
+        let record = Self {
+            engine,
+            message: Message {
+                id: id(),
+                conversation_id: ctx.conversation.id.clone(),
+                orbit_id: Some(ctx.task.orbit_id.clone()),
+                role: "tool".into(),
+                content: call.name.clone(),
+                created_at: now(),
+                tool_activity: Some(ToolActivity {
+                    task_id: ctx.task.id.clone(),
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    status: "running".into(),
+                    arguments: activity_arguments(call),
+                    output: String::new(),
+                    truncated: false,
+                    exit_code: None,
+                    diffs: Vec::new(),
+                }),
+            },
+            finished: false,
+        };
+        record.save()?;
+        Ok(record)
+    }
+
+    fn activity(&mut self) -> &mut ToolActivity {
+        self.message.tool_activity.as_mut().expect("tool activity")
+    }
+
+    fn save(&self) -> Result<(), String> {
+        self.engine.store.save_message(&self.message)?;
+        let _ = self
+            .engine
+            .events
+            .send(AppEvent::Message(self.message.clone()));
+        Ok(())
+    }
+
+    fn progress(&mut self, progress: ToolProgress) -> Result<(), String> {
+        self.activity().output = progress.output;
+        self.activity().truncated = progress.truncated;
+        self.save()
+    }
+
+    fn finish(
+        &mut self,
+        result: &Result<ToolOutput, String>,
+        allowed: bool,
+        cancelled: bool,
+    ) -> Result<(), String> {
+        let activity = self.activity();
+        activity.status = if cancelled {
+            "cancelled"
+        } else if !allowed {
+            "denied"
+        } else if result.is_ok() {
+            "completed"
+        } else {
+            "failed"
+        }
+        .into();
+        match result {
+            Ok(output) if activity.name == "shell_run" => {
+                if let Ok(value) = serde_json::from_str::<Value>(&output.content) {
+                    activity.exit_code = value["exitCode"].as_i64();
+                    activity.truncated |= value["truncated"].as_bool().unwrap_or(false);
+                    if activity.exit_code.is_some_and(|code| code != 0) {
+                        activity.status = "failed".into();
+                    }
+                    if activity.output.is_empty() {
+                        activity.output = format!(
+                            "{}{}",
+                            value["stdout"].as_str().unwrap_or(""),
+                            value["stderr"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+            }
+            Ok(output) => {
+                let (text, truncated) = bounded_activity_text(&output.content, 65_536);
+                activity.output = text;
+                activity.truncated |= truncated;
+            }
+            Err(error) => {
+                if !activity.output.is_empty() {
+                    activity.output.push('\n');
+                }
+                let (error, truncated) = bounded_activity_text(error, 4_096);
+                activity.output.push_str(&error);
+                activity.truncated |= truncated;
+            }
+        }
+        self.finished = true;
+        self.save()
+    }
+}
+
+impl Drop for ToolActivityRecord {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.activity().status = "interrupted".into();
+            let _ = self.save();
+        }
+    }
+}
+
+fn bounded_activity_text(text: &str, limit: usize) -> (String, bool) {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_owned(), end < text.len())
+}
+
+fn activity_arguments(call: &ToolCall) -> Value {
+    // Store only fields useful to a human. In particular, file contents and
+    // opaque MCP credentials/parameters never become expandable UI payloads.
+    let keys: &[&str] = match call.name.as_str() {
+        "shell_run" => &["command", "workingDirectory"],
+        "web_fetch" | "browser_open" => &["url"],
+        "browser_search" => &["query"],
+        "files_list" | "files_read" | "files_write" => &["path"],
+        "files_search" => &["path", "query"],
+        "browser_click" | "browser_type" => &["selector"],
+        "computer_key" => &["key"],
+        _ => &[],
+    };
+    let values = keys
+        .iter()
+        .filter_map(|key| {
+            call.arguments
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(|value| {
+                    (
+                        (*key).to_owned(),
+                        Value::String(bounded_activity_text(value, 16_384).0),
+                    )
+                })
+        })
+        .collect();
+    Value::Object(values)
 }
 
 struct ModelLease(Arc<Engine>);
@@ -663,6 +819,26 @@ impl Engine {
                             return Err("Cancelled".into());
                         }
                         let started = Instant::now();
+                        let mut activity = ToolActivityRecord::new(self.clone(), ctx, call)?;
+                        let changes = if allowed
+                            && (call.name == "shell_run"
+                                || call.name == "files_write"
+                                || call.name.starts_with("mcp__"))
+                        {
+                            let workspace = self.workspace(&ctx.task.orbit_id)?;
+                            let roots = self
+                                .accessible_projects(ctx)?
+                                .into_iter()
+                                .map(|project| project.directory.into())
+                                .collect::<Vec<std::path::PathBuf>>();
+                            tokio::select! {
+                                biased;
+                                _ = ctx.token.cancelled() => None,
+                                snapshot = crate::tool_diffs::GitSnapshot::capture(&workspace, &roots) => Some(snapshot),
+                            }
+                        } else {
+                            None
+                        };
                         let result = if allowed {
                             run.record_tool_started(&call.id)?;
                             self.checkpoint(ctx, run)?;
@@ -677,10 +853,20 @@ impl Engine {
                                     "tool_name": call.name,
                                 }),
                             );
-                            self.execute_tool(ctx, call).await
+                            self.execute_tool_live(ctx, call, &mut activity).await
                         } else {
                             Err("Permission denied for this tool or task scope".into())
                         };
+                        if let Some(changes) = changes {
+                            activity.activity().diffs = if ctx.token.is_cancelled() {
+                                tokio::time::timeout(Duration::from_secs(1), changes.finish())
+                                    .await
+                                    .unwrap_or_default()
+                            } else {
+                                changes.finish().await
+                            };
+                        }
+                        activity.finish(&result, allowed, ctx.token.is_cancelled())?;
                         task_event(
                             &ctx.task,
                             if result.is_err() && allowed {
@@ -727,12 +913,6 @@ impl Engine {
                                 )
                             }
                         };
-                        self.message(
-                            &ctx.conversation.id,
-                            Some(orbit.id.clone()),
-                            "tool",
-                            format!("{}\n{}", call.name, content),
-                        )?;
                         run.record_tool_result(ToolResult {
                             call_id: call.id.clone(),
                             content,
@@ -772,6 +952,7 @@ impl Engine {
     }
 
     pub(crate) fn recover_history(&self, task: &Task) -> Result<(), String> {
+        self.interrupt_tool_activities(task)?;
         let Some(mut journal) = self.store.get::<RunJournal>("runs", &task.id)? else {
             return Ok(());
         };
@@ -869,6 +1050,7 @@ impl Engine {
             role: "assistant".into(),
             content: String::new(),
             created_at: now(),
+            tool_activity: None,
         };
         let mut last_save = Instant::now();
         loop {
@@ -1163,10 +1345,57 @@ impl Engine {
         Ok(allowed)
     }
 
+    async fn execute_tool_live(
+        self: &Arc<Self>,
+        ctx: &RunContext,
+        call: &ToolCall,
+        activity: &mut ToolActivityRecord,
+    ) -> Result<ToolOutput, String> {
+        let (progress, updates) = tokio::sync::watch::channel(ToolProgress::default());
+        let execution = self.execute_tool(ctx, call, Some(progress));
+        tokio::pin!(execution);
+        let mut tick = tokio::time::interval(Duration::from_millis(120));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut saved_bytes = 0;
+        let mut saved_truncated = false;
+        loop {
+            tokio::select! {
+                result = &mut execution => {
+                    // Copy the final snapshot even if the process finished between ticks.
+                    activity.progress(updates.borrow().clone())?;
+                    return result;
+                }
+                _ = tick.tick() => {
+                    let latest = updates.borrow().clone();
+                    if latest.output.len() != saved_bytes || latest.truncated != saved_truncated {
+                        saved_bytes = latest.output.len();
+                        saved_truncated = latest.truncated;
+                        activity.progress(latest)?;
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn interrupt_tool_activities(&self, task: &Task) -> Result<(), String> {
+        for mut message in self.store.messages(&task.conversation_id)? {
+            if let Some(activity) = &mut message.tool_activity
+                && activity.task_id == task.id
+                && activity.status == "running"
+            {
+                activity.status = "interrupted".into();
+                self.store.save_message(&message)?;
+                let _ = self.events.send(AppEvent::Message(message));
+            }
+        }
+        Ok(())
+    }
+
     async fn execute_tool(
         self: &Arc<Self>,
         ctx: &RunContext,
         call: &ToolCall,
+        progress: Option<tokio::sync::watch::Sender<ToolProgress>>,
     ) -> Result<ToolOutput, String> {
         if ctx.token.is_cancelled() {
             return Err("Cancelled".into());
@@ -1323,6 +1552,7 @@ impl Engine {
                     allow_host_execution: needs_host(&call.name),
                     screen_share_allowed: sharing,
                     cancellation: ctx.token.clone(),
+                    progress,
                 };
                 self.tools
                     .execute(&call.name, call.arguments.clone(), &context)
@@ -1356,6 +1586,117 @@ fn transport_error(message: &str) -> AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn activity_test_context(engine: &Arc<Engine>) -> RunContext {
+        let conversation = engine
+            .create_conversation(
+                vec!["assistant".into()],
+                "assistant".into(),
+                "Activity".into(),
+                None,
+            )
+            .unwrap();
+        RunContext {
+            task: Task {
+                id: "activity-test".into(),
+                conversation_id: conversation.id.clone(),
+                orbit_id: "assistant".into(),
+                status: "running".into(),
+                summary: String::new(),
+                error: None,
+                created_at: now(),
+                user_message_id: None,
+            },
+            conversation,
+            origin: "assistant".into(),
+            ancestry: vec!["assistant".into()],
+            history: vec![],
+            token: CancellationToken::new(),
+            user_message_id: None,
+            model_origin: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn live_shell_activity_is_persisted_before_completion_and_keeps_one_message() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(root.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
+        let ctx = activity_test_context(&engine);
+        let call = ToolCall {
+            id: "live-call".into(),
+            name: "shell_run".into(),
+            arguments: json!({"command":"printf first; sleep 1; printf second"}),
+        };
+        let mut activity = ToolActivityRecord::new(engine.clone(), &ctx, &call).unwrap();
+        let result = {
+            let operation = engine.execute_tool_live(&ctx, &call, &mut activity);
+            tokio::pin!(operation);
+            let inspect = async {
+                loop {
+                    let messages = engine.messages(&ctx.conversation.id).unwrap();
+                    if messages.iter().any(|m| {
+                        m.tool_activity
+                            .as_ref()
+                            .is_some_and(|a| a.output == "first" && a.status == "running")
+                    }) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            };
+            tokio::select! {
+                result = &mut operation => panic!("tool finished before live state: {result:?}"),
+                result = tokio::time::timeout(Duration::from_millis(900), inspect) => result.expect("live output before completion"),
+            }
+            operation.await
+        };
+        assert!(result.is_ok());
+        activity.finish(&result, true, false).unwrap();
+        let messages = engine.messages(&ctx.conversation.id).unwrap();
+        assert_eq!(messages.len(), 1);
+        let saved = messages[0].tool_activity.as_ref().unwrap();
+        assert_eq!(saved.status, "completed");
+        assert_eq!(saved.output, "firstsecond");
+        assert_eq!(saved.exit_code, Some(0));
+        assert_eq!(saved.arguments["command"], call.arguments["command"]);
+        assert_eq!(saved.call_id, "live-call");
+    }
+
+    #[test]
+    fn unfinished_activity_recovers_without_replaying_or_leaking_raw_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = Engine::open(root.path().into()).unwrap();
+        crate::test_support::add_assistant(&engine);
+        let ctx = activity_test_context(&engine);
+        let call = ToolCall {
+            id: "interrupted-call".into(),
+            name: "mcp__service__run".into(),
+            arguments: json!({"secret":"never store in UI"}),
+        };
+        let mut activity = ToolActivityRecord::new(engine.clone(), &ctx, &call).unwrap();
+        assert_eq!(activity.activity().arguments, json!({}));
+        // Simulate a persisted running record at process loss.
+        activity.finished = true;
+        drop(activity);
+        engine.interrupt_tool_activities(&ctx.task).unwrap();
+        let messages = engine.messages(&ctx.conversation.id).unwrap();
+        assert_eq!(
+            messages[0].tool_activity.as_ref().unwrap().status,
+            "interrupted"
+        );
+        assert!(
+            !serde_json::to_string(&messages)
+                .unwrap()
+                .contains("never store")
+        );
+        let write = ToolCall {
+            id: "write".into(),
+            name: "files_write".into(),
+            arguments: json!({"path":"file.txt", "content":"private file content"}),
+        };
+        assert_eq!(activity_arguments(&write), json!({"path":"file.txt"}));
+    }
 
     #[tokio::test]
     async fn delegated_project_access_is_the_intersection_of_all_participants() {
@@ -1422,6 +1763,7 @@ mod tests {
                     name: "files_list".into(),
                     arguments: json!({"path":private.path()}),
                 },
+                None,
             )
             .await
             .unwrap_err();

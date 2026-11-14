@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   ArrowUp,
   Check,
-  ChevronDown,
   Expand,
   LoaderCircle,
   Monitor,
@@ -19,6 +18,7 @@ import { activeTask, errorText, isProviderConfigured } from "../types";
 import type { Bootstrap, Conversation, Message } from "../types";
 import { Planet } from "./Planet";
 import { OrbitSettingsPanel } from "./OrbitSettingsPanel";
+import { ToolActivityPanel, ToolApprovalDetails } from "./ToolActivityPanel";
 
 let presenceRevision = Date.now() * 1_000;
 const nextPresenceRevision = () => (presenceRevision = Math.max(presenceRevision + 1, Date.now() * 1_000));
@@ -47,6 +47,7 @@ export function Chat({
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const followMessages = useRef(true);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const currentRequest = useRef(0);
   const orbit = data.orbits.find(
@@ -95,9 +96,10 @@ export function Chat({
   }, [conversation.id, data]);
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "instant", block: "end" });
-  }, [messages.length, messages.at(-1)?.content]);
+    if (followMessages.current) bottom.current?.scrollIntoView({ behavior: "instant", block: "end" });
+  }, [messages]);
   useEffect(() => {
+    followMessages.current = true;
     setDraft("");
     setError("");
   }, [conversation.id]);
@@ -200,6 +202,10 @@ export function Chat({
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
+        onScroll={(event) => {
+          const pane = event.currentTarget;
+          followMessages.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 70;
+        }}
       >
         {messages.length === 0 && (
           <div className="chat-welcome">
@@ -247,15 +253,7 @@ export function Chat({
           const author =
             data.orbits.find((item) => item.id === message.orbitId) ?? orbit;
           if (message.role === "tool")
-            return (
-              <details className="tool-result" key={message.id}>
-                <summary>
-                  <ShieldCheck size={14} /> Tool result{" "}
-                  <ChevronDown size={13} />
-                </summary>
-                <pre>{message.content}</pre>
-              </details>
-            );
+            return <ToolActivityPanel key={message.id} message={message} servers={data.mcpServers} />;
           if (message.role === "system")
             return (
               <div className="system-message" key={message.id}>
@@ -334,10 +332,10 @@ export function Chat({
               <ShieldCheck size={17} />
               <strong>
                 {data.orbits.find((item) => item.id === approval.orbitId)?.name}{" "}
-                wants to use {approval.tool}
+                would like permission
               </strong>
             </div>
-            <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
+            <ToolApprovalDetails name={approval.tool} args={approval.arguments} servers={data.mcpServers} />
             <div className="button-row">
               <button
                 className="button button-quiet"

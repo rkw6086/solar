@@ -61,6 +61,32 @@ pub struct Message {
     pub role: String,
     pub content: String,
     pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_activity: Option<ToolActivity>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiff {
+    pub path: String,
+    pub patch: String,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActivity {
+    pub task_id: String,
+    pub call_id: String,
+    pub name: String,
+    pub status: String,
+    pub arguments: Value,
+    pub output: String,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    #[serde(default)]
+    pub diffs: Vec<FileDiff>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

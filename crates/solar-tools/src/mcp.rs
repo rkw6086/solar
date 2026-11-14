@@ -884,6 +884,7 @@ done"#;
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         let output = manager
             .call("mcp__fixture__echo", json!({}), &context)
@@ -965,6 +966,7 @@ done"#;
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),
+            progress: None,
         };
         assert_eq!(
             manager

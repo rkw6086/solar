@@ -8,12 +8,14 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  dismissible = true,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -23,7 +25,7 @@ export function Modal({
     );
     first?.focus();
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && dismissible) onClose();
       if (event.key !== "Tab") return;
       const focusable = [
         ...(ref.current?.querySelectorAll<HTMLElement>(
@@ -45,13 +47,13 @@ export function Modal({
       document.removeEventListener("keydown", handleKey);
       previous?.focus();
     };
-  }, [onClose]);
+  }, [onClose, dismissible]);
 
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (dismissible && event.target === event.currentTarget) onClose();
       }}
     >
       <div
@@ -70,6 +72,7 @@ export function Modal({
             type="button"
             className="icon-button"
             aria-label="Close dialog"
+            disabled={!dismissible}
             onClick={onClose}
           >
             <X size={18} />

@@ -52,6 +52,7 @@ impl Engine {
                     allow_host_execution: false,
                     screen_share_allowed: false,
                     cancellation: Default::default(),
+                    progress: None,
                 };
                 if let Ok(Ok(output)) = tokio::time::timeout(
                     Duration::from_secs(3),

@@ -599,6 +599,7 @@ impl Engine {
             role: role.into(),
             content,
             created_at: now(),
+            tool_activity: None,
         };
         self.store.save_message(&message)?;
         let _ = self.events.send(AppEvent::Message(message.clone()));

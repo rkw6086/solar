@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { reportDiagnostic } from "./diagnostics";
+import { orbitProfileNeedsGeneration } from "./components/orbitProfile";
 import type {
   AttentionItem,
   AttentionState,
@@ -105,6 +106,9 @@ function requiredString(args: Record<string, unknown>, key: string) {
 
 // Browser preview simulates generation locally; native profiles use the selected model.
 function previewOrbitProfile(draft: Orbit, existing?: Orbit): Orbit {
+  if (existing && !orbitProfileNeedsGeneration(draft, existing)) {
+    return { ...draft, instructions: existing.instructions };
+  }
   const tasks = (draft.tasks ?? "").trim();
   if (!draft.name.trim() || !draft.personality.trim() || !tasks) throw new Error("Name, personality, and tasks are required.");
   if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model for your Orbit.");

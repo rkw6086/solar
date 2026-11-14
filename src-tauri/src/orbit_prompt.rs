@@ -111,6 +111,18 @@ fn expansion_request(orbit: &Orbit, include_role: bool) -> TurnRequest {
     request
 }
 
+fn profile_inputs_changed(orbit: &Orbit, original: &Orbit) -> bool {
+    [
+        (&orbit.name, &original.name),
+        (&orbit.gender, &original.gender),
+        (&orbit.role, &original.role),
+        (&orbit.personality, &original.personality),
+        (&orbit.tasks, &original.tasks),
+    ]
+    .iter()
+    .any(|(current, previous)| current.trim() != previous.trim())
+}
+
 async fn collect_expansion(
     runtime: Arc<dyn AgentRuntime>,
     request: TurnRequest,
@@ -247,11 +259,19 @@ impl Engine {
     ) -> Result<(Orbit, Orbit, u64), String> {
         validate_id(&orbit.id)?;
         let (original, generation) = self.orbit_profile_snapshot(&orbit.id)?;
-        // Require explicit user-authored tasks even for legacy profiles. Old
-        // generated instructions must never become the next expansion's input.
-        self.validate_profile(&orbit, token)?;
-        if !orbit.role.trim().is_empty() {
-            validate_text(&orbit.role, "Role", 300)?;
+        // Metadata-only saves also work for older profiles without a Tasks
+        // field or a connected model. They never consume model output.
+        self.ensure_running()?;
+        if token.is_cancelled() {
+            return Err("Orbit setup cancelled".into());
+        }
+        if profile_inputs_changed(&orbit, &original) {
+            // Require user-authored tasks when rebuilding. Never recycle old
+            // generated instructions into another model request.
+            self.validate_profile(&orbit, token)?;
+            if !orbit.role.trim().is_empty() {
+                validate_text(&orbit.role, "Role", 300)?;
+            }
         }
         Ok((orbit, original, generation))
     }
@@ -264,7 +284,11 @@ impl Engine {
         token: CancellationToken,
     ) -> Result<Orbit, String> {
         let _reset_guard = self.reset_operations.read().await;
-        let (orbit, original, generation) = self.prepare_profile_update(orbit, &token)?;
+        let (mut orbit, original, generation) = self.prepare_profile_update(orbit, &token)?;
+        if !profile_inputs_changed(&orbit, &original) {
+            orbit.instructions = original.instructions.clone();
+            return self.save_expanded_orbit(orbit, &original, generation, &token);
+        }
         let runtime = self.profile_runtime(&orbit, &token).await?;
         self.update_orbit_profile_using(orbit, original, generation, runtime, &token)
             .await
@@ -762,6 +786,7 @@ mod tests {
         assert_same_profile(&engine.orbit("draft").unwrap(), &original);
         let mut edited = original.clone();
         edited.model.clear();
+        edited.personality = "New personality requires regeneration".into();
         assert!(
             engine
                 .update_orbit_profile(edited, CancellationToken::new())
@@ -791,6 +816,7 @@ mod tests {
         engine.save_orbit(legacy.clone()).unwrap();
         let mut edited = legacy.clone();
         edited.instructions = "Do not use client instructions".into();
+        edited.personality = "New personality".into();
         let token = CancellationToken::new();
         assert!(
             engine
@@ -820,6 +846,82 @@ mod tests {
             panic!("profile request")
         };
         assert!(!input.contains("Do not use client instructions"));
+    }
+
+    #[tokio::test]
+    async fn metadata_only_edits_keep_instructions_without_contacting_the_model() {
+        let temporary = tempfile::tempdir().unwrap();
+        let engine = Engine::open(temporary.path().into()).unwrap();
+        let original = saved_profile(&engine);
+        let mut edited = original.clone();
+        edited.model = "different-model".into();
+        edited.autonomy = "trusted".into();
+        edited.color = "#123456".into();
+        edited.enabled = false;
+        edited.name = format!("  {}  ", original.name.trim());
+        edited.instructions = "CLIENT_OVERRIDE_MUST_NOT_BE_SAVED".into();
+        let saved = engine
+            .update_orbit_profile(edited.clone(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(saved.instructions, original.instructions);
+        assert_eq!(saved.model, edited.model);
+        assert_eq!(saved.autonomy, edited.autonomy);
+        assert_eq!(saved.color, edited.color);
+        assert!(!saved.enabled);
+        // The configured endpoint is intentionally unreachable. Successful
+        // persistence proves that this branch did not request an expansion.
+        assert_same_profile(&engine.orbit("draft").unwrap(), &saved);
+    }
+
+    #[tokio::test]
+    async fn legacy_metadata_edits_need_neither_tasks_nor_a_model() {
+        let temporary = tempfile::tempdir().unwrap();
+        let engine = Engine::open(temporary.path().into()).unwrap();
+        let mut original = draft();
+        original.tasks.clear();
+        original.model.clear();
+        original.provider_id.clear();
+        original.instructions = "Preserve these private instructions".into();
+        let original = engine.save_orbit(original).unwrap();
+        let mut edited = original.clone();
+        edited.autonomy = "workspace".into();
+        edited.instructions = "untrusted replacement".into();
+        let saved = engine
+            .update_orbit_profile(edited, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(saved.instructions, original.instructions);
+        assert!(saved.tasks.is_empty());
+        assert!(saved.model.is_empty());
+        assert_eq!(saved.autonomy, "workspace");
+    }
+
+    #[test]
+    fn only_normalized_profile_text_triggers_regeneration() {
+        let original = draft();
+        let mut edited = original.clone();
+        edited.name = original.name.trim().into();
+        edited.gender = format!(" {} ", original.gender);
+        edited.personality = format!(" {} ", original.personality);
+        edited.tasks = format!(" {} ", original.tasks);
+        edited.role = format!(" {} ", original.role);
+        edited.provider_id = "another-provider".into();
+        edited.model = "another-model".into();
+        edited.project_ids = vec!["another-project".into()];
+        assert!(!profile_inputs_changed(&edited, &original));
+        for key in ["name", "gender", "role", "personality", "tasks"] {
+            let mut changed = original.clone();
+            match key {
+                "name" => changed.name.push('x'),
+                "gender" => changed.gender.push('x'),
+                "role" => changed.role.push('x'),
+                "personality" => changed.personality.push('x'),
+                "tasks" => changed.tasks.push('x'),
+                _ => unreachable!(),
+            }
+            assert!(profile_inputs_changed(&changed, &original), "{key}");
+        }
     }
 
     #[tokio::test]

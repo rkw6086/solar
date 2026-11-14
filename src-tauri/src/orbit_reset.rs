@@ -141,6 +141,7 @@ mod tests {
                     role: "assistant".into(),
                     content: id.into(),
                     created_at: now(),
+                    tool_activity: None,
                 })
                 .unwrap();
         }

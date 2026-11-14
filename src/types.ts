@@ -53,6 +53,25 @@ export interface Message {
   role: "user" | "assistant" | "tool" | "system";
   content: string;
   createdAt: string;
+  toolActivity?: ToolActivity;
+}
+
+export interface ToolFileDiff {
+  path: string;
+  patch: string;
+  truncated: boolean;
+}
+
+export interface ToolActivity {
+  callId: string;
+  taskId?: string;
+  name: string;
+  status: "running" | "completed" | "failed" | "denied" | "cancelled" | "interrupted";
+  arguments: unknown;
+  output: string;
+  truncated: boolean;
+  exitCode?: number;
+  diffs: ToolFileDiff[];
 }
 
 export interface Task {

@@ -34,6 +34,14 @@ pub struct ToolContext {
     pub allow_host_execution: bool,
     pub screen_share_allowed: bool,
     pub cancellation: CancellationToken,
+    /// Bounded, coalesced display output. Never used as model context or logging.
+    pub progress: Option<tokio::sync::watch::Sender<ToolProgress>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ToolProgress {
+    pub output: String,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Default)]
