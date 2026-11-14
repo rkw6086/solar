@@ -103,6 +103,28 @@ function requiredString(args: Record<string, unknown>, key: string) {
   return value;
 }
 
+// Browser preview simulates generation locally; native profiles use the selected model.
+function previewOrbitProfile(draft: Orbit, existing?: Orbit): Orbit {
+  const tasks = (draft.tasks ?? "").trim();
+  if (!draft.name.trim() || !draft.personality.trim() || !tasks) throw new Error("Name, personality, and tasks are required.");
+  if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model for your Orbit.");
+  const name = draft.name.trim();
+  const gender = draft.gender?.trim() ?? "";
+  const personality = draft.personality.trim();
+  const role = existing ? draft.role.trim() : "Personal Orbit";
+  if (!role) throw new Error("Role is required.");
+  return {
+    ...draft, name, gender, personality, tasks, role, toolGrants: ["*"],
+    instructions: [
+      `You are ${name}, a ${role} in Solar.`,
+      gender && `Gender: ${gender}.`,
+      `Personality: ${personality}`,
+      `Responsibilities: ${tasks}`,
+      "Use available tools to complete the user's request. Gather evidence, respect their boundaries, and report outcomes clearly.",
+    ].filter(Boolean).join("\n\n"),
+  };
+}
+
 async function previewCommand(
   command: string,
   args: Record<string, unknown>,
@@ -111,12 +133,17 @@ async function previewCommand(
     case "create_orbit": {
       const draft = args.orbit as Orbit;
       if (preview.orbits.some((item) => item.id === draft.id)) throw new Error("This Orbit already exists.");
-      if (!draft.name.trim() || !draft.personality.trim() || !draft.tasks?.trim()) throw new Error("Name, personality, and tasks are required.");
-      if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model to create your Orbit.");
-      // Browser preview simulates creation locally. Native creation uses the selected model.
-      const orbit = { ...draft, name: draft.name.trim(), role: "Personal Orbit",
-        instructions: `${draft.tasks.trim()}\n\nUse available tools to complete the user's request. Gather evidence, respect their boundaries, and report outcomes clearly.` };
+      const orbit = previewOrbitProfile(draft);
       preview.orbits = [...preview.orbits, orbit];
+      savePreview();
+      return orbit;
+    }
+    case "update_orbit_profile": {
+      const draft = args.orbit as Orbit;
+      const existing = preview.orbits.find((item) => item.id === draft.id);
+      if (!existing) throw new Error("This Orbit no longer exists.");
+      const orbit = previewOrbitProfile(draft, existing);
+      preview.orbits = replaceById(preview.orbits, orbit);
       savePreview();
       return orbit;
     }

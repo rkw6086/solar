@@ -1020,6 +1020,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             crate::orbit_prompt::create_orbit,
+            crate::orbit_prompt::update_orbit_profile,
             crate::orbit_prompt::cancel_orbit_prompt_analysis,
             crate::orbit_reset::reset_orbit,
             crate::desktop_chat::set_active_chat,

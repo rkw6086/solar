@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   LoaderCircle,
@@ -105,7 +105,9 @@ export function OrbitForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [orbit, setOrbit] = useState<Orbit>(() => existing ?? {
+  const [orbit, setOrbit] = useState<Orbit>(() => existing ? {
+    ...existing, tasks: existing.tasks ?? "",
+  } : {
     id: id(), name: "", gender: "", role: "Personal Orbit", personality: "",
     tasks: "", instructions: "", color: colors[data.orbits.length % colors.length],
     model: "", providerId: "", autonomy: "ask", toolGrants: ["*"],
@@ -115,23 +117,27 @@ export function OrbitForm({
   const [error, setError] = useState("");
   const request = useRef<string | null>(null);
   const mounted = useRef(true);
-  function cancelCreation() {
+  const cancelSave = useCallback(() => {
     const requestId = request.current;
     request.current = null;
     if (requestId) void api("cancel_orbit_prompt_analysis", { requestId }).catch(() => {});
-  }
+  }, []);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; cancelCreation(); };
-  }, []);
+    return () => { mounted.current = false; cancelSave(); };
+  }, [cancelSave]);
+  const close = useCallback(() => {
+    cancelSave();
+    onClose();
+  }, [cancelSave, onClose]);
   function update<K extends keyof Orbit>(key: K, value: Orbit[K]) {
     setOrbit((current) => ({ ...current, [key]: value }));
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
-    if (!existing && (!orbit.providerId || !orbit.model)) {
-      setError("Choose a model to create your Orbit.");
+    if (!orbit.providerId || !orbit.model) {
+      setError("Choose a model for your Orbit.");
       return;
     }
     setBusy(true);
@@ -141,9 +147,7 @@ export function OrbitForm({
     try {
       const draft = { ...orbit, name: orbit.name.trim(), gender: (orbit.gender ?? "").trim(),
         tasks: (orbit.tasks ?? "").trim(), toolGrants: ["*"] };
-      await api(existing ? "save_orbit" : "create_orbit", existing
-        ? { orbit: draft }
-        : { orbit: draft, requestId });
+      await api(existing ? "update_orbit_profile" : "create_orbit", { orbit: draft, requestId });
       if (mounted.current && request.current === requestId) onSaved();
     } catch (failure) {
       if (mounted.current && request.current === requestId) setError(errorText(failure));
@@ -156,8 +160,8 @@ export function OrbitForm({
   }
   return (
     <Modal title={existing ? `${existing.name}’s profile` : "Create your Orbit"}
-      subtitle={existing ? "Shape their personality, instructions, and model." : "Tell us who they are and what you’d like their help with."}
-      onClose={onClose} wide>
+      subtitle={existing ? "Shape their personality, tasks, and model." : "Tell us who they are and what you’d like their help with."}
+      onClose={close} wide>
       <form onSubmit={(event) => void submit(event)} className="simple-orbit-form">
         <div className="simple-orbit-heading">
           <Planet name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
@@ -172,20 +176,17 @@ export function OrbitForm({
           </div>
           <label className="field"><span>Personality</span><textarea required rows={2} maxLength={8000} disabled={busy}
             placeholder="Warm, curious, direct, with a dry sense of humor…" value={orbit.personality} onChange={(event) => update("personality", event.target.value)} /></label>
-          <label className="field"><span>Tasks</span><textarea required={!existing} rows={3} maxLength={32000} disabled={busy}
+          <label className="field"><span>Tasks</span><textarea required rows={3} maxLength={32000} disabled={busy}
             placeholder="What should they help you do? Include any important boundaries or preferences."
             value={orbit.tasks ?? ""} onChange={(event) => update("tasks", event.target.value)} /></label>
           <ModelPicker providers={data.providers} providerId={orbit.providerId} model={orbit.model}
-            required={!existing} disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
-          {!data.providers.some((provider) => provider.models.length) && !existing && (
-            <p className="simple-orbit-note">Add a connection and discover its models in Connections before creating an Orbit.</p>
+            required disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
+          {!data.providers.some((provider) => provider.models.length) && (
+            <p className="simple-orbit-note">Add a connection and discover its models in Connections before {existing ? "updating" : "creating"} an Orbit.</p>
           )}
           {existing ? <>
             <label className="field"><span>Role</span><input required maxLength={300} disabled={busy}
               value={orbit.role} onChange={(event) => update("role", event.target.value)} /></label>
-            <label className="field"><span>System instructions</span><textarea rows={7} maxLength={32000} disabled={busy}
-              value={orbit.instructions} onChange={(event) => update("instructions", event.target.value)} />
-              <small>Edit the instructions directly. Saving an existing Orbit does not call a model.</small></label>
             <label className="field"><span>When should they ask permission?</span>
               <select value={orbit.autonomy} disabled={busy} onChange={(event) => update("autonomy", event.target.value as Orbit["autonomy"])}>
                 <option value="ask">Ask before every tool action</option>
@@ -198,9 +199,9 @@ export function OrbitForm({
                   ? [...orbit.projectIds, project.id] : orbit.projectIds.filter((value) => value !== project.id))} /><span>{project.name}</span></label>)}
             </fieldset>}
           </> : <p className="simple-orbit-note">Your selected model will turn these details into working instructions. Your Orbit starts with all tools available and asks before acting. You can change its settings any time.</p>}
-          {busy && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />{existing ? "Saving your changes…" : "Creating your Orbit’s instructions…"}</p>}
+          {busy && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />{existing ? "Updating Orbit…" : "Creating Orbit…"}</p>}
         </div>
-        <FormFooter busy={busy} error={error} onClose={onClose} label={existing ? "Save Orbit" : "Create Orbit"} />
+        <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Orbit" : "Create Orbit"} />
       </form>
     </Modal>
   );

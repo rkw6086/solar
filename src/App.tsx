@@ -816,7 +816,7 @@ export function App() {
                         <h3>{orbit.name}</h3>
                         <span className="orbit-role">{orbit.role}</span>
                         <p className="orbit-personality">
-                          {orbit.personality || orbit.instructions}
+                          {orbit.personality || orbit.tasks || orbit.role}
                         </p>
                         <div className="tool-tags">
                           <span>All tools</span>

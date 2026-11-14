@@ -9,6 +9,7 @@ use solar::{
 use solar_providers::{ProviderKind, ProviderProfile};
 use std::{sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 async fn fixture(responses: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     fixture_with_status(
@@ -116,6 +117,143 @@ async fn finished(engine: &Arc<Engine>, task_id: &str) {
     })
     .await
     .expect("task must complete");
+}
+
+#[tokio::test]
+async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
+    let initial_instructions = "GENERATION_ONE_OBSOLETE_PROMPT";
+    let updated_instructions = "GENERATION_TWO_LIVE_PROMPT";
+    let (url, server) = fixture(vec![
+        response(
+            json!({"content":json!({
+                "role":"Research companion",
+                "instructions":initial_instructions,
+            }).to_string()}),
+            "stop",
+        ),
+        response(
+            json!({"content":json!({
+                "role":"Suggested science specialty",
+                "instructions":updated_instructions,
+            }).to_string()}),
+            "stop",
+        ),
+        response(json!({"content":"Ready to review your evidence."}), "stop"),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    let mut provider = engine.provider("fixture").unwrap();
+    provider.models.push("edited-model".into());
+    engine
+        .save_provider(ProviderDraft {
+            profile: provider,
+            api_key: None,
+        })
+        .unwrap();
+
+    let mut draft = engine.orbit("assistant").unwrap();
+    draft.id = "profile-expansion-fixture".into();
+    draft.name = "Nova".into();
+    draft.gender = "they/them".into();
+    draft.personality = "Quiet and practical".into();
+    draft.tasks = "Compare public observatory research.".into();
+    draft.instructions = "CLIENT_SUPPLIED_INITIAL_INSTRUCTIONS".into();
+    let created = engine
+        .create_orbit(draft.clone(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(created.tasks, draft.tasks);
+    assert_eq!(created.instructions, initial_instructions);
+
+    let mut edit = created;
+    edit.name = "Aster".into();
+    edit.gender = "he/him".into();
+    edit.role = "Science editor".into();
+    edit.personality = "Warm, skeptical, and precise".into();
+    edit.tasks = "Review laboratory evidence and cite reproducible findings.".into();
+    edit.model = "edited-model".into();
+    edit.instructions = "CLIENT_SUPPLIED_STALE_INSTRUCTIONS".into();
+    let updated = engine
+        .update_orbit_profile(edit.clone(), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(updated.name, edit.name);
+    assert_eq!(updated.gender, edit.gender);
+    assert_eq!(updated.personality, edit.personality);
+    assert_eq!(updated.role, edit.role);
+    assert_eq!(updated.tasks, edit.tasks);
+    assert_eq!(updated.model, edit.model);
+    assert_eq!(updated.instructions, updated_instructions);
+    let stored = engine.orbit(&edit.id).unwrap();
+    assert_eq!(stored.instructions, updated_instructions);
+    assert_eq!(stored.tasks, edit.tasks);
+
+    let chat = engine
+        .create_conversation(
+            vec![edit.id.clone()],
+            edit.id.clone(),
+            "Edited profile".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(
+            &chat.id,
+            "Describe how you will review the evidence.".into(),
+        )
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0]["model"], "test-model");
+    assert_eq!(requests[1]["model"], "edited-model");
+    assert_eq!(requests[2]["model"], "edited-model");
+    for request in &requests[..2] {
+        assert!(
+            request.get("tools").is_none_or(|tools| {
+                tools.is_null() || tools.as_array().is_some_and(Vec::is_empty)
+            }),
+            "profile expansion must not advertise executable tools"
+        );
+    }
+    let creation_profile = requests[0]["messages"].to_string();
+    assert!(creation_profile.contains(&draft.name));
+    assert!(creation_profile.contains(&draft.gender));
+    assert!(creation_profile.contains(&draft.personality));
+    assert!(creation_profile.contains(&draft.tasks));
+    assert!(!creation_profile.contains(&draft.instructions));
+    let edit_profile = requests[1]["messages"].to_string();
+    for value in [
+        &edit.name,
+        &edit.gender,
+        &edit.role,
+        &edit.personality,
+        &edit.tasks,
+    ] {
+        assert!(edit_profile.contains(value));
+    }
+    for obsolete in [initial_instructions, &draft.tasks, &edit.instructions] {
+        assert!(!edit_profile.contains(obsolete));
+    }
+    let chat_prompt = requests[2]["messages"].to_string();
+    assert!(chat_prompt.contains(updated_instructions));
+    assert!(chat_prompt.contains(&edit.tasks));
+    assert!(chat_prompt.contains(&edit.personality));
+    assert!(!chat_prompt.contains(initial_instructions));
+    assert!(!chat_prompt.contains(&draft.tasks));
+    assert!(!chat_prompt.contains(&edit.instructions));
+    assert!(requests[2]["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "shell_run")
+    }));
+    engine.shutdown().await;
 }
 
 #[tokio::test]

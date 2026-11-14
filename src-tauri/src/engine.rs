@@ -25,7 +25,9 @@ pub struct Engine {
     pub(crate) model_active: Mutex<usize>,
     pub(crate) model_notify: Notify,
     conversation_creation: Mutex<()>,
-    orbit_write: Mutex<()>,
+    // A write generation also detects deletion and recreation of an identical
+    // profile while its model-generated instructions are still in flight.
+    orbit_write: Mutex<HashMap<String, u64>>,
     mcp_connected: Mutex<HashSet<String>>,
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
     pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
@@ -122,7 +124,7 @@ impl Engine {
             model_active: Mutex::new(0),
             model_notify: Notify::new(),
             conversation_creation: Mutex::new(()),
-            orbit_write: Mutex::new(()),
+            orbit_write: Mutex::new(HashMap::new()),
             mcp_connected: Mutex::new(HashSet::new()),
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
             attention: Mutex::new(crate::attention::AttentionQueue::default()),
@@ -232,11 +234,13 @@ impl Engine {
     }
 
     pub fn save_orbit(&self, orbit: Orbit) -> Result<Orbit, String> {
-        let _write = self
+        let mut writes = self
             .orbit_write
             .lock()
             .map_err(|_| "Orbit storage unavailable")?;
-        self.save_orbit_inner(orbit)
+        let saved = self.save_orbit_inner(orbit)?;
+        *writes.entry(saved.id.clone()).or_default() += 1;
+        Ok(saved)
     }
 
     pub(crate) fn save_new_orbit(
@@ -244,7 +248,7 @@ impl Engine {
         orbit: Orbit,
         token: &CancellationToken,
     ) -> Result<Orbit, String> {
-        let _write = self
+        let mut writes = self
             .orbit_write
             .lock()
             .map_err(|_| "Orbit storage unavailable")?;
@@ -254,7 +258,47 @@ impl Engine {
         if self.store.get::<Orbit>("orbits", &orbit.id)?.is_some() {
             return Err("This Orbit already exists. Open its profile to edit it.".into());
         }
-        self.save_orbit_inner(orbit)
+        let saved = self.save_orbit_inner(orbit)?;
+        *writes.entry(saved.id.clone()).or_default() += 1;
+        Ok(saved)
+    }
+
+    pub(crate) fn orbit_profile_snapshot(&self, orbit_id: &str) -> Result<(Orbit, u64), String> {
+        let writes = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Orbit storage unavailable")?;
+        Ok((self.orbit(orbit_id)?, *writes.get(orbit_id).unwrap_or(&0)))
+    }
+
+    /// Commit only if the profile the model expanded is still current. The
+    /// model call happens outside this lock, so ordinary saves remain usable.
+    pub(crate) fn save_expanded_orbit(
+        &self,
+        orbit: Orbit,
+        original: &Orbit,
+        generation: u64,
+        token: &CancellationToken,
+    ) -> Result<Orbit, String> {
+        let mut writes = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Orbit storage unavailable")?;
+        self.ensure_running()?;
+        if token.is_cancelled() {
+            return Err("Orbit setup cancelled".into());
+        }
+        let current = self.orbit(&original.id)?;
+        if orbit.id != original.id
+            || *writes.get(&original.id).unwrap_or(&0) != generation
+            || serde_json::to_value(&current).map_err(|e| e.to_string())?
+                != serde_json::to_value(original).map_err(|e| e.to_string())?
+        {
+            return Err("This Orbit changed while its instructions were being updated. Reopen its settings and try again.".into());
+        }
+        let saved = self.save_orbit_inner(orbit)?;
+        *writes.entry(saved.id.clone()).or_default() += 1;
+        Ok(saved)
     }
 
     fn save_orbit_inner(&self, mut orbit: Orbit) -> Result<Orbit, String> {
@@ -310,6 +354,10 @@ impl Engine {
     }
 
     pub fn delete_orbit(&self, orbit_id: &str) -> Result<(), String> {
+        let mut writes = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Orbit storage unavailable")?;
         self.orbit(orbit_id)?;
         for task in self.store.list::<Task>("tasks")? {
             if task.orbit_id == orbit_id {
@@ -317,6 +365,7 @@ impl Engine {
             }
         }
         self.store.remove("orbits", orbit_id)?;
+        *writes.entry(orbit_id.to_owned()).or_default() += 1;
         self.clear_orbit_attention(orbit_id);
         self.changed();
         Ok(())

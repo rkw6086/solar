@@ -56,9 +56,8 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
       <dl className="orbit-settings-summary">
         <div><dt>Model</dt><dd>{orbit.model ? `${orbit.model} (${provider?.name ?? "Unknown provider"})` : "No model selected"}</dd></div>
         <div><dt>Personality</dt><dd>{orbit.personality || "Not set"}</dd></div>
-        <div><dt>Tasks</dt><dd>{orbit.tasks || orbit.instructions || "Not set"}</dd></div>
+        <div><dt>Tasks</dt><dd>{orbit.tasks || "Not set"}</dd></div>
       </dl>
-      <details className="orbit-settings-prompt"><summary>System prompt</summary><pre>{orbit.instructions || "No system prompt saved."}</pre></details>
       <button type="button" className="button button-primary" onClick={() => setEditing(true)}><Settings2 size={16} />Edit Orbit</button>
       <div className="orbit-settings-data">
         <h3>Saved data</h3>
