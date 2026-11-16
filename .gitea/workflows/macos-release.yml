@@ -1,0 +1,85 @@
+name: macOS release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  macos:
+    # Register this runner label as macos-arm64:host. Do not run signing in Docker.
+    runs-on: macos-arm64
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    timeout-minutes: 240
+    env:
+      CI: 'true'
+      SOLAR_JOB_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out trusted release source
+        uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: https://github.com/actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.17.0'
+
+      - name: Set up pinned build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          export PATH="$HOME/.cargo/bin:$PATH"
+          command -v rustup >/dev/null || { echo 'Install rustup for the runner user first.' >&2; exit 1; }
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --target aarch64-apple-darwin
+          npm install --global corepack@0.36.0
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo 'RUSTUP_TOOLCHAIN=1.99.1' >> "$GITHUB_ENV"
+          [[ "$RUNNER_TEMP" == /* && "$SOLAR_JOB_ID" =~ ^[0-9]+-[0-9]*$ ]]
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/solar-build-$SOLAR_JOB_ID" >> "$GITHUB_ENV"
+          echo "SOLAR_RELEASE_DIR=$RUNNER_TEMP/solar-artifacts-$SOLAR_JOB_ID" >> "$GITHUB_ENV"
+
+      - name: Build and check Solar without signing credentials
+        shell: bash
+        run: |
+          python3 scripts/ci/test_macos_release.py
+          bash scripts/ci/build-macos.sh
+
+      - name: Sign, notarize, staple, and create DMG
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: bash scripts/ci/package-macos.sh
+
+      - name: Upload verified DMG and checksums
+        # Gitea's v4-compatible artifact action; upstream upload-artifact rejects GHES.
+        uses: https://gitea.com/actions/gitea-upload-artifact@81f940d004763f986ba3582c007fd842dd5cb0d7 # v4
+        with:
+          name: Solar-macos-arm64
+          path: ${{ env.SOLAR_RELEASE_DIR }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Remove job build files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Signing keys are cleaned by package-macos.sh's EXIT/signal trap.
+          # These are exact job-owned paths, never the runner's global caches.
+          if [[ -n "${CARGO_TARGET_DIR:-}" && -n "${SOLAR_RELEASE_DIR:-}" ]]; then
+            [[ "$CARGO_TARGET_DIR" == "${RUNNER_TEMP}/solar-build-"* ]]
+            [[ "$SOLAR_RELEASE_DIR" == "${RUNNER_TEMP}/solar-artifacts-"* ]]
+            rm -rf -- "$CARGO_TARGET_DIR" "$SOLAR_RELEASE_DIR"
+          fi

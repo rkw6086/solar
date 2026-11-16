@@ -161,7 +161,7 @@ The main window uses the normal system title bar and keeps its close-to-menu-bar
 corepack pnpm tauri build --target aarch64-apple-darwin
 ```
 
-Configure Developer ID signing and Apple notarization credentials using Tauri's macOS distribution documentation. Release artifacts are produced under the target's `release/bundle` directory. Signing credentials are intentionally supplied by the developer's release environment.
+For signed distribution, use the [Gitea macOS release setup](docs/macos-release.md). It explains the `macos-arm64` host runner, Developer ID Application certificate, notarization API key, repository secrets, and the signed/stapled DMG workflow. Signing credentials belong in Gitea secrets, not the repository.
 
 ## Architecture and license
 
