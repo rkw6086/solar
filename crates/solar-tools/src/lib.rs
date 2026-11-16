@@ -1,14 +1,16 @@
 //! Local capabilities owned by Solar's permission broker.
 //!
 //! Callers authorize every operation before dispatch. File operations use
-//! directory capabilities. Arbitrary shell and MCP executables require a
-//! separate host-execution grant and do not inherit a filesystem sandbox.
+//! directory capabilities. Shell commands require a host-execution grant and
+//! exclude unassigned registered projects from their process tree. Other host
+//! access remains available; MCP servers are separately authorized processes.
 
 mod browser;
 mod files;
 mod mcp;
 mod native;
 mod shell;
+mod shell_scope;
 
 pub use mcp::{McpConfig, McpServerInfo, McpTransport};
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,9 @@ pub struct ToolContext {
     pub data_directory: PathBuf,
     pub workspace: PathBuf,
     pub allowed_roots: Vec<PathBuf>,
+    /// Registered project folders excluded from this task's access grants.
+    /// Shell descendants must not read or write these trees.
+    pub denied_roots: Vec<PathBuf>,
     pub allow_host_execution: bool,
     pub screen_share_allowed: bool,
     pub cancellation: CancellationToken,

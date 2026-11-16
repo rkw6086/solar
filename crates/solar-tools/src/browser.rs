@@ -384,6 +384,7 @@ mod tests {
             data_directory: root.into(),
             workspace: root.join("workspace"),
             allowed_roots: Vec::new(),
+            denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),

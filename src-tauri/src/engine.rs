@@ -496,25 +496,27 @@ impl Engine {
             project.id = id();
         }
         validate_id(&project.id)?;
-        validate_text(&project.name, "Project name", 200)?;
-        let directory = std::fs::canonicalize(&project.directory)
-            .map_err(|e| format!("Select an existing project folder: {e}"))?;
-        if !directory.is_dir() {
-            return Err("The project path must be a folder".into());
-        }
-        project.directory = directory.to_string_lossy().into_owned();
-        if self
+        let location = crate::project_location::resolve(&project.directory)?;
+        project.name = location.name;
+        project.directory = location.directory;
+        let scope_changed = self
             .store
             .get::<Project>("projects", &project.id)?
-            .is_some_and(|previous| previous.directory != project.directory)
-        {
-            for orbit in self.store.list::<Orbit>("orbits")? {
-                if orbit.project_ids.contains(&project.id) {
-                    self.cancel_orbit_tasks(&orbit.id)?;
-                }
+            .is_none_or(|previous| previous.directory != project.directory);
+        self.store.put("projects", &project.id, &project)?;
+        if scope_changed {
+            // Existing shells captured their exclusions when launched. Stop
+            // them after publishing the new scope so no old command retains
+            // access to a newly registered or relocated project folder.
+            for token in self
+                .active
+                .lock()
+                .map_err(|_| "Task state unavailable")?
+                .values()
+            {
+                token.cancel();
             }
         }
-        self.store.put("projects", &project.id, &project)?;
         self.changed();
         Ok(project)
     }

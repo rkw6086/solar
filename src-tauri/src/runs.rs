@@ -1533,9 +1533,17 @@ impl Engine {
                 let orbit = self.orbit(&ctx.task.orbit_id)?;
                 let workspace = self.workspace(&orbit.id)?;
                 std::fs::create_dir_all(&workspace).map_err(|e| e.to_string())?;
+                let accessible = self.accessible_projects(ctx)?;
+                let denied_roots = self
+                    .store
+                    .list::<Project>("projects")?
+                    .into_iter()
+                    .filter(|project| !accessible.iter().any(|allowed| allowed.id == project.id))
+                    .map(|project| project.directory.into())
+                    .collect();
                 let mut roots = vec![workspace.clone()];
                 roots.extend(
-                    self.accessible_projects(ctx)?
+                    accessible
                         .into_iter()
                         .map(|project| project.directory.into()),
                 );
@@ -1549,6 +1557,7 @@ impl Engine {
                     orbit_id: orbit.id,
                     workspace,
                     allowed_roots: roots,
+                    denied_roots,
                     allow_host_execution: needs_host(&call.name),
                     screen_share_allowed: sharing,
                     cancellation: ctx.token.clone(),

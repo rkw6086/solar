@@ -1,0 +1,9 @@
+.project-folder-control { display: flex; gap: 9px; align-items: stretch; }
+.project-folder-control input { flex: 1; min-width: 0; }
+.project-folder-control .button { flex-shrink: 0; }
+.project-folder-note { margin: 0; font-size: 11px; line-height: 1.7; color: var(--muted); }
+.project-form input[readonly] { color: #b6c7c2; background: #172126; }
+@media (max-width: 520px) {
+  .project-folder-control { flex-direction: column; }
+  .project-folder-control .button { justify-content: center; }
+}

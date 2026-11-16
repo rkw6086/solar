@@ -255,6 +255,7 @@ mod tests {
             workspace: root.into(),
             data_directory: root.into(),
             allowed_roots: vec![],
+            denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),

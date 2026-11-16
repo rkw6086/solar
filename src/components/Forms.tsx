@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
+  FolderOpen,
   LoaderCircle,
   ShieldCheck,
   Sparkles,
@@ -24,7 +25,9 @@ import { Planet } from "./Planet";
 import { ModelPicker } from "./ModelPicker";
 import { OrbitProgress } from "./OrbitProgress";
 import { orbitProfileNeedsGeneration } from "./orbitProfile";
+import type { ProjectLocation } from "../projectLocation";
 import "./simpleOrbit.css";
+import "./projectForm.css";
 
 const colors = [
   "#e8aa62",
@@ -523,49 +526,124 @@ export function ProjectForm({
   onSaved: () => void;
 }) {
   const [project, setProject] = useState<Project>(
-    existing ?? { id: id(), name: "", directory: "", description: "" },
+    existing ? { ...existing, name: existing.directory.split(/[\\/]/).filter(Boolean).at(-1) ?? "" }
+      : { id: id(), name: "", directory: "", description: "" },
   );
-  const status = useSubmit(onSaved);
+  const [busy, setBusy] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const [error, setError] = useState("");
+  const [location, setLocation] = useState<ProjectLocation | null>(null);
+  const [resolving, setResolving] = useState(Boolean(existing));
+  const folderRevision = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!existing?.directory) return;
+    let active = true;
+    const revision = folderRevision.current;
+    setResolving(true);
+    void api<ProjectLocation>("resolve_project_directory", { directory: existing.directory })
+      .then((result) => {
+        if (!active || !mounted.current || revision !== folderRevision.current) return;
+        setLocation(result);
+        setProject((value) => ({ ...value, name: result.name, directory: result.directory }));
+      })
+      .catch((reason) => {
+        if (active && mounted.current && revision === folderRevision.current) setError(errorText(reason));
+      })
+      .finally(() => {
+        if (active && mounted.current && revision === folderRevision.current) setResolving(false);
+      });
+    return () => { active = false; };
+  }, [existing?.id, existing?.directory]);
+  const close = useCallback(() => {
+    if (!busy && !choosing) onClose();
+  }, [busy, choosing, onClose]);
+  async function chooseFolder() {
+    if (busy || choosing) return;
+    folderRevision.current += 1;
+    setResolving(false);
+    setChoosing(true);
+    setError("");
+    try {
+      const result = await api<ProjectLocation | null>("choose_project_directory", { directory: project.directory || null });
+      if (result && mounted.current) {
+        setLocation(result);
+        setProject((value) => ({ ...value, directory: result.directory, name: result.name }));
+      }
+    } catch (reason) {
+      if (mounted.current) setError(errorText(reason));
+    } finally {
+      if (mounted.current) setChoosing(false);
+    }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy || choosing) return;
+    folderRevision.current += 1;
+    setResolving(false);
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<ProjectLocation>("resolve_project_directory", { directory: project.directory });
+      if (!mounted.current) return;
+      setLocation(result);
+      const saved = { ...project, name: result.name, directory: result.directory };
+      setProject(saved);
+      await api("save_project", { project: saved });
+      if (mounted.current) onSaved();
+    } catch (reason) {
+      if (mounted.current) setError(errorText(reason));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }
   return (
     <Modal
-      title={existing ? "Edit project" : "Make room for a project"}
-      subtitle="A shared workspace for files, knowledge, and your team."
-      onClose={onClose}
+      title={existing ? "Edit project" : "Add a project folder"}
+      subtitle="Choose a folder and add useful context for the work."
+      onClose={close}
+      dismissible={!busy && !choosing}
     >
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void status.submit(() => api("save_project", { project }));
-        }}
-      >
+      <form className="project-form" onSubmit={(event) => void submit(event)}>
         <div className="form-body">
           <label className="field">
-            <span>Project name</span>
+            <span>Project folder</span>
+            <div className="project-folder-control">
             <input
               required
-              value={project.name}
-              onChange={(event) =>
-                setProject({ ...project, name: event.target.value })
-              }
-              placeholder="e.g. Website refresh"
+              disabled={busy || choosing}
+              value={project.directory}
+              onChange={(event) => {
+                folderRevision.current += 1;
+                setResolving(false);
+                setLocation(null);
+                setProject({ ...project, name: "", directory: event.target.value });
+              }}
+              placeholder={native ? "Choose a folder or paste its path" : "/Users/you/Projects/website"}
             />
+            <button type="button" className="button button-secondary" disabled={busy || choosing || !native}
+              onClick={() => void chooseFolder()}>
+              {choosing ? <LoaderCircle size={15} className="spin" /> : <FolderOpen size={15} />}
+              {choosing ? "Choosing…" : "Choose folder"}
+            </button>
+            </div>
+            <small>If the folder is inside a Git repository, Solar uses the repository’s root folder.</small>
           </label>
           <label className="field">
-            <span>Folder on this computer</span>
-            <input
-              required
-              value={project.directory}
-              onChange={(event) =>
-                setProject({ ...project, directory: event.target.value })
-              }
-              placeholder="/Users/you/Projects/website"
-            />
-            <small>Only Orbits you grant access can work in this folder.</small>
+            <span>Project name</span>
+            <input readOnly value={project.name} placeholder="Named automatically from the project folder" />
+            <small>{resolving ? "Checking project folder…" : location?.isGitRoot ? "Using the Git repository root." : "The project name matches its root folder."}</small>
           </label>
+          {!native && <p className="project-folder-note">Folder selection and Git detection are available in the desktop app. Paste a path here to preview the form.</p>}
           <label className="field">
             <span>Project context</span>
             <textarea
               rows={4}
+              disabled={busy || choosing}
               value={project.description}
               onChange={(event) =>
                 setProject({ ...project, description: event.target.value })
@@ -574,7 +652,7 @@ export function ProjectForm({
             />
           </label>
         </div>
-        <FormFooter {...status} label="Save project" onClose={onClose} />
+        <FormFooter busy={busy || choosing} error={error} label="Save project" onClose={close} />
       </form>
     </Modal>
   );

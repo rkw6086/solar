@@ -115,8 +115,11 @@ fn logout_provider(engine: AppState<'_>, id: String) -> Result<(), String> {
     engine.logout_provider(&id)
 }
 #[tauri::command]
-fn save_project(engine: AppState<'_>, project: Project) -> Result<Project, String> {
-    engine.save_project(project)
+async fn save_project(engine: AppState<'_>, project: Project) -> Result<Project, String> {
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.save_project(project))
+        .await
+        .map_err(|_| "Could not save the project".to_owned())?
 }
 #[tauri::command]
 fn create_conversation(
@@ -1048,6 +1051,8 @@ pub fn run() {
             login_status,
             logout_provider,
             save_project,
+            crate::project_location::choose_project_directory,
+            crate::project_location::resolve_project_directory,
             create_conversation,
             get_messages,
             send_message,

@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { reportDiagnostic } from "./diagnostics";
 import { orbitProfileNeedsGeneration } from "./components/orbitProfile";
+import { previewProjectLocation } from "./projectLocation";
 import type {
   AttentionItem,
   AttentionState,
@@ -302,13 +303,21 @@ async function previewCommand(
       savePreview();
       return;
     }
-    case "save_project":
+    case "choose_project_directory":
+      throw new Error("Folder selection is available in the desktop app. Paste a folder path to preview a project here.");
+    case "resolve_project_directory":
+      return previewProjectLocation(requiredString(args, "directory"));
+    case "save_project": {
+      const project = args.project as PreviewState["projects"][number];
+      const location = previewProjectLocation(project.directory);
+      const saved = { ...project, name: location.name, directory: location.directory };
       preview.projects = replaceById(
         preview.projects,
-        args.project as PreviewState["projects"][number],
+        saved,
       );
       savePreview();
-      return args.project;
+      return saved;
+    }
     case "save_routine":
       preview.routines = replaceById(
         preview.routines,

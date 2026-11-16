@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![definition(
         "shell_run",
-        "Run a shell command after host execution is approved. Optional workingDirectory must be the Orbit workspace or an assigned project folder. The command itself can access the host beyond file-tool folders. Output, time and process lifetime are bounded.",
+        "Run a shell command after host execution is approved. Optional workingDirectory must be the Orbit workspace or an assigned project folder. Unassigned registered project folders are excluded from the command and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
         json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Orbit workspace. Defaults to the Orbit workspace."},"shell":{"type":"string","enum":["/bin/sh","/bin/bash","/bin/zsh"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
         &["command"],
     )]
@@ -61,10 +61,8 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
         workspace.clone()
     };
     let environment = managed_environment(&context.data_directory)?;
-    let mut cmd = tokio::process::Command::new(shell);
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(working_directory)
+    let mut cmd = crate::shell_scope::command(shell, command, &context.denied_roots)?;
+    cmd.current_dir(working_directory)
         .env_clear()
         .env(
             "PATH",
@@ -211,6 +209,161 @@ async fn read_bounded(
 mod tests {
     use super::*;
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn unassigned_projects_are_hidden_from_shell_and_its_children() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let allowed = root.path().join("allowed");
+        let denied = root.path().join("unassigned");
+        for path in [&workspace, &allowed, &denied] {
+            std::fs::create_dir(path).unwrap();
+        }
+        std::fs::write(denied.join("private.txt"), "excluded project contents").unwrap();
+        std::fs::write(allowed.join("visible.txt"), "allowed project contents").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&denied, workspace.join("alias")).unwrap();
+        let context = ToolContext {
+            orbit_id: "scoped-shell".into(),
+            workspace: workspace.clone(),
+            data_directory: root.path().join("data"),
+            allowed_roots: vec![allowed.clone()],
+            denied_roots: vec![denied.clone()],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        };
+        // Values enter shell as data rather than interpolated command syntax.
+        let literal =
+            |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+        for command in [
+            format!("cat {}/private.txt", literal(&denied)),
+            format!("printf changed > {}/private.txt", literal(&denied)),
+            format!("cd {} && cat private.txt", literal(&denied)),
+            format!(
+                "/bin/sh -c 'cat \"$1/private.txt\"' sh {}",
+                literal(&denied)
+            ),
+            "cat alias/private.txt".into(),
+            "printf changed > alias/private.txt".into(),
+        ] {
+            let result = execute(&json!({"command":command}), &context)
+                .await
+                .unwrap();
+            let output: Value = serde_json::from_str(&result.content).unwrap();
+            assert_eq!(
+                output["success"], false,
+                "command bypassed exclusions: {command}"
+            );
+            assert!(
+                !output["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .contains("excluded project contents")
+            );
+            assert_eq!(
+                std::fs::read_to_string(denied.join("private.txt")).unwrap(),
+                "excluded project contents"
+            );
+        }
+        let result = execute(&json!({"command":"cat visible.txt; printf updated > written.txt", "workingDirectory": allowed}), &context).await.unwrap();
+        let output: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(output["success"], true);
+        assert!(
+            output["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("allowed project contents")
+        );
+        assert_eq!(
+            std::fs::read_to_string(allowed.join("written.txt")).unwrap(),
+            "updated"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shell_cannot_reopen_host_proc_or_remove_the_exclusion_mount() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let denied = root.path().join("unassigned");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&denied).unwrap();
+        std::fs::write(denied.join("private.txt"), "excluded project contents").unwrap();
+        let context = ToolContext {
+            orbit_id: "scoped-shell".into(),
+            workspace,
+            data_directory: root.path().join("data"),
+            allowed_roots: vec![],
+            denied_roots: vec![denied.clone()],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        };
+        let command = format!(
+            "cat /proc/1/root{}/private.txt; umount '{}'; mv '{}' '{}-moved'",
+            denied.display(),
+            denied.display(),
+            denied.display(),
+            denied.display()
+        );
+        let result = execute(&json!({"command": command}), &context)
+            .await
+            .unwrap();
+        let output: Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(output["success"], false);
+        assert!(
+            !output["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("excluded project contents")
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn cancellation_terminates_scoped_shell_descendants() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let denied = root.path().join("unassigned");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&denied).unwrap();
+        let context = ToolContext {
+            orbit_id: "scoped-cancel".into(),
+            workspace: workspace.clone(),
+            data_directory: root.path().join("data"),
+            allowed_roots: vec![],
+            denied_roots: vec![denied],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        };
+        let token = context.cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            token.cancel();
+        });
+        let started = std::time::Instant::now();
+        assert!(
+            execute(
+                &json!({"command":"(sleep 1; echo survived > escaped.txt) & wait"}),
+                &context
+            )
+            .await
+            .unwrap_err()
+            .contains("cancelled")
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(
+            !workspace.join("escaped.txt").exists(),
+            "scoped child survived cancellation"
+        );
+    }
+
     #[tokio::test]
     async fn progress_arrives_before_command_finishes_and_survives_cancellation() {
         let root = tempfile::tempdir().unwrap();
@@ -220,6 +373,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
@@ -269,6 +423,7 @@ mod tests {
             data_directory: root.path().into(),
             workspace: workspace.clone(),
             allowed_roots: vec![],
+            denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
@@ -296,6 +451,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),
@@ -334,6 +490,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![project.path().into()],
+            denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
@@ -374,6 +531,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),

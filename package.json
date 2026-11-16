@@ -15,6 +15,7 @@
     "test:models": "node --test src/components/modelSearch.test.mjs",
     "test:profiles": "node --test src/components/orbitProfile.test.mjs",
     "test:tools": "node --test src/components/toolPresentation.test.mjs",
+    "test:projects": "node --test src/projectLocation.test.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "node node_modules/@tauri-apps/cli/tauri.js"
   },

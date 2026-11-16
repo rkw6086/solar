@@ -41,7 +41,7 @@ The browser preview uses isolated local data and starts with no Orbits, just lik
 
 1. Open **Connections** and configure LiteLLM, an OpenAI-compatible endpoint, or subscription sign-in.
 2. Create your first Orbit with a name, optional gender, personality, and tasks. Search all model connections in one field; model labels include their provider. Solar does not create Orbits automatically.
-3. Choose when it should ask for approval. Every Orbit can request all available tools. Add a project folder and grant membership to Orbits that should share it; assigned projects are available even in individual chats with no selected project.
+3. Choose when it should ask for approval. Every Orbit can request all available tools. Choose a project folder in **Projects**; Solar uses the Git repository root when the folder is inside a repository, and names the project after its root folder. Assign access in the Orbit's settings. Assigned projects are available even in individual chats with no selected project.
 4. Open an individual conversation or create a group with a lead Orbit. The lead can delegate to members of that group.
 5. Use **Bring Orbits to desktop**, or click the sun. Planets expand into fixed slots around it; drag the sun to move the whole group, and click a planet to open its mini-chat.
 
@@ -98,7 +98,7 @@ Every Orbit receives the built-in and connected MCP tool definitions; legacy too
 
 An Orbit’s assigned projects are listed in its context and through `project_list`, with names, IDs, descriptions, and folder paths. File tools can access those folders without selecting a project for the conversation. `shell_run` accepts `workingDirectory` for running commands in an assigned project.
 
-Built-in file operations use directory capabilities and reject path/symlink escapes. Shell programs, browser processes, and locally installed MCP servers run with the user's host privileges after authorization. Their working directories are not an OS sandbox. Native OS containment of arbitrary third-party executables still requires separate macOS qualification.
+Built-in file operations use directory capabilities and reject path/symlink escapes. Shell commands also exclude registered project folders that the task's Orbits have not been assigned, using Bubblewrap on Linux and the system sandbox on macOS. Commands fail closed when that isolation is required but unavailable. Other host files remain accessible after shell authorization; this is a project-folder boundary rather than general isolation of hostile code. Browser processes, existing services, and locally installed MCP servers have their own host access and are not covered by shell exclusions. Native macOS enforcement requires acceptance testing on a Mac.
 
 Screen sharing begins only through a user action and macOS's content picker. Application/window sharing supports observation. Computer control requires whole-display sharing and Accessibility authorization, and is bounded to that display. Sharing stops at task completion or through Solar or the system stop control.
 
@@ -152,6 +152,8 @@ cargo check -p solar
 On Linux with Homebrew first in PATH, system GTK/WebKit discovery may need `PKG_CONFIG=/usr/bin/pkg-config`. The Rust application tests use loopback fixtures and dummy credentials.
 
 Native acceptance needs an actual Mac. Verify screen-picker cancellation/revocation, Accessibility controls, keyboard focus, transparent hit regions, expand/collapse animation, attention chimes and camera-housing placement, Spaces/fullscreen behavior, and mixed-scale displays before distributing a build. The Swift helper and macOS Keychain paths cannot be exercised on Linux.
+
+The main window uses Solar's own title bar with drag, minimize, maximize/restore, and close controls. Closing keeps the existing menu-bar behavior. The opening animation and setup screens retain their borderless presentation.
 
 ## Package for macOS
 

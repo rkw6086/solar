@@ -7,6 +7,7 @@ mod onboarding;
 mod orbit_prompt;
 mod orbit_reset;
 mod profile_config;
+mod project_location;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
 mod remote_logging;
 #[cfg(any(feature = "desktop", test))]

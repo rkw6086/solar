@@ -53,6 +53,7 @@ import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
 import { ResetSolar } from "./components/ResetSolar";
+import { WindowTitleBar } from "./components/WindowTitleBar";
 import {
   GroupForm,
   McpForm,
@@ -436,6 +437,8 @@ export function App() {
   }
 
   return (
+    <div className="desktop-frame">
+      <WindowTitleBar />
     <div className="app-shell">
       <aside className="sidebar">
         <button
@@ -940,14 +943,14 @@ export function App() {
               <div className="page-content">
                 <PageHeading
                   title="Projects"
-                  description="Shared context and a folder for work that belongs together."
+                  description="Your project folders and the context that helps work move forward."
                 >
                   <button
                     className="button button-primary"
                     onClick={() => setDialog({ kind: "project" })}
                   >
                     <Plus size={16} />
-                    New project
+                    Add folder
                   </button>
                 </PageHeading>
                 {data.projects.length ? (
@@ -973,50 +976,28 @@ export function App() {
                         </div>
                         <h3>{project.name}</h3>
                         <p>
-                          {project.description || "Shared project workspace"}
+                          {project.description || "Project folder"}
                         </p>
                         <code>{project.directory}</code>
-                        <div className="project-members">
-                          {data.orbits
-                            .filter((orbit) =>
-                              orbit.projectIds.includes(project.id),
-                            )
-                            .map((orbit) => (
-                              <Planet
-                                key={orbit.id}
-                                name={orbit.name}
-                                color={orbit.color}
-                                size={32}
-                              />
-                            ))}
-                          <span>
-                            {
-                              data.orbits.filter((orbit) =>
-                                orbit.projectIds.includes(project.id),
-                              ).length
-                            }{" "}
-                            Orbits with access
-                          </span>
-                        </div>
                       </article>
                     ))}
                   </div>
                 ) : (
                   <Empty
                     icon={<Folder size={29} />}
-                    title="Give your work a shared home"
+                    title="Keep your project folders together"
                     action={
                       <button
                         className="button button-primary"
                         onClick={() => setDialog({ kind: "project" })}
                       >
                         <Plus size={15} />
-                        Create a project
+                        Add your first folder
                       </button>
                     }
                   >
-                    Add a local folder and project context, then choose which
-                    Orbits can work with it.
+                    Choose a local folder and add goals, background, or useful notes.
+                    Solar names the project after its root folder.
                   </Empty>
                 )}
               </div>
@@ -2009,6 +1990,7 @@ export function App() {
           </div>
         </Modal>
       )}
+    </div>
     </div>
   );
 }

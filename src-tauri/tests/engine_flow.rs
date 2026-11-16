@@ -119,6 +119,89 @@ async fn finished(engine: &Arc<Engine>, task_id: &str) {
     .expect("task must complete");
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn shell_cannot_read_or_change_an_unassigned_registered_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let projects = tempfile::tempdir().unwrap();
+    let allowed = projects.path().join("allowed");
+    let denied = projects.path().join("unassigned");
+    std::fs::create_dir(&allowed).unwrap();
+    std::fs::create_dir(&denied).unwrap();
+    std::fs::write(denied.join("private.txt"), "private project marker").unwrap();
+    std::fs::write(allowed.join("visible.txt"), "allowed project marker").unwrap();
+    let quoted = format!("'{}'", denied.display());
+    let command = format!(
+        "if cat {quoted}/private.txt; then exit 31; fi; \
+         if printf changed > {quoted}/private.txt; then exit 32; fi; \
+         if (cd {quoted} && cat private.txt); then exit 33; fi; \
+         cat visible.txt; printf changed > allowed-output.txt"
+    );
+    let call = json!({"role":"assistant","tool_calls":[{"index":0,"id":"scope-shell","type":"function","function":{"name":"shell_run","arguments":json!({
+        "command":command, "workingDirectory":allowed,
+    }).to_string()}}]});
+    let (url, server) = fixture(vec![
+        response(call, "tool_calls"),
+        response(json!({"content":"Kept project access scoped."}), "stop"),
+    ])
+    .await;
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    for (id, path) in [("allowed", &allowed), ("unassigned", &denied)] {
+        engine
+            .save_project(Project {
+                id: id.into(),
+                name: id.into(),
+                directory: path.to_string_lossy().into(),
+                description: String::new(),
+            })
+            .unwrap();
+    }
+    let mut orbit = engine.orbit("assistant").unwrap();
+    orbit.autonomy = "trusted".into();
+    orbit.project_ids = vec!["allowed".into()];
+    engine.save_orbit(orbit).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Project scope".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Work in the assigned project.".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let messages = engine.messages(&chat.id).unwrap();
+    let activity = messages
+        .iter()
+        .find_map(|message| message.tool_activity.as_ref())
+        .unwrap();
+    assert_eq!(activity.exit_code, Some(0), "{}", activity.output);
+    assert!(activity.output.contains("allowed project marker"));
+    assert!(!activity.output.contains("private project marker"));
+    assert_eq!(
+        std::fs::read_to_string(denied.join("private.txt")).unwrap(),
+        "private project marker"
+    );
+    assert_eq!(
+        std::fs::read_to_string(allowed.join("allowed-output.txt")).unwrap(),
+        "changed"
+    );
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !requests[0]["messages"]
+            .to_string()
+            .contains(&denied.to_string_lossy().to_string())
+    );
+    engine.shutdown().await;
+}
+
 #[tokio::test]
 async fn shell_activity_streams_then_finishes_with_incremental_git_changes() {
     let directory = tempfile::tempdir().unwrap();
