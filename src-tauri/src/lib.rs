@@ -37,6 +37,8 @@ mod desktop_layout;
 mod desktop_logging;
 #[cfg(feature = "desktop")]
 mod desktop_onboarding;
+#[cfg(feature = "desktop")]
+mod desktop_popup;
 #[cfg(any(feature = "desktop", test))]
 mod sound_effects;
 #[cfg(feature = "desktop")]

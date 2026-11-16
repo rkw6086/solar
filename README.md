@@ -153,7 +153,7 @@ On Linux with Homebrew first in PATH, system GTK/WebKit discovery may need `PKG_
 
 Native acceptance needs an actual Mac. Verify screen-picker cancellation/revocation, Accessibility controls, keyboard focus, transparent hit regions, expand/collapse animation, attention chimes and camera-housing placement, Spaces/fullscreen behavior, and mixed-scale displays before distributing a build. The Swift helper and macOS Keychain paths cannot be exercised on Linux.
 
-The main window uses Solar's own title bar with drag, minimize, maximize/restore, and close controls. Closing keeps the existing menu-bar behavior. The opening animation and setup screens retain their borderless presentation.
+The main window uses the normal system title bar and keeps its close-to-menu-bar behavior. Widget popup chats are borderless and dismiss when you click elsewhere; conversations and ongoing work remain saved. Native screen selection and profile saving keep their popup open until they finish. The opening animation and setup screens retain their borderless presentation.
 
 ## Package for macOS
 

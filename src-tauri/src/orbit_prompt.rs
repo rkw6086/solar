@@ -40,6 +40,17 @@ pub(crate) fn cancel_all_analyses() {
     }
 }
 
+#[cfg(feature = "desktop")]
+pub(crate) fn cancel_window_analyses(owner: &str) {
+    if let Ok(analyses) = ANALYSES.lock() {
+        for (key, token) in analyses.iter() {
+            if key.owner == owner {
+                token.cancel();
+            }
+        }
+    }
+}
+
 /// Identity and generated instructions used by the runtime on every request.
 pub(crate) fn orbit_preamble(orbit: &Orbit) -> String {
     let gender = if orbit.gender.trim().is_empty() {
@@ -399,6 +410,7 @@ pub(crate) async fn update_orbit_profile(
         return Err("Edit this Orbit in its chat or the main Solar window.".into());
     }
     let (_guard, token) = register_analysis(window.label(), request_id)?;
+    let _popup = crate::desktop_popup::hold(&window);
     engine.update_orbit_profile(orbit, token).await
 }
 

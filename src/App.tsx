@@ -53,7 +53,6 @@ import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
 import { ResetSolar } from "./components/ResetSolar";
-import { WindowTitleBar } from "./components/WindowTitleBar";
 import {
   GroupForm,
   McpForm,
@@ -437,8 +436,6 @@ export function App() {
   }
 
   return (
-    <div className="desktop-frame">
-      <WindowTitleBar />
     <div className="app-shell">
       <aside className="sidebar">
         <button
@@ -1990,7 +1987,6 @@ export function App() {
           </div>
         </Modal>
       )}
-    </div>
     </div>
   );
 }

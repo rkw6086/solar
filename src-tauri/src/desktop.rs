@@ -197,7 +197,12 @@ fn save_routine(engine: AppState<'_>, routine: Routine) -> Result<Routine, Strin
     engine.save_routine(routine)
 }
 #[tauri::command]
-async fn start_screen_share(engine: AppState<'_>, orbit_id: String) -> Result<(), String> {
+async fn start_screen_share(
+    window: tauri::WebviewWindow,
+    engine: AppState<'_>,
+    orbit_id: String,
+) -> Result<(), String> {
+    let _popup = crate::desktop_popup::hold(&window);
     engine.start_screen_share(&orbit_id).await
 }
 #[tauri::command]
@@ -516,6 +521,8 @@ pub(crate) fn open_orbit_chat(
     )
     .title(format!("{} · Solar", orbit.name))
     .incognito(true)
+    .decorations(false)
+    .visible(false)
     .background_color(tauri::webview::Color(22, 31, 36, 255))
     .inner_size(410.0, 560.0)
     .min_inner_size(320.0, 400.0)
@@ -525,10 +532,13 @@ pub(crate) fn open_orbit_chat(
         let (x, y) = clamp_to_screen(&app, p.x + 90.0, p.y - 180.0, 410.0, 560.0);
         builder = builder.position(x, y);
     }
-    if let Err(error) = builder.build() {
+    let window = builder.build().map_err(|error| {
         crate::desktop_chat::clear_window(&app, &label);
-        return Err(error.to_string());
-    }
+        error.to_string()
+    })?;
+    crate::desktop_popup::attach(&window);
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
     crate::desktop_attention::refresh(&app);
     Ok(())
 }
@@ -836,6 +846,7 @@ pub fn run() {
         .setup(|app| {
             app.manage(crate::desktop_intro::IntroWindowState::default());
             app.manage(crate::desktop_chat::ChatPresence::default());
+            app.manage(crate::desktop_popup::PopupDismissals::default());
             let home_dir = app.path().home_dir()?;
             let data_dir =
                 crate::storage_root::prepare(&home_dir).map_err(std::io::Error::other)?;
@@ -993,6 +1004,7 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if matches!(event, WindowEvent::Destroyed) {
+                crate::orbit_prompt::cancel_window_analyses(window.label());
                 crate::desktop_chat::clear_window(window.app_handle(), window.label());
                 crate::desktop_attention::refresh(window.app_handle());
             }
