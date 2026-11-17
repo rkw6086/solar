@@ -14,7 +14,7 @@ for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENT
 done
 [[ $APPLE_SIGNING_IDENTITY == 'Developer ID Application: '* ]] || fail 'Use a Developer ID Application identity.'
 
-work=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/solar-signing-check.XXXXXX")
+work=$(mktemp -d "$HOME/Library/Keychains/solar-signing-check.XXXXXX")
 keychain="$work/signing.keychain-db"
 keychain_password=$(/usr/bin/openssl rand -hex 32)
 original_default=()
@@ -99,12 +99,25 @@ search_lists_touched=true
 bounded /usr/bin/security create-keychain -p "$keychain_password" "$keychain" >/dev/null
 bounded /usr/bin/security set-keychain-settings -lut 600 "$keychain"
 bounded /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
+bounded /usr/bin/security list-keychains -s "$keychain" "${original_default[@]}"
 /usr/bin/openssl x509 -in scripts/ci/certificates/DeveloperIDG2CA.pem -outform DER -out "$work/intermediate.cer"
 bounded /usr/bin/security add-certificates -k "$keychain" "$work/intermediate.cer"
 bounded /usr/bin/security import "$work/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 bounded /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 bounded /usr/bin/security list-keychains -d user -s "$keychain" "${original_user[@]}"
 bounded /usr/bin/security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$keychain" > "$work/leaf.pem"
+bounded /usr/bin/security find-certificate -a -p "$keychain" > "$work/keychain-certificates.pem"
+python3 - "$work/keychain-certificates.pem" "$work" <<'PY'
+import pathlib, re, subprocess, sys
+blocks = re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', pathlib.Path(sys.argv[1]).read_text(), re.S)
+print(f'Certificates actually stored in temporary keychain: {len(blocks)}')
+for index, block in enumerate(blocks):
+    path = pathlib.Path(sys.argv[2]) / f'inventory-{index}.pem'
+    path.write_text(block)
+    result = subprocess.run(['/usr/bin/openssl', 'x509', '-in', str(path), '-noout', '-subject', '-fingerprint', '-sha256'], capture_output=True, text=True, timeout=10)
+    if result.returncode == 0:
+        print(result.stdout.strip())
+PY
 identity_sha1=$(/usr/bin/openssl x509 -in "$work/leaf.pem" -noout -fingerprint -sha1 | sed 's/.*=//' | tr -d ':')
 [[ $identity_sha1 =~ ^[A-Fa-f0-9]{40}$ ]] || fail 'Could not select the exact signing certificate.'
 rm -f "$work/certificate.p12"
