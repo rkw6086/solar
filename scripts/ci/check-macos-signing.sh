@@ -123,7 +123,7 @@ verify_chain() {
   shift
   if [[ ${1:-} == --basic ]]; then policy=basic; shift; fi
   if [[ ${1:-} == --network ]]; then local_only=false; shift; fi
-  verification_args=(-p "$policy" -P -c "$work/leaf.pem")
+  verification_args=(-p "$policy" -P -v -c "$work/leaf.pem")
   if [[ $local_only == true ]]; then verification_args+=(-L); fi
   bounded /usr/bin/security verify-cert "${verification_args[@]}" "$@" > "$work/$label.chain" 2> "$work/$label.error" || status=$?
   echo "Certificate verification ($label): exit $status"
@@ -138,7 +138,7 @@ for index, block in enumerate(blocks):
     if result.returncode == 0:
         print(result.stdout.strip())
 PY
-  if [[ $status != 0 ]]; then sed -n '1,12p' "$work/$label.error"; fi
+  if [[ $status != 0 ]]; then sed -n '1,80p' "$work/$label.error"; fi
 }
 
 probe() {
