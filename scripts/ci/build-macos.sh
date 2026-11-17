@@ -12,11 +12,10 @@ xcrun --find clang >/dev/null
 xcrun --find notarytool >/dev/null
 xcrun --find stapler >/dev/null
 
-# Refuse mismatched version tags, rather than publishing the wrong app version.
+# Only an exact version tag can produce a release build.
 version=$(node -p 'JSON.parse(require("fs").readFileSync("src-tauri/tauri.conf.json", "utf8")).version')
-if [[ ${GITHUB_REF:-} == refs/tags/* ]]; then
-  [[ $GITHUB_REF == "refs/tags/v$version" ]] || fail "Tag must be v$version to match tauri.conf.json."
-fi
+[[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == "refs/tags/$version" ]] || fail "Release builds require a pushed $version tag."
+node scripts/release.mjs check "$version"
 [[ -z $(git status --porcelain) ]] || fail 'Build requires a clean checkout.'
 export SOLAR_SOURCE_COMMIT
 SOLAR_SOURCE_COMMIT=$(git rev-parse HEAD)
@@ -30,6 +29,7 @@ corepack pnpm run test:models
 corepack pnpm run test:profiles
 corepack pnpm run test:tools
 corepack pnpm run test:projects
+corepack pnpm run test:release
 cargo fmt --all -- --check
 
 # Do not put any signing/notarization secrets in this step's environment.

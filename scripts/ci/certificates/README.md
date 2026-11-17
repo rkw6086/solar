@@ -10,9 +10,3 @@ Its certificate SHA-256 fingerprint is
 The release script adds it only to the temporary signing keychain. It does not
 install a new trust anchor or change the Mac's certificate trust settings.
 The signing chain must verify against the Mac's existing trusted roots.
-
-`AppleRootCA.pem` is the public certificate from
-<https://www.apple.com/appleca/AppleIncRootCertificate.cer>, with SHA-256
-`b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024`.
-The diagnostic check can add this certificate to its temporary keychain to
-test complete-chain discovery; it never assigns trust to that certificate.

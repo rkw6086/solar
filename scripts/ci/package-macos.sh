@@ -6,6 +6,10 @@ umask 077
 
 fail() { echo "Solar macOS package: $*" >&2; exit 1; }
 [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail 'Use the native macos-arm64 runner.'
+[[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == refs/tags/* ]] || fail 'Signing requires a pushed version tag.'
+version=${GITHUB_REF#refs/tags/}
+[[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Use a bare stable version tag such as 0.1.0.'
+[[ ${SOLAR_RELEASE_VERSION:-} == "$version" ]] || fail 'Validated release version is missing or does not match the tag.'
 for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8 CARGO_TARGET_DIR SOLAR_RELEASE_DIR; do
   [[ -n ${!variable:-} ]] || fail "Missing Gitea secret or job variable: $variable"
 done
@@ -18,6 +22,8 @@ done
 
 app="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Solar.app"
 [[ -x "$app/Contents/MacOS/solar" && -x "$app/Contents/MacOS/solar-native-helper" ]] || fail 'Build the complete app first.'
+bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+[[ $bundle_version == "$version" ]] || fail 'App bundle version does not match the release tag.'
 # macOS's basic certificate-chain lookup must discover this keychain too.
 # Register it in the standard location before importing its certificates.
 work=$(mktemp -d "$HOME/Library/Keychains/solar-sign.XXXXXX")
@@ -135,8 +141,6 @@ xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$app"
 
-version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]] || fail 'Unexpected app version.'
 stage="$work/dmg-root"
 mkdir "$stage"
 ditto "$app" "$stage/Solar.app"

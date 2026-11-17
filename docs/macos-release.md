@@ -2,7 +2,7 @@
 
 Solar's release workflow is [`.gitea/workflows/macos-release.yml`](../.gitea/workflows/macos-release.yml). [`scripts/ci/build-macos.sh`](../scripts/ci/build-macos.sh) builds and checks the app; [`scripts/ci/package-macos.sh`](../scripts/ci/package-macos.sh) signs and packages it.
 
-The workflow targets the existing **`macos-arm64`** runner and produces an Apple Silicon DMG. It builds Solar and the bundled Swift helper, signs the helper before the app, notarizes and staples the app, creates a DMG containing `Solar.app` and an Applications shortcut, then signs, notarizes, staples, and verifies the DMG. The output is an Actions artifact; the workflow does not create a public release or publish a download automatically.
+The workflow targets the existing **`macos-arm64`** runner and produces an Apple Silicon DMG only when a new version tag is pushed. It builds Solar and the bundled Swift helper, signs the helper before the app, notarizes and staples the app, creates a DMG containing `Solar.app` and an Applications shortcut, then signs, notarizes, staples, and verifies the DMG. After those checks succeed, it publishes the DMG and `SHA256SUMS` on [Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases), using that version's changelog notes.
 
 The files alone do not configure Apple signing. Complete the certificate, API-key, and Gitea-secret steps below before running the workflow.
 
@@ -106,14 +106,45 @@ Remove any repository-level overrides for these seven names after confirming the
 
 Each repository must have **Actions enabled** and a signing workflow that references these secret names. Sharing the credentials makes them available to Galaxy; it does not create Galaxy's release workflow.
 
-The packaging script creates and registers a temporary keychain under the runner user's `~/Library/Keychains` before importing the certificate and Apple's public Developer ID G2 intermediate. It verifies both basic and code-signing certificate chains against macOS's existing trusted roots before signing; it does not change certificate trust settings. It restores the original keychain search list, deletes the temporary keychain, and removes temporary credential files on exit. The preceding build step receives no signing secrets and uses Tauri's `--no-sign` option; packaging then signs the helper and app explicitly. Do not enable shell tracing (`set -x`) around credential handling. Protect `main` and release tags so unreviewed changes cannot run with signing credentials.
+The packaging script creates and registers a temporary keychain under the runner user's `~/Library/Keychains` before importing the certificate and Apple's public Developer ID G2 intermediate. It verifies both basic and code-signing certificate chains against macOS's existing trusted roots before signing; it does not change certificate trust settings. It restores the original keychain search lists, deletes the temporary keychain, and removes temporary credential files on exit. The preceding build step receives no signing secrets and uses Tauri's `--no-sign` option; packaging then signs the helper and app explicitly. Do not enable shell tracing (`set -x`) around credential handling. Protect `main` and version tags so unreviewed changes cannot run with signing credentials.
 
-## 5. Run and download
+The publishing step uses Gitea's built-in Actions token with release-write permission. It does not require another personal access token or another Apple secret.
 
-For the first run, open **Actions → macOS release → Run workflow**, choose **main**, and start it. Manual runs from other branches are skipped. Subsequent releases can run from a version tag such as `v0.1.0`; the tag must exactly match `v` plus the version in `src-tauri/tauri.conf.json`. Pull requests do not trigger this signing workflow. Protect the `v*` tag pattern in Gitea as well as `main`, because pushing a tag runs code with the signing secrets.
+The Mac uploads its verified files as an Actions artifact first. A separate Linux job publishes those same files to Gitea Releases, so a failed publication can be retried without signing the app again. Existing release files are never silently replaced; published versions remain immutable.
+
+## 5. Prepare and publish a version
+
+The Git tag is the release version: **`0.1.0`**, not `v0.1.0`. Use stable Semantic Versioning in the form `MAJOR.MINOR.PATCH`. Prerelease suffixes and build metadata are not currently supported, so the same values also fit Apple's app-version requirements. **About Solar** displays the version packaged into the app.
+
+All Rust crates inherit the workspace version. The release helper keeps `Cargo.toml`, `package.json`, `src-tauri/tauri.conf.json`, and the four local packages in `Cargo.lock` synchronized. Check them at any time with:
+
+```sh
+corepack pnpm run version:check
+```
+
+For the next release, choose `patch` for fixes, `minor` for features, or `major` for breaking changes. You can also supply an exact version:
+
+```sh
+corepack pnpm run release:prepare patch
+# Alternatives: release:prepare minor, release:prepare major, release:prepare 0.2.0
+```
+
+This prepares version files; it does not commit or publish anything. Add release notes to `CHANGELOG.md` under an exact heading such as `## [0.1.1]`, run the checks, and commit and push the changes to `main`. Then create and push the matching annotated tag. This example publishes `0.1.1`; replace it with the version you prepared:
+
+```sh
+corepack pnpm run version:check
+git add Cargo.toml Cargo.lock package.json src-tauri/tauri.conf.json CHANGELOG.md
+git commit -m "release: 0.1.1"
+git push origin main
+corepack pnpm run release:tag 0.1.1 --push
+```
+
+For the initial release, use `0.1.0` with matching version files and changelog notes. Without `--push`, `release:tag` creates the tag locally and prints the command to push it. The helper checks the version, notes, and Git state before tagging.
+
+Only a newly pushed version tag starts macOS signing. Branch pushes and pull requests run release checks without Apple credentials; there is no manual signing workflow. CI rejects mismatched, moved, or reused tags and does not replace an already published release. Treat version tags as permanent: source changes for a release belong in a new version. Protect the version-tag pattern in Gitea as well as `main`.
 
 The job verifies the app's code signature, notarization ticket, and Gatekeeper assessment, then does the corresponding checks for the DMG. Each Apple submission waits for up to 90 minutes; Apple's first notarization submission may take longer than later submissions. Failure leaves the job failed; an unsigned or rejected package is not presented as a successful release. [Apple notarization overview](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution/)
 
-Download **`Solar-macos-arm64`** from the successful run's **Artifacts** section. It contains the DMG, `SHA256SUMS`, and available notarization logs. The workflow uses Gitea's v4-compatible upload action pinned to a commit; build and artifact files live in job-specific paths under the runner's temporary directory and are removed after upload. Artifacts are retained for 14 days. Test the downloaded DMG on a Mac: mount it, drag Solar to Applications, launch it, and exercise screen sharing and Accessibility permissions. Signing/notarization checks do not replace that functional test. [Gitea artifacts](https://docs.gitea.com/usage/actions/artifacts/)
+Download the DMG and `SHA256SUMS` from the version's [Gitea Release](https://git.ryserve.net/internal/solar-chat/releases). A secondary Actions artifact named **`Solar-VERSION-macos-arm64`**, for example `Solar-0.1.0-macos-arm64`, also contains those files and available notarization logs. The workflow uses Gitea's v4-compatible upload action pinned to a commit; build and artifact files live in job-specific temporary paths and are removed after upload. Actions artifacts are retained for 14 days. Test the downloaded DMG on a Mac: mount it, drag Solar to Applications, launch it, and exercise screen sharing and Accessibility permissions. Signing/notarization checks do not replace that functional test. [Gitea artifacts](https://docs.gitea.com/usage/actions/artifacts/)
 
 This initial workflow builds Apple Silicon only. Solar's helper staging currently supports separate `aarch64-apple-darwin` and `x86_64-apple-darwin` builds, not a universal helper; an Intel or universal release needs a separate extension to the pipeline.

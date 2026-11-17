@@ -63,7 +63,7 @@ elif tool == 'codesign':
         assert args[args.index('--keychain')+1] in search
     if '-dv' in args:
         print('TeamIdentifier=ABCDEFGHIJ\nflags=0x10000(runtime)', file=sys.stderr)
-elif tool == 'PlistBuddy': print('0.1.0')
+elif tool == 'PlistBuddy': print(os.environ.get('MOCK_BUNDLE_VERSION', '0.1.0'))
 elif tool == 'ditto':
     if '-c' in args: pathlib.Path(args[-1]).write_bytes(b'dummy-zip')
     else: shutil.copytree(args[-2], args[-1])
@@ -110,6 +110,8 @@ class ReleaseTest(unittest.TestCase):
             'RUNNER_TEMP': str(self.root), 'CARGO_TARGET_DIR': str(self.root / 'target'),
             'SOLAR_RELEASE_DIR': str(self.root / 'artifacts'), 'MOCK_CALLS': str(self.calls),
             'MOCK_EFFECTIVE_LIST': str(self.root / 'effective-list.json'),
+            'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/tags/0.1.0',
+            'SOLAR_RELEASE_VERSION': '0.1.0',
             'APPLE_CERTIFICATE': base64.b64encode(b'dummy-p12').decode(),
             'APPLE_CERTIFICATE_PASSWORD': 'dummy-p12-password',
             'APPLE_SIGNING_IDENTITY': 'Developer ID Application: Solar Test (ABCDEFGHIJ)',
@@ -246,6 +248,23 @@ class ReleaseTest(unittest.TestCase):
         result = self.run_script('package-macos.sh')
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('security', [call[0] for call in self.recorded()])
+
+    def test_branch_and_manual_invocations_cannot_sign(self):
+        self.prepare_app()
+        for event, ref in [('push', 'refs/heads/main'), ('workflow_dispatch', 'refs/tags/0.1.0')]:
+            self.env['GITHUB_EVENT_NAME'] = event
+            self.env['GITHUB_REF'] = ref
+            result = self.run_script('package-macos.sh')
+            self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[0] == 'security' for call in self.recorded()))
+
+    def test_bundle_version_must_match_tag_before_importing_keys(self):
+        self.prepare_app()
+        self.env['MOCK_BUNDLE_VERSION'] = '0.2.0'
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('bundle version', result.stderr)
+        self.assertFalse(any(call[0] == 'security' for call in self.recorded()))
 
 
 if __name__ == '__main__':

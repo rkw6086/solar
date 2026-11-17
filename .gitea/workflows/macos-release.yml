@@ -1,20 +1,30 @@
 name: macOS release
 
 on:
-  workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - '[0-9]*.[0-9]*.[0-9]*'
 
 jobs:
   macos:
     # Register this runner label as macos-arm64:host. Do not run signing in Docker.
     runs-on: macos-arm64
-    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.event.after != '0000000000000000000000000000000000000000'
     timeout-minutes: 240
+    permissions:
+      code: read
+      actions: read
+      releases: read
+    outputs:
+      release: ${{ steps.release.outputs.release }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
     env:
       CI: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
       SOLAR_JOB_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      GITEA_SERVER_URL: ${{ github.server_url }}
+      GITEA_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Check out trusted release source
         uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -27,7 +37,15 @@ jobs:
         with:
           node-version: '24.17.0'
 
+      - name: Validate a new version tag
+        id: release
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: node scripts/ci/check-release-tag.mjs
+
       - name: Set up pinned build tools
+        if: steps.release.outputs.release == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -44,12 +62,14 @@ jobs:
           echo "SOLAR_RELEASE_DIR=$RUNNER_TEMP/solar-artifacts-$SOLAR_JOB_ID" >> "$GITHUB_ENV"
 
       - name: Build and check Solar without signing credentials
+        if: steps.release.outputs.release == 'true'
         shell: bash
         run: |
-          python3 scripts/ci/test_macos_release.py
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
           bash scripts/ci/build-macos.sh
 
       - name: Sign, notarize, staple, and create DMG
+        if: steps.release.outputs.release == 'true'
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -62,10 +82,11 @@ jobs:
         run: bash scripts/ci/package-macos.sh
 
       - name: Upload verified DMG and checksums
+        if: steps.release.outputs.release == 'true'
         # Gitea's v4-compatible artifact action; upstream upload-artifact rejects GHES.
         uses: https://gitea.com/actions/gitea-upload-artifact@81f940d004763f986ba3582c007fd842dd5cb0d7 # v4
         with:
-          name: Solar-macos-arm64
+          name: Solar-${{ steps.release.outputs.version }}-macos-arm64
           path: ${{ env.SOLAR_RELEASE_DIR }}/
           if-no-files-found: error
           retention-days: 14
@@ -83,3 +104,37 @@ jobs:
             [[ "$SOLAR_RELEASE_DIR" == "${RUNNER_TEMP}/solar-artifacts-"* ]]
             rm -rf -- "$CARGO_TARGET_DIR" "$SOLAR_RELEASE_DIR"
           fi
+
+  publish:
+    needs: macos
+    if: needs.macos.result == 'success' && needs.macos.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      code: read
+      actions: read
+      releases: write
+    env:
+      GITEA_SERVER_URL: ${{ github.server_url }}
+      GITEA_REPOSITORY: ${{ github.repository }}
+      SOLAR_RELEASE_VERSION: ${{ needs.macos.outputs.version }}
+      RELEASE_TAG: ${{ needs.macos.outputs.version }}
+      SOLAR_RELEASE_SHA: ${{ needs.macos.outputs.sha }}
+    steps:
+      - name: Check out release publisher
+        uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download verified release files
+        # Patched v4 artifact protocol for Gitea; pinned to reviewed source.
+        uses: https://github.com/christopherHX/gitea-download-artifact@75635f32b4c1c41c4b3d64e8f85210112ed4c9c7 # v4
+        with:
+          name: Solar-${{ needs.macos.outputs.version }}-macos-arm64
+          path: ${{ runner.temp }}/solar-release
+      - name: Publish signed release to Gitea
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          export SOLAR_RELEASE_DIR="$RUNNER_TEMP/solar-release"
+          python3 scripts/ci/publish-release.py

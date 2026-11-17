@@ -37,6 +37,7 @@ import {
 import { api, native } from "./api";
 import { listen } from "@tauri-apps/api/event";
 import { useSolar } from "./useSolar";
+import { useAppVersion } from "./useAppVersion";
 import { activeTask, errorText, isProviderConfigured } from "./types";
 import type {
   Conversation,
@@ -142,6 +143,7 @@ function PageHeading({
 
 export function App() {
   const { data, loading, error: loadError, refresh } = useSolar();
+  const appVersion = useAppVersion();
   const [page, setPage] = useState<Page>("home");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -1770,7 +1772,7 @@ export function App() {
                 <section className="settings-section">
                   <h2>About Solar</h2>
                   <SettingsRow
-                    title="Solar 0.1.0"
+                    title={appVersion ? `Solar ${appVersion}` : "Solar"}
                     description="A local home for your personal team of Orbits."
                   >
                     <span className="value-label">AGPL-3.0-only</span>
@@ -1929,8 +1931,8 @@ export function App() {
       )}
       {dialog?.kind === "help" && (
         <Modal
-          title="Welcome to Solar"
-          subtitle="Your Orbits live here, and work with you on your computer."
+          title="About Solar"
+          subtitle={appVersion ? `Version ${appVersion}` : undefined}
           onClose={() => setDialog(null)}
         >
           <div className="form-body help-body">

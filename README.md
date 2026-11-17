@@ -157,11 +157,18 @@ The main window uses the normal system title bar and keeps its close-to-menu-bar
 
 ## Package for macOS
 
+Official releases use stable Semantic Versioning tags such as **`0.1.0`**, without a `v` prefix. The tag is the app version shown in **About Solar**. All Rust crates and app manifests stay in sync through the release helper:
+
 ```sh
-corepack pnpm tauri build --target aarch64-apple-darwin
+corepack pnpm run release:prepare patch
+corepack pnpm run version:check
 ```
 
-For signed distribution, use the [Gitea macOS release setup](docs/macos-release.md). It explains the `macos-arm64` host runner, Developer ID Application certificate, notarization API key, repository secrets, and the signed/stapled DMG workflow. Signing credentials belong in Gitea secrets, not the repository.
+Add matching notes to `CHANGELOG.md`, commit and push `main`, then run `corepack pnpm run release:tag VERSION --push` with the prepared version. Use `minor`, `major`, or an exact version in place of `patch` when appropriate. The initial release is `0.1.0`; prerelease tags are not currently supported.
+
+Only newly pushed version tags start macOS signing. Branch and pull-request checks have no Apple credentials. A successful release publishes its signed, notarized, and stapled DMG plus checksums on [Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases).
+
+See the [Gitea macOS release setup](docs/macos-release.md) for the full release steps, `macos-arm64` host runner, Developer ID Application certificate, notarization API key, and shared organization secrets. Signing credentials belong in Gitea secrets, not the repository.
 
 ## Architecture and license
 
