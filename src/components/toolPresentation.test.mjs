@@ -68,6 +68,75 @@ test("approvals retain exact shell command and useful context without JSON", () 
   assert.equal(view.directory, "/code");
 });
 
+test("routine creation shows the task, timing, and enabled state without raw data", () => {
+  const view = presentTool(message("routine_create", { prompt: "Review open issues", trigger: "interval", intervalMinutes: 30, enabled: true, projectId: "private-project-id" }, '{"internal":"do not display"}', "running"));
+  assert.equal(view.category, "routine");
+  assert.equal(view.title, "Create routine");
+  assert.equal(view.summary, "Review open issues · Every 30 minutes · Enabled");
+  assert.equal(view.outcome, "Running");
+  assert.equal(view.output, undefined);
+  assert(!JSON.stringify(view).includes("private-project-id"));
+  assert(!JSON.stringify(view).includes("do not display"));
+});
+
+test("routine updates preserve false and summarize event triggers", () => {
+  const paused = presentTool(message("routine_update", { routineId: "private-id", enabled: false }, JSON.stringify({ prompt: "Check the build", trigger: "interval", intervalMinutes: 1, enabled: true })));
+  assert.equal(paused.title, "Update routine");
+  assert.equal(paused.summary, "Check the build · Every 1 minute · Paused");
+  assert(!JSON.stringify(paused).includes("private-id"));
+  for (const [trigger, timing] of [["folder", "When project files change"], ["completion", "After a task completes"]]) {
+    const view = presentTool(message("routine_update", { trigger, intervalMinutes: 60 }, ""));
+    assert.equal(view.summary, timing);
+  }
+  assert.equal(presentTool(message("routine_update", { intervalMinutes: 15 }, "")).summary, "Repeat interval: 15 minutes");
+});
+
+test("routine summaries read saved values and do not invent missing schedules", () => {
+  const saved = { routine: { prompt: "Prepare my daily brief", trigger: "interval", intervalMinutes: 60, enabled: true }, secret: "hidden" };
+  assert.equal(presentTool(message("routine_create", { prompt: "Prepare my daily brief" }, JSON.stringify(saved))).summary, "Prepare my daily brief · Every 60 minutes · Enabled");
+  assert.equal(presentTool(message("routine_create", { prompt: "Prepare my daily brief" }, "", "running")).summary, "Prepare my daily brief");
+  assert.equal(presentTool(message("routine_create", { trigger: "interval", intervalMinutes: 0 }, "", "failed")).summary, "On a repeating interval");
+});
+
+test("routine lists report counts without exposing stored prompts or identifiers", () => {
+  const routines = [{ id: "private-id", prompt: "private task", enabled: true }, { enabled: false }];
+  for (const payload of [routines, { routines }]) {
+    const view = presentTool(message("routine_list", {}, JSON.stringify(payload)));
+    assert.equal(view.category, "routine");
+    assert.equal(view.title, "View routines");
+    assert.equal(view.summary, "2 routines · 1 enabled");
+    assert(!JSON.stringify(view).includes("private"));
+  }
+  assert.equal(presentTool(message("routine_list", {}, "[]")).summary, "0 routines · 0 enabled");
+  assert.equal(presentTool(message("routine_list", {}, '[{"enabled":true}]')).summary, "1 routine · 1 enabled");
+  assert.equal(presentTool(message("routine_list", {}, "", "running")).summary, "View this Orbit’s saved routines");
+});
+
+test("routine run and delete cards use friendly action labels", () => {
+  for (const [name, title, summary] of [["routine_run", "Run routine", "Start this routine now"], ["routine_delete", "Delete routine", "Remove this saved routine"]]) {
+    const view = presentTool(message(name, { routineId: "private-id" }, '{"taskId":"hidden-id"}'));
+    assert.equal(view.category, "routine");
+    assert.equal(view.title, title);
+    assert.equal(view.summary, summary);
+    assert.equal(view.output, undefined);
+    assert(!JSON.stringify(view).includes("private-id"));
+    assert(!JSON.stringify(view).includes("hidden-id"));
+  }
+});
+
+test("starting a routine reports queued work rather than a finished routine", () => {
+  const payload = JSON.stringify({ routineId: "private-id", conversationId: "hidden-id", status: "queued" });
+  const queued = presentTool(message("routine_run", { routineId: "private-id" }, payload));
+  assert.equal(queued.outcome, "Queued");
+  assert.equal(queued.summary, "Queued in a separate routine conversation");
+  assert.equal(queued.output, undefined);
+  assert(!JSON.stringify(queued).includes("private-id"));
+  assert(!JSON.stringify(queued).includes("hidden-id"));
+  assert.equal(presentTool(message("routine_run", {}, payload, "running")).outcome, "Running");
+  assert.equal(presentTool(message("routine_run", {}, payload, "failed")).outcome, "Couldn’t finish");
+  assert.equal(presentTool(message("routine_run", {}, "{}")).outcome, "Complete");
+});
+
 test("diff headings are not counted as added and removed content", () => {
   assert.equal(diffLineKind("+++ b/a.rs"), "header");
   assert.equal(diffLineKind("@@ -1 +1 @@"), "hunk");

@@ -5,6 +5,15 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ## [Unreleased]
 
+### Added
+
+- Five Orbit tools for listing, creating, updating, deleting, and running routines, with readable activity cards and existing approval controls.
+
+### Fixed
+
+- Revalidate routine project access before scheduling and keep stale routines from blocking other work.
+- Preserve scheduling state during edits and prevent deleted routines from being restored by a scheduler update.
+
 ## [0.1.0]
 
 ### Added

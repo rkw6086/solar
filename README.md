@@ -92,11 +92,13 @@ Rust panics use a separate priority delivery attempt capped at 700 milliseconds.
 
 ## Tools and permissions
 
-Built-in tools cover scoped file listing, reading, writing and search, HTTP retrieval, a dedicated Chromium browser, shell commands, MCP tools, screen capture, and macOS application inspection/control. Browser automation requires an installed Chrome or Chromium and uses a separate profile for each Orbit.
+Solar advertises 28 built-in tools, plus tools discovered from connected MCP servers. Built-in tools cover scoped file listing, reading, writing and search, HTTP retrieval, a dedicated Chromium browser, shell commands, screen capture, macOS application inspection/control, projects, Orbit collaboration, memory, and routines. Browser automation requires an installed Chrome or Chromium and uses a separate profile for each Orbit.
 
 Every Orbit receives the built-in and connected MCP tool definitions; legacy tool-category selections no longer hide tools. **Ask** prompts for every tool. **Workspace** allows scoped tools and asks for host execution. **Trusted** allows host tools automatically. Delegated work inherits approval requirements and can access only project folders shared by the participating Orbits. Screen capture still requires explicit screen sharing.
 
 An Orbit’s assigned projects are listed in its context and through `project_list`, with names, IDs, descriptions, and folder paths. File tools can access those folders without selecting a project for the conversation. `shell_run` accepts `workingDirectory` for running commands in an assigned project.
+
+Orbits manage their own routines through `routine_list`, `routine_create`, `routine_update`, `routine_delete`, and `routine_run`. Ask an Orbit to repeat a task at an interval, react to project folder changes, or follow up after a successful user task. Updates can pause or resume a routine; “run now” queues one run even while paused. Routines run while Solar is open and the computer is awake, using the Orbit's current project access and approval preference. Routine runs do not trigger completion routines again. Delegated tasks can inspect their own accessible routines but cannot change or launch them, because a future routine would otherwise escape the delegation's access limits.
 
 Built-in file operations use directory capabilities and reject path/symlink escapes. Shell commands also exclude registered project folders that the task's Orbits have not been assigned, using Bubblewrap on Linux and the system sandbox on macOS. Commands fail closed when that isolation is required but unavailable. Other host files remain accessible after shell authorization; this is a project-folder boundary rather than general isolation of hostile code. Browser processes, existing services, and locally installed MCP servers have their own host access and are not covered by shell exclusions. Native macOS enforcement requires acceptance testing on a Mac.
 

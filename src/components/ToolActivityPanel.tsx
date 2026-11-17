@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, Check, ChevronDown, CircleStop, FileCode2, Files, Globe2, LoaderCircle, Network, Terminal, Users, Wrench, X } from "lucide-react";
+import { ArrowDown, Check, ChevronDown, CircleStop, FileCode2, Files, Globe2, LoaderCircle, Network, Repeat2, Terminal, Users, Wrench, X } from "lucide-react";
 import type { ComponentType } from "react";
 import type { McpServer, Message, ToolFileDiff } from "../types";
 import { diffCounts, diffLineKind, presentApproval, presentTool } from "./toolPresentation";
@@ -7,7 +7,7 @@ import type { ToolCategory } from "./toolPresentation";
 import "./toolActivity.css";
 
 const icons: Record<ToolCategory, ComponentType<{ size?: number; className?: string }>> = {
-  shell: Terminal, web: Globe2, mcp: Network, files: Files, memory: FileCode2, team: Users, computer: Wrench, generic: Wrench,
+  shell: Terminal, web: Globe2, mcp: Network, files: Files, memory: FileCode2, team: Users, routine: Repeat2, computer: Wrench, generic: Wrench,
 };
 
 function FileDiff({ diff }: { diff: ToolFileDiff }) {

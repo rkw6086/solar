@@ -32,6 +32,7 @@ pub struct Engine {
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
     pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
     pub(crate) settings_write: Mutex<()>,
+    pub(crate) routine_write: Mutex<()>,
     pub(crate) resetting: std::sync::atomic::AtomicBool,
     pub(crate) reset_operations: tokio::sync::RwLock<()>,
 }
@@ -129,6 +130,7 @@ impl Engine {
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
             attention: Mutex::new(crate::attention::AttentionQueue::default()),
             settings_write: Mutex::new(()),
+            routine_write: Mutex::new(()),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_operations: tokio::sync::RwLock::new(()),
         });
@@ -721,15 +723,46 @@ impl Engine {
         Ok(settings)
     }
 
-    pub fn save_routine(&self, mut routine: Routine) -> Result<Routine, String> {
+    pub fn save_routine(&self, routine: Routine) -> Result<Routine, String> {
         self.ensure_running()?;
+        let _write = self
+            .routine_write
+            .lock()
+            .map_err(|_| "Routine storage unavailable")?;
+        self.save_routine_locked(routine)
+    }
+
+    pub(crate) fn update_routine_with<F>(
+        &self,
+        routine_id: &str,
+        update: F,
+    ) -> Result<Routine, String>
+    where
+        F: FnOnce(&mut Routine) -> Result<(), String>,
+    {
+        self.ensure_running()?;
+        let _write = self
+            .routine_write
+            .lock()
+            .map_err(|_| "Routine storage unavailable")?;
+        validate_id(routine_id)?;
+        let mut routine = self
+            .store
+            .get::<Routine>("routines", routine_id)?
+            .ok_or("Routine not found")?;
+        update(&mut routine)?;
+        if routine.id != routine_id {
+            return Err("A routine's identifier cannot be changed".into());
+        }
+        self.save_routine_locked(routine)
+    }
+
+    fn save_routine_locked(&self, mut routine: Routine) -> Result<Routine, String> {
         if routine.id.is_empty() {
             routine.id = id();
         }
-        if routine.last_run_at.is_none() {
-            routine.last_run_at = Some(now());
-        }
         validate_id(&routine.id)?;
+        let previous = self.store.get::<Routine>("routines", &routine.id)?;
         self.orbit(&routine.orbit_id)?;
         validate_text(&routine.prompt, "Routine prompt", 16_000)?;
         if !["interval", "folder", "completion"].contains(&routine.trigger.as_str()) {
@@ -749,9 +782,45 @@ impl Engine {
                 return Err("Grant the Orbit access to this project first".into());
             }
         }
+        // These fields belong to the scheduler, not an editor or agent. Keep
+        // an existing schedule's history while restarting folder observation
+        // when its source changes.
+        routine.last_run_at = previous
+            .as_ref()
+            .and_then(|previous| previous.last_run_at.clone())
+            .or_else(|| Some(now()));
+        routine.observed_signature = previous.and_then(|previous| {
+            (previous.trigger == routine.trigger && previous.project_id == routine.project_id)
+                .then_some(previous.observed_signature)
+                .flatten()
+        });
         self.store.put("routines", &routine.id, &routine)?;
         self.changed();
         Ok(routine)
+    }
+
+    pub fn delete_routine(&self, routine_id: &str) -> Result<(), String> {
+        self.delete_routine_checked(routine_id, |_| Ok(()))
+    }
+
+    pub(crate) fn delete_routine_checked<F>(&self, routine_id: &str, check: F) -> Result<(), String>
+    where
+        F: FnOnce(&Routine) -> Result<(), String>,
+    {
+        self.ensure_running()?;
+        let _write = self
+            .routine_write
+            .lock()
+            .map_err(|_| "Routine storage unavailable")?;
+        validate_id(routine_id)?;
+        let routine = self
+            .store
+            .get::<Routine>("routines", routine_id)?
+            .ok_or("Routine not found")?;
+        check(&routine)?;
+        self.store.remove("routines", routine_id)?;
+        self.changed();
+        Ok(())
     }
 
     pub async fn start_screen_share(&self, orbit_id: &str) -> Result<(), String> {

@@ -4,7 +4,7 @@ mod common;
 use serde_json::{Value, json};
 use solar::{
     engine::{Engine, ProviderDraft},
-    model::{Memory, Project},
+    model::{Memory, Project, Routine},
 };
 use solar_providers::{ProviderKind, ProviderProfile};
 use std::{sync::Arc, time::Duration};
@@ -1037,4 +1037,363 @@ fn import_strips_authority_and_private_memory_stays_scoped() {
         .unwrap();
     assert!(engine.memories(Some("qa"), None).unwrap().is_empty());
     assert!(engine.memories(None, None).unwrap().is_empty());
+}
+
+fn routine_fixture(id: &str, orbit_id: &str, project_id: Option<&str>) -> Routine {
+    Routine {
+        id: id.into(),
+        orbit_id: orbit_id.into(),
+        prompt: format!("Original task for {id}"),
+        interval_minutes: 60,
+        enabled: false,
+        project_id: project_id.map(str::to_owned),
+        trigger: "interval".into(),
+        last_run_at: None,
+        observed_signature: None,
+    }
+}
+
+fn tool_result<'a>(request: &'a Value, call_id: &str) -> &'a str {
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "tool" && message["tool_call_id"] == call_id)
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn routine_tools_are_advertised_and_persist_changes_through_rig() {
+    let create_and_update = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"create-routine","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Check the project's open tasks every morning", "trigger":"interval", "intervalMinutes":1440}).to_string()}},
+        {"index":1,"id":"update-routine","type":"function","function":{"name":"routine_update","arguments":json!({"routineId":"existing-routine","prompt":"Review the weekly release notes", "intervalMinutes":10080, "enabled":true}).to_string()}},
+        {"index":2,"id":"list-before-delete","type":"function","function":{"name":"routine_list","arguments":"{}"}}
+    ]});
+    let delete_and_list = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"delete-routine","type":"function","function":{"name":"routine_delete","arguments":json!({"routineId":"existing-routine"}).to_string()}},
+        {"index":1,"id":"list-after-delete","type":"function","function":{"name":"routine_list","arguments":"{}"}}
+    ]});
+    let (url, server) = fixture(vec![
+        response(create_and_update, "tool_calls"),
+        response(delete_and_list, "tool_calls"),
+        response(json!({"content":"The daily check is ready."}), "stop"),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    engine
+        .save_routine(routine_fixture("existing-routine", "assistant", None))
+        .unwrap();
+    let mut orbit = engine.orbit("assistant").unwrap();
+    orbit.tool_grants.clear();
+    engine.save_orbit(orbit).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Routine management".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(
+            &chat.id,
+            "Create the daily check and remove the old routine".into(),
+        )
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let advertised: Vec<_> = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect();
+    for name in [
+        "routine_list",
+        "routine_create",
+        "routine_update",
+        "routine_delete",
+        "routine_run",
+    ] {
+        assert!(advertised.contains(&name), "missing advertised tool {name}");
+    }
+    let created: Routine =
+        serde_json::from_str(tool_result(&requests[1], "create-routine")).unwrap();
+    assert_eq!(created.orbit_id, "assistant");
+    assert_eq!(created.interval_minutes, 1440);
+    assert!(created.enabled);
+    let updated: Routine =
+        serde_json::from_str(tool_result(&requests[1], "update-routine")).unwrap();
+    assert_eq!(updated.prompt, "Review the weekly release notes");
+    assert_eq!(updated.interval_minutes, 10080);
+    assert!(updated.enabled);
+    let before: Vec<Routine> =
+        serde_json::from_str(tool_result(&requests[1], "list-before-delete")).unwrap();
+    assert_eq!(before.len(), 2);
+    let after: Vec<Routine> =
+        serde_json::from_str(tool_result(&requests[2], "list-after-delete")).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].id, created.id);
+    let saved = engine.bootstrap().unwrap().routines;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].id, created.id);
+    assert!(engine.bootstrap().unwrap().approvals.is_empty());
+    engine.shutdown().await;
+    drop(engine);
+    let reopened = Engine::open(directory.path().into()).unwrap();
+    let persisted = reopened.bootstrap().unwrap().routines;
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(persisted[0].id, created.id);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn routine_creation_respects_a_denied_tool_approval() {
+    let call = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"denied-routine","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Check my tasks hourly", "trigger":"interval", "intervalMinutes":60}).to_string()}}
+    ]});
+    let (url, server) = fixture(vec![
+        response(call, "tool_calls"),
+        response(json!({"content":"I did not create the routine."}), "stop"),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, true).await;
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Routine approval".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Check my tasks hourly".into())
+        .unwrap();
+    let approval = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(approval) = engine.bootstrap().unwrap().approvals.first().cloned() {
+                break approval;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(approval.tool, "routine_create");
+    assert!(engine.bootstrap().unwrap().routines.is_empty());
+    engine.resolve_approval(&approval.id, false).unwrap();
+    finished(&engine, &task.id).await;
+    assert!(engine.bootstrap().unwrap().routines.is_empty());
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tool_result(&requests[1], "denied-routine")
+            .to_lowercase()
+            .contains("denied")
+    );
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn delegated_routine_tools_cannot_escape_inherited_project_access() {
+    let delegate = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"delegate-routines","type":"function","function":{"name":"orbit_delegate","arguments":json!({"orbitId":"researcher","task":"Review my routines and try to manage them"}).to_string()}}
+    ]});
+    // A successful read between rejection pairs keeps the fixture below the
+    // consecutive-failure limit while exercising every routine mutation.
+    let child_calls = json!({"role":"assistant","tool_calls":[
+        {"index":0,"id":"child-routine-list","type":"function","function":{"name":"routine_list","arguments":"{}"}},
+        {"index":1,"id":"child-routine-create","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Schedule a future task", "trigger":"interval", "intervalMinutes":60}).to_string()}},
+        {"index":2,"id":"child-routine-update","type":"function","function":{"name":"routine_update","arguments":json!({"routineId":"child-visible","enabled":true}).to_string()}},
+        {"index":3,"id":"child-routine-list-again","type":"function","function":{"name":"routine_list","arguments":"{}"}},
+        {"index":4,"id":"child-routine-delete","type":"function","function":{"name":"routine_delete","arguments":json!({"routineId":"child-visible"}).to_string()}},
+        {"index":5,"id":"child-routine-run","type":"function","function":{"name":"routine_run","arguments":json!({"routineId":"child-visible"}).to_string()}}
+    ]});
+    let (url, server) = fixture(vec![
+        response(delegate, "tool_calls"),
+        response(child_calls, "tool_calls"),
+        response(json!({"content":"I can inspect the accessible routine, but cannot change or launch it from a delegated task."}), "stop"),
+        response(json!({"content":"The routines were left unchanged."}), "stop"),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let project_directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    engine
+        .save_project(Project {
+            id: "child-project".into(),
+            name: "Child project".into(),
+            directory: project_directory.path().to_string_lossy().into(),
+            description: String::new(),
+        })
+        .unwrap();
+    let mut child = engine.orbit("assistant").unwrap();
+    child.id = "researcher".into();
+    child.name = "Lyra".into();
+    child.project_ids = vec!["child-project".into()];
+    engine.save_orbit(child).unwrap();
+    for routine in [
+        routine_fixture("child-visible", "researcher", None),
+        routine_fixture("child-private", "researcher", Some("child-project")),
+        routine_fixture("parent-private", "assistant", None),
+    ] {
+        engine.save_routine(routine).unwrap();
+    }
+    let mut settings = engine.settings().unwrap();
+    settings.max_concurrent = 1;
+    engine.save_settings(settings).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into(), "researcher".into()],
+            "assistant".into(),
+            "Delegated routines".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Ask Lyra to review routines".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    let completed_tasks = engine.bootstrap().unwrap().tasks;
+    assert!(
+        completed_tasks.len() == 2
+            && completed_tasks
+                .iter()
+                .all(|task| task.status == "completed"),
+        "expected the lead and delegated task to complete; tasks: {completed_tasks:?}; messages: {:?}",
+        engine.messages(&chat.id).unwrap()
+    );
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let visible: Vec<Routine> =
+        serde_json::from_str(tool_result(&requests[2], "child-routine-list")).unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].id, "child-visible");
+    let visible_again: Vec<Routine> =
+        serde_json::from_str(tool_result(&requests[2], "child-routine-list-again")).unwrap();
+    assert_eq!(visible_again.len(), 1);
+    assert_eq!(visible_again[0].id, "child-visible");
+    for call_id in [
+        "child-routine-create",
+        "child-routine-update",
+        "child-routine-delete",
+        "child-routine-run",
+    ] {
+        assert!(
+            tool_result(&requests[2], call_id)
+                .to_lowercase()
+                .contains("delegat"),
+            "delegated mutation or launch must be rejected: {call_id}"
+        );
+    }
+    let routines = engine.bootstrap().unwrap().routines;
+    assert_eq!(routines.len(), 3);
+    assert!(
+        routines
+            .iter()
+            .all(|routine| !routine.enabled && routine.last_run_at.is_some())
+    );
+    assert!(
+        routines
+            .iter()
+            .all(|routine| routine.prompt == format!("Original task for {}", routine.id))
+    );
+    let tasks = engine.bootstrap().unwrap().tasks;
+    assert_eq!(tasks.len(), 2, "no routine task may escape delegation");
+    assert!(tasks.iter().all(|task| task.status == "completed"));
+    engine.shutdown().await;
+}
+
+#[tokio::test]
+async fn completion_routine_runs_once_without_triggering_itself() {
+    let (url, server) = fixture(vec![
+        response(json!({"content":"The user's task is complete."}), "stop"),
+        response(
+            json!({"content":"The completion routine is complete."}),
+            "stop",
+        ),
+    ])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let engine = Engine::open(directory.path().into()).unwrap();
+    common::add_assistant(&engine);
+    configure(&engine, url, false).await;
+    let mut routine = routine_fixture("completion-followup", "assistant", None);
+    routine.trigger = "completion".into();
+    routine.enabled = true;
+    routine.prompt = "Summarize what was completed for the daily journal".into();
+    engine.save_routine(routine.clone()).unwrap();
+    let chat = engine
+        .create_conversation(
+            vec!["assistant".into()],
+            "assistant".into(),
+            "Completion follow-up".into(),
+            None,
+        )
+        .unwrap();
+    let task = engine
+        .send_message(&chat.id, "Finish the original user task".into())
+        .unwrap();
+    finished(&engine, &task.id).await;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let tasks = engine.bootstrap().unwrap().tasks;
+            assert!(tasks.len() <= 2, "the completion routine must not recurse");
+            assert!(
+                tasks
+                    .iter()
+                    .all(|task| !["failed", "cancelled"].contains(&task.status.as_str())),
+                "routine task failed: {tasks:?}"
+            );
+            if tasks.len() == 2 && tasks.iter().all(|task| task.status == "completed") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the completion routine must finish once");
+    let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| {
+                message["role"] == "user"
+                    && message["content"].to_string().contains(&routine.prompt)
+            })
+    );
+    // The completion callback runs just after a task is marked complete.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let tasks = engine.bootstrap().unwrap().tasks;
+    assert_eq!(
+        tasks.len(),
+        2,
+        "a routine must not trigger its own completion routine"
+    );
+    assert!(tasks.iter().all(|task| task.status == "completed"));
+    assert_ne!(tasks[0].conversation_id, tasks[1].conversation_id);
+    engine.shutdown().await;
 }

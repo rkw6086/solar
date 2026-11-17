@@ -1,6 +1,6 @@
 import type { McpServer, Message, ToolActivity, ToolFileDiff } from "../types.ts";
 
-export type ToolCategory = "shell" | "web" | "mcp" | "files" | "memory" | "team" | "computer" | "generic";
+export type ToolCategory = "shell" | "web" | "mcp" | "files" | "memory" | "team" | "routine" | "computer" | "generic";
 export interface ToolPresentation {
   category: ToolCategory;
   title: string;
@@ -42,6 +42,22 @@ function mcpName(name: string, servers: McpServer[]): { service: string; command
     service: configured?.server.name || (separator >= 0 ? rest.slice(0, separator).replaceAll("_", " ") : "Connected service"),
     command: configured ? rest.slice(configured.alias.length + 2) : separator >= 0 ? rest.slice(separator + 2) : rest,
   };
+}
+function routineSummary(args: Record<string, unknown>, result: Record<string, unknown>, fallback: string): string {
+  const saved = Object.keys(record(result.routine)).length ? record(result.routine) : result;
+  const value = (key: string) => Object.hasOwn(args, key) ? args[key] : saved[key];
+  const prompt = compact(value("prompt"), 300);
+  const trigger = value("trigger");
+  const minutes = value("intervalMinutes");
+  const interval = typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0
+    ? `${minutes} ${minutes === 1 ? "minute" : "minutes"}` : "";
+  const timing = trigger === "folder" ? "When project files change"
+    : trigger === "completion" ? "After a task completes"
+    : trigger === "interval" ? interval ? `Every ${interval}` : "On a repeating interval"
+    : interval ? `Repeat interval: ${interval}` : "";
+  const enabled = value("enabled");
+  const state = typeof enabled === "boolean" ? enabled ? "Enabled" : "Paused" : "";
+  return [prompt, timing, state].filter(Boolean).join(" · ") || fallback;
 }
 function legacyActivity(message: Message): ToolActivity {
   const newline = message.content.indexOf("\n");
@@ -122,6 +138,24 @@ export function presentTool(message: Message, servers: McpServer[] = []): ToolPr
   if (name.startsWith("memory_")) return { ...base, category: "memory", title: name === "memory_save" ? "Save a memory" : "Search memories", summary: args.query ? `“${compact(args.query)}”` : args.shared ? "Shared project memory" : "Private Orbit memory" };
   if (name === "orbit_delegate") return { ...base, category: "team", title: "Ask a teammate", summary: compact(args.task, 240) || "Delegating a focused task" };
   if (name === "orbit_list") return { ...base, category: "team", title: "Find teammates", summary: Array.isArray(parse(activity.output)) ? `${(parse(activity.output) as unknown[]).length} Orbits available` : "Check the Solar team" };
+  if (name === "routine_list") {
+    const parsed = parse(activity.output);
+    const routines = Array.isArray(parsed) ? parsed : Array.isArray(result.routines) ? result.routines : undefined;
+    const count = routines?.length;
+    const enabled = routines?.filter((routine) => record(routine).enabled === true).length;
+    return { ...base, category: "routine", title: "View routines", summary: count !== undefined && activity.status === "completed" ? `${count} ${count === 1 ? "routine" : "routines"} · ${enabled} enabled` : "View this Orbit’s saved routines" };
+  }
+  const routineTitles: Record<string, [string, string]> = {
+    routine_create: ["Create routine", "Set up a recurring task"],
+    routine_update: ["Update routine", "Change this routine"],
+    routine_delete: ["Delete routine", "Remove this saved routine"],
+    routine_run: ["Run routine", "Start this routine now"],
+  };
+  if (routineTitles[name]) {
+    const [title, fallback] = routineTitles[name];
+    const queued = name === "routine_run" && activity.status === "completed" && result.status === "queued";
+    return { ...base, category: "routine", title, summary: routineSummary(args, result, queued ? "Queued in a separate routine conversation" : fallback), outcome: queued ? "Queued" : base.outcome };
+  }
   if (name === "project_list") return { ...base, category: "files", title: "Find project folders", summary: "Check available projects and workspaces" };
   if (name.startsWith("computer_") || name === "screen_capture" || name === "native_permissions") {
     const titles: Record<string, string> = { computer_click: "Click a screen control", computer_type: "Enter text", computer_key: "Press a key", computer_inspect: "Inspect the screen", screen_capture: "Capture the shared screen", native_permissions: "Check desktop access" };
