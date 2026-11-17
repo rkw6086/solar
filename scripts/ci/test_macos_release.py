@@ -29,8 +29,9 @@ elif tool == 'security':
     action = args[0]
     if action == 'list-keychains' and '-s' not in args:
         if os.environ.get('MOCK_KEYCHAIN_LIST_FAIL'): sys.exit(1)
+        if '-d' in args and os.environ.get('MOCK_USER_KEYCHAIN_LIST_FAIL'): sys.exit(1)
         print('    "/Users/runner/Library/Keychains/login.keychain-db"')
-        print('    "/Library/Keychains/System.keychain"')
+        if '-d' not in args: print('    "/Library/Keychains/System.keychain"')
     elif action == 'list-keychains' and '-s' in args:
         # CI can have an effective search list distinct from saved user preferences.
         if '-d' not in args:
@@ -146,7 +147,8 @@ class ReleaseTest(unittest.TestCase):
         calls = self.recorded()
         lists = [call for call in calls if call[:2] == ['security', 'list-keychains'] and '-s' in call]
         if lists:
-            self.assertEqual(lists[-1][-2:], ['/Users/runner/Library/Keychains/login.keychain-db', '/Library/Keychains/System.keychain'])
+            self.assertEqual(lists[-2], ['security', 'list-keychains', '-s', '/Users/runner/Library/Keychains/login.keychain-db', '/Library/Keychains/System.keychain'])
+            self.assertEqual(lists[-1], ['security', 'list-keychains', '-d', 'user', '-s', '/Users/runner/Library/Keychains/login.keychain-db'])
 
     def test_build_and_package_orders_signatures_and_staples_both(self):
         result = self.run_script('build-macos.sh')
@@ -213,6 +215,13 @@ class ReleaseTest(unittest.TestCase):
     def test_keychain_list_failure_never_changes_search_list(self):
         self.prepare_app()
         self.env['MOCK_KEYCHAIN_LIST_FAIL'] = '1'
+        self.assertNotEqual(self.run_script('package-macos.sh').returncode, 0)
+        self.assert_cleaned()
+        self.assertFalse(any('-s' in call for call in self.recorded() if call[:2] == ['security', 'list-keychains']))
+
+    def test_user_keychain_list_failure_never_changes_search_list(self):
+        self.prepare_app()
+        self.env['MOCK_USER_KEYCHAIN_LIST_FAIL'] = '1'
         self.assertNotEqual(self.run_script('package-macos.sh').returncode, 0)
         self.assert_cleaned()
         self.assertFalse(any('-s' in call for call in self.recorded() if call[:2] == ['security', 'list-keychains']))

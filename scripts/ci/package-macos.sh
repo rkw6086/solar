@@ -24,6 +24,7 @@ work=$(mktemp -d "$HOME/Library/Keychains/solar-sign.XXXXXX")
 keychain="$work/signing.keychain-db"
 keychain_password=$(/usr/bin/openssl rand -hex 32)
 original_keychains=()
+original_user_keychains=()
 keychain_created=false
 keychain_list_changed=false
 artifact_complete=false
@@ -32,6 +33,7 @@ cleanup() {
   trap - EXIT
   if [[ $keychain_list_changed == true ]]; then
     /usr/bin/security list-keychains -s "${original_keychains[@]}" >/dev/null 2>&1 || { echo 'Could not restore the runner keychain list.' >&2; status=1; }
+    /usr/bin/security list-keychains -d user -s "${original_user_keychains[@]}" >/dev/null 2>&1 || { echo 'Could not restore the runner user keychain preferences.' >&2; status=1; }
   fi
   if [[ $keychain_created == true ]]; then
     /usr/bin/security delete-keychain "$keychain" >/dev/null 2>&1 || { echo 'Could not remove the temporary signing keychain.' >&2; status=1; }
@@ -47,11 +49,17 @@ trap 'exit 143' TERM
 # A failed/empty listing must never replace the user's search list with an empty one.
 # Use the effective search list used by codesign, not just the saved user domain.
 /usr/bin/security list-keychains > "$work/keychains.txt"
+/usr/bin/security list-keychains -d user > "$work/user-keychains.txt"
 while IFS= read -r entry; do
   entry=${entry#*\"}; entry=${entry%\"*}
   [[ -n $entry ]] && original_keychains+=("$entry")
 done < "$work/keychains.txt"
 [[ ${#original_keychains[@]} -gt 0 ]] || fail 'The runner has no keychain search list to preserve.'
+while IFS= read -r entry; do
+  entry=${entry#*\"}; entry=${entry%\"*}
+  [[ -n $entry ]] && original_user_keychains+=("$entry")
+done < "$work/user-keychains.txt"
+[[ ${#original_user_keychains[@]} -gt 0 ]] || fail 'The runner has no user keychain preferences to preserve.'
 
 mkdir -p "$SOLAR_RELEASE_DIR"
 python3 - "$work" <<'PY'
