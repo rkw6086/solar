@@ -47,7 +47,7 @@ elif tool == 'security':
         assert pathlib.Path(args[1]).read_bytes() == b'dummy-p12'
     elif action == 'find-certificate': print('dummy-public-leaf')
     elif action == 'verify-cert':
-        assert args[args.index('-p')+1] == 'codeSign' and '-L' in args
+        assert args[args.index('-p')+1] in ('basic', 'codeSign') and '-L' in args
         assert '-r' not in args
         assert pathlib.Path(args[args.index('-c')+1]).read_text().strip() == 'dummy-public-leaf'
         search = json.loads(pathlib.Path(os.environ['MOCK_EFFECTIVE_LIST']).read_text())
@@ -101,7 +101,10 @@ class ReleaseTest(unittest.TestCase):
                      'PlistBuddy', 'ditto', 'hdiutil', 'xcrun', 'corepack', 'cargo', 'lipo', 'xcode-select', 'spctl'):
             (self.bin / name).symlink_to(mock)
         self.calls = self.root / 'calls.jsonl'
+        home = self.root / 'home'
+        (home / 'Library/Keychains').mkdir(parents=True)
         self.env = {
+            'HOME': str(home),
             'PATH': f'{self.bin}:{os.environ["PATH"]}',
             'RUNNER_TEMP': str(self.root), 'CARGO_TARGET_DIR': str(self.root / 'target'),
             'SOLAR_RELEASE_DIR': str(self.root / 'artifacts'), 'MOCK_CALLS': str(self.calls),
@@ -139,7 +142,7 @@ class ReleaseTest(unittest.TestCase):
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
 
     def assert_cleaned(self):
-        self.assertEqual(list(self.root.glob('solar-sign.*')), [])
+        self.assertEqual(list(self.root.rglob('solar-sign.*')), [])
         calls = self.recorded()
         lists = [call for call in calls if call[:2] == ['security', 'list-keychains'] and '-s' in call]
         if lists:
@@ -153,13 +156,17 @@ class ReleaseTest(unittest.TestCase):
         self.assert_cleaned()
         calls = self.recorded()
         intermediate = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'add-certificates'])
+        search_list = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'list-keychains'] and '-s' in call)
         identity = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'import'])
         trust = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'verify-cert'])
         first_signature = next(i for i, call in enumerate(calls) if call[0] == 'codesign' and '--sign' in call)
+        self.assertLess(search_list, intermediate)
         self.assertLess(intermediate, identity)
         self.assertLess(identity, trust)
         self.assertLess(trust, first_signature)
         self.assertFalse(any(call[:2] == ['security', 'add-trusted-cert'] for call in calls))
+        policies = [call[call.index('-p')+1] for call in calls if call[:2] == ['security', 'verify-cert']]
+        self.assertEqual(policies, ['basic', 'codeSign'])
         signatures = [call[-1] for call in calls if call[0] == 'codesign' and '--sign' in call]
         self.assertEqual([Path(path).name for path in signatures], ['solar-native-helper', 'solar', 'Solar.app', 'Solar_0.1.0_aarch64.dmg'])
         notarized = [call[3] for call in calls if call[:3] == ['xcrun', 'notarytool', 'submit']]
