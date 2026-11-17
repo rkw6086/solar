@@ -37,8 +37,8 @@ cleanup() {
   local status=$?
   trap - EXIT
   if [[ $search_lists_touched == true ]]; then
-    bounded /usr/bin/security list-keychains -d user -s "${original_user[@]}" >/dev/null 2>&1 || { echo 'Could not restore user keychain list.' >&2; status=1; }
     bounded /usr/bin/security list-keychains -s "${original_default[@]}" >/dev/null 2>&1 || { echo 'Could not restore effective keychain list.' >&2; status=1; }
+    bounded /usr/bin/security list-keychains -d user -s "${original_user[@]}" >/dev/null 2>&1 || { echo 'Could not restore user keychain list.' >&2; status=1; }
   fi
   if [[ -e $keychain ]]; then
     bounded /usr/bin/security delete-keychain "$keychain" >/dev/null 2>&1 || { echo 'Could not remove diagnostic keychain.' >&2; status=1; }
