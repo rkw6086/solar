@@ -5,6 +5,8 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ## [Unreleased]
 
+## [0.1.1]
+
 ### Added
 
 - Five Orbit tools for listing, creating, updating, deleting, and running routines, with readable activity cards and existing approval controls.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Solar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "net.solar.orbits",
   "build": {
     "beforeDevCommand": "corepack pnpm run dev",
@@ -17,28 +17,35 @@
       "cache": "$HOME/.solar/cache",
       "log": "$HOME/.solar/logs"
     },
-    "windows": [{
-      "label": "main",
-      "title": "Solar",
-      "width": 1220,
-      "height": 800,
-      "minWidth": 850,
-      "minHeight": 600,
-      "backgroundColor": "#000000",
-      "incognito": true,
-      "center": true
-    }],
+    "windows": [
+      {
+        "label": "main",
+        "title": "Solar",
+        "width": 1220,
+        "height": 800,
+        "minWidth": 850,
+        "minHeight": 600,
+        "backgroundColor": "#000000",
+        "incognito": true,
+        "center": true
+      }
+    ],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; connect-src ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'self'; frame-src 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "Productivity",
     "shortDescription": "Your team of local AI companions",
     "longDescription": "Solar brings personable, specialized Orbits to your desktop with private workspaces, collaborative tasks, and local tool execution.",
-    "icon": ["icons/icon.png"],
+    "icon": [
+      "icons/icon.png"
+    ],
     "macOS": {
       "minimumSystemVersion": "14.2",
       "infoPlist": "Info.plist",
