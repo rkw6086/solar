@@ -37,6 +37,8 @@ Use a dedicated trusted-repository runner with **capacity 1**. The release scrip
 
 Use the Apple Developer Program **Account Holder** account to create this certificate. A **Developer ID Application** certificate signs apps distributed outside the Mac App Store. A Developer ID Installer certificate is for installer packages and is not needed for Solar's DMG. [Apple's certificate instructions](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
 
+A valid Developer ID Application certificate and its matching private key can sign multiple macOS apps from the same Apple Developer team. Solar and Galaxy share this signing identity; a new certificate is not needed for each app. Their app bundle identifiers remain separate.
+
 On your Mac:
 
 1. Open **Keychain Access**.
@@ -79,9 +81,14 @@ Use a **team key**, not an individual key: individual keys do not support `notar
 
 Paste this into `APPLE_API_KEY_P8`. No Apple account password is required by this workflow.
 
-## 4. Add repository secrets
+## 4. Configure shared organization secrets
 
-In [Solar's repository settings](https://git.ryserve.net/internal/solar-chat/settings), open **Actions → Secrets** and add:
+All seven `APPLE_*` secrets below are stored as **organization Actions secrets** in both Gitea organizations:
+
+- **`internal`** supplies the secrets to `internal/solar-chat` (Solar).
+- **`public`** supplies the same secrets to `public/galaxy` (Galaxy).
+
+Gitea does not support an instance-global Actions secret store. Organization secrets are inherited by repositories owned by that organization, so both organizations need the same values. In each organization's **Settings → Actions → Secrets**, add or update:
 
 | Secret | Value |
 | --- | --- |
@@ -93,7 +100,11 @@ In [Solar's repository settings](https://git.ryserve.net/internal/solar-chat/set
 | `APPLE_API_ISSUER` | App Store Connect Issuer ID |
 | `APPLE_API_KEY_P8` | Base64 of the downloaded `.p8` private key |
 
-The repository must have **Actions enabled**. Keep secrets at repository scope unless you deliberately intend other repositories to use them. [Gitea Actions secrets](https://docs.gitea.com/usage/actions/secrets/)
+Keep these names identical in both organizations. Workflows reference them as `${{ secrets.APPLE_CERTIFICATE }}` and so on; no repository-specific copies are needed. Rotate the values in both organizations together.
+
+Remove any repository-level overrides for these seven names after confirming the organization values are configured. A repository secret with the same name takes precedence and can silently keep using an old certificate or key. Organization secrets are available to every repository owned by that organization; only trusted workflows should receive signing credentials. [Gitea Actions secrets](https://docs.gitea.com/usage/actions/secrets/), [Gitea secret inheritance and precedence](https://github.com/go-gitea/gitea/blob/v1.27.3/models/secret/secret.go)
+
+Each repository must have **Actions enabled** and a signing workflow that references these secret names. Sharing the credentials makes them available to Galaxy; it does not create Galaxy's release workflow.
 
 The packaging script imports the certificate into a temporary keychain with a generated password. It restores the original keychain search list, deletes the temporary keychain, and removes temporary credential files on exit. The preceding build step receives no signing secrets and uses Tauri's `--no-sign` option; packaging then signs the helper and app explicitly. Do not enable shell tracing (`set -x`) around credential handling. Protect `main` and release tags so unreviewed changes cannot run with signing credentials.
 
