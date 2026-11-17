@@ -132,6 +132,7 @@ verify_chain default-search
 explicit_ok=false
 default_ok=false
 repaired_ok=false
+complete_chain_ok=false
 if probe explicit-keychain --keychain "$keychain"; then explicit_ok=true; fi
 if probe default-search; then default_ok=true; fi
 
@@ -140,6 +141,12 @@ bounded /usr/bin/security list-keychains -s "$keychain" "${original_default[@]}"
 show_lists
 verify_chain effective-search
 if probe effective-search; then repaired_ok=true; fi
+
+echo 'Retry: include the public Apple root certificate without changing trust settings.'
+/usr/bin/openssl x509 -in scripts/ci/certificates/AppleRootCA.pem -outform DER -out "$work/apple-root.cer"
+bounded /usr/bin/security add-certificates -k "$keychain" "$work/apple-root.cer"
+verify_chain complete-chain
+if probe complete-chain --keychain "$keychain"; then complete_chain_ok=true; fi
 
 # Trust dumps contain public certificate metadata; exclude unrelated certificates.
 for domain in user admin; do
@@ -163,5 +170,5 @@ if not relevant and 'No Trust Settings were found' in text:
 PY
 done
 
-echo "Signing results: explicit=$explicit_ok default=$default_ok effective-list-retry=$repaired_ok"
-[[ $explicit_ok == true || $default_ok == true || $repaired_ok == true ]] || fail 'All disposable signing probes failed.'
+echo "Signing results: explicit=$explicit_ok default=$default_ok effective-list-retry=$repaired_ok complete-chain=$complete_chain_ok"
+[[ $explicit_ok == true || $default_ok == true || $repaired_ok == true || $complete_chain_ok == true ]] || fail 'All disposable signing probes failed.'
