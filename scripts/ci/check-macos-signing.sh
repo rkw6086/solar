@@ -6,6 +6,9 @@ umask 077
 
 fail() { echo "Solar signing check: $*" >&2; exit 1; }
 [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail 'Use the native macos-arm64 runner.'
+echo 'Native signing environment:'
+/usr/bin/sw_vers
+echo "Effective user ID: $(id -u)"
 for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
   [[ -n ${!variable:-} ]] || fail "Missing signing secret: $variable"
 done
@@ -50,6 +53,27 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+echo 'launchd manager context:'
+bounded /bin/launchctl managername || true
+bounded /bin/launchctl manageruid || true
+python3 - <<'PY'
+import os, subprocess
+print('Parent process executable names:')
+pid, seen = os.getppid(), set()
+for _ in range(10):
+    if pid <= 0 or pid in seen:
+        break
+    seen.add(pid)
+    try:
+        result = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'ppid=', '-o', 'comm='], capture_output=True, text=True, timeout=3)
+        parent, name = result.stdout.strip().split(None, 1)
+        print(name)
+        pid = int(parent)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        print('Remaining parent context unavailable.')
+        break
+PY
+
 bounded /usr/bin/security list-keychains > "$work/original-default.txt"
 bounded /usr/bin/security list-keychains -d user > "$work/original-user.txt"
 python3 - "$work" <<'PY'
@@ -77,7 +101,7 @@ bounded /usr/bin/security set-keychain-settings -lut 600 "$keychain"
 bounded /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
 /usr/bin/openssl x509 -in scripts/ci/certificates/DeveloperIDG2CA.pem -outform DER -out "$work/intermediate.cer"
 bounded /usr/bin/security add-certificates -k "$keychain" "$work/intermediate.cer"
-bounded /usr/bin/security import "$work/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+bounded /usr/bin/security import "$work/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security >/dev/null
 bounded /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 bounded /usr/bin/security list-keychains -d user -s "$keychain" "${original_user[@]}"
 bounded /usr/bin/security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$keychain" > "$work/leaf.pem"
@@ -94,9 +118,14 @@ show_lists() {
 }
 
 verify_chain() {
-  local label=$1 status=0
+  local label=$1 status=0 policy=codeSign local_only=true
+  local -a verification_args
   shift
-  bounded /usr/bin/security verify-cert -p codeSign -L -P -c "$work/leaf.pem" "$@" > "$work/$label.chain" 2> "$work/$label.error" || status=$?
+  if [[ ${1:-} == --basic ]]; then policy=basic; shift; fi
+  if [[ ${1:-} == --network ]]; then local_only=false; shift; fi
+  verification_args=(-p "$policy" -P -c "$work/leaf.pem")
+  if [[ $local_only == true ]]; then verification_args+=(-L); fi
+  bounded /usr/bin/security verify-cert "${verification_args[@]}" "$@" > "$work/$label.chain" 2> "$work/$label.error" || status=$?
   echo "Certificate verification ($label): exit $status"
   python3 - "$work/$label.chain" "$work" <<'PY'
 import pathlib, re, subprocess, sys
@@ -148,25 +177,75 @@ bounded /usr/bin/security add-certificates -k "$keychain" "$work/apple-root.cer"
 verify_chain complete-chain
 if probe complete-chain --keychain "$keychain"; then complete_chain_ok=true; fi
 
-# Trust dumps contain public certificate metadata; exclude unrelated certificates.
+# CMS signing constructs its embedded chain using basic X.509 policy.
+verify_chain basic-local-explicit --basic -k "$keychain"
+verify_chain basic-local-default --basic
+verify_chain basic-network-explicit --basic --network -k "$keychain"
+verify_chain basic-network-default --basic --network
+
+# This checks private-key use through Apple's CMS tool without changing the key ACL.
+# Signature verification deliberately skips PKI trust, which is checked separately above.
+printf 'Solar native signing diagnostic\n' > "$work/cms-input.txt"
+cms_sign_status=0
+cms_verify_status=1
+cms_content_status=1
+bounded /usr/bin/security cms -S -N "$APPLE_SIGNING_IDENTITY" -k "$keychain" -H SHA256 -u 6 -i "$work/cms-input.txt" -o "$work/probe.cms" > "$work/cms-sign.log" 2>&1 || cms_sign_status=$?
+if [[ $cms_sign_status == 0 ]]; then
+  cms_verify_status=0
+  bounded /usr/bin/openssl smime -verify -binary -inform DER -in "$work/probe.cms" -noverify -nointern -certfile "$work/leaf.pem" -out "$work/cms-verified.txt" > "$work/cms-verify.log" 2>&1 || cms_verify_status=$?
+  if [[ $cms_verify_status == 0 ]] && cmp -s "$work/cms-input.txt" "$work/cms-verified.txt"; then cms_content_status=0; fi
+fi
+echo "CMS probe: sign exit $cms_sign_status; signature verification exit $cms_verify_status; content comparison exit $cms_content_status"
+if [[ $cms_sign_status != 0 ]]; then sed -n '1,12p' "$work/cms-sign.log"; fi
+if [[ $cms_sign_status == 0 && $cms_verify_status != 0 ]]; then sed -n '1,12p' "$work/cms-verify.log"; fi
+
+# Compare exact certificate fingerprints, rather than display names that users can change.
+# Exported trust settings remain private temporary files; unrelated entries are never printed.
 for domain in user admin; do
   trust_status=0
   if [[ $domain == admin ]]; then
-    bounded /usr/bin/security dump-trust-settings -d > "$work/trust-$domain.txt" 2>&1 || trust_status=$?
+    bounded /usr/bin/security trust-settings-export -d "$work/trust-$domain.plist" > "$work/trust-$domain.log" 2>&1 || trust_status=$?
   else
-    bounded /usr/bin/security dump-trust-settings > "$work/trust-$domain.txt" 2>&1 || trust_status=$?
+    bounded /usr/bin/security trust-settings-export "$work/trust-$domain.plist" > "$work/trust-$domain.log" 2>&1 || trust_status=$?
   fi
-  python3 - "$domain" "$trust_status" "$work/trust-$domain.txt" <<'PY'
-import pathlib, re, sys
-domain, status, filename = sys.argv[1:]
-text = pathlib.Path(filename).read_text()
-blocks = re.split(r'(?m)(?=^\s*Cert \d+:)', text)
-relevant = [block for block in blocks if re.match(r'\s*Cert \d+:.*(?:Developer ID|Apple Root)', block)]
-print(f'Trust overrides ({domain}): {len(relevant)} relevant certificate sections; command exit {status}')
-for block in relevant:
-    print('\n'.join(block.splitlines()[:30]))
-if not relevant and 'No Trust Settings were found' in text:
-    print('No trust settings were found in this domain.')
+  python3 - "$domain" "$trust_status" "$work/trust-$domain.plist" "$work/leaf.pem" scripts/ci/certificates/DeveloperIDG2CA.pem scripts/ci/certificates/AppleRootCA.pem <<'PY'
+import json, pathlib, plistlib, subprocess, sys
+domain, status, filename, *certificates = sys.argv[1:]
+wanted = {}
+for label, certificate in zip(('leaf', 'intermediate', 'root'), certificates):
+    result = subprocess.run(['/usr/bin/openssl', 'x509', '-in', certificate, '-noout', '-fingerprint', '-sha1'], capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        raise SystemExit('Unable to calculate a public certificate fingerprint.')
+    fingerprint = result.stdout.strip().split('=')[-1].replace(':', '').upper()
+    if len(fingerprint) != 40 or any(c not in '0123456789ABCDEF' for c in fingerprint):
+        raise SystemExit('Invalid public certificate fingerprint.')
+    wanted[fingerprint] = label
+try:
+    trust = plistlib.loads(pathlib.Path(filename).read_bytes()).get('trustList', {})
+except (OSError, ValueError, plistlib.InvalidFileException):
+    print(f'Trust settings ({domain}): no readable export; command exit {status}')
+    sys.exit(0)
+matches = 0
+for key, entry in trust.items():
+    fingerprint = key.hex().upper() if isinstance(key, bytes) else str(key).replace(':', '').upper()
+    if fingerprint not in wanted:
+        continue
+    matches += 1
+    settings = entry.get('trustSettings', [])
+    print(f'Trust settings ({domain}): {wanted[fingerprint]} SHA1={fingerprint}; entries={len(settings)}')
+    for setting in settings:
+        safe = {}
+        for name, value in setting.items():
+            if not any(part in name for part in ('Result', 'Policy', 'KeyUsage', 'AllowedError')):
+                continue
+            if isinstance(value, (bool, int, float)):
+                safe[name] = value
+            elif isinstance(value, str):
+                safe[name] = ''.join(c for c in value[:160] if c.isprintable())
+            elif isinstance(value, bytes):
+                safe[name] = f'<{len(value)} bytes>'
+        print(json.dumps(safe, sort_keys=True))
+print(f'Trust settings ({domain}): {matches} exact certificate matches; command exit {status}')
 PY
 done
 
