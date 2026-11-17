@@ -29,7 +29,7 @@ cleanup() {
   local status=$?
   trap - EXIT
   if [[ $keychain_list_changed == true ]]; then
-    /usr/bin/security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || { echo 'Could not restore the runner keychain list.' >&2; status=1; }
+    /usr/bin/security list-keychains -s "${original_keychains[@]}" >/dev/null 2>&1 || { echo 'Could not restore the runner keychain list.' >&2; status=1; }
   fi
   if [[ $keychain_created == true ]]; then
     /usr/bin/security delete-keychain "$keychain" >/dev/null 2>&1 || { echo 'Could not remove the temporary signing keychain.' >&2; status=1; }
@@ -43,7 +43,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # A failed/empty listing must never replace the user's search list with an empty one.
-/usr/bin/security list-keychains -d user > "$work/keychains.txt"
+# Use the effective search list used by codesign, not just the saved user domain.
+/usr/bin/security list-keychains > "$work/keychains.txt"
 while IFS= read -r entry; do
   entry=${entry#*\"}; entry=${entry%\"*}
   [[ -n $entry ]] && original_keychains+=("$entry")
@@ -74,11 +75,12 @@ keychain_created=true
 /usr/bin/security add-certificates -k "$keychain" "$work/DeveloperIDG2CA.cer"
 /usr/bin/security import "$work/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
 /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
-/usr/bin/security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
+/usr/bin/security list-keychains -s "$keychain" "${original_keychains[@]}"
 /usr/bin/security find-identity -v -p codesigning "$keychain" > "$work/identities.txt"
 grep -F -- "$APPLE_SIGNING_IDENTITY" "$work/identities.txt" >/dev/null || fail 'Certificate with private key is not a valid signing identity.'
 /usr/bin/security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$keychain" > "$work/signing-cert.pem"
-/usr/bin/security verify-cert -p codeSign -L -c "$work/signing-cert.pem" -k "$keychain" || fail 'The Developer ID certificate chain is not trusted by this Mac.'
+# Do not pass -k: this must validate using the same effective list as codesign.
+/usr/bin/security verify-cert -p codeSign -L -c "$work/signing-cert.pem" || fail 'The Developer ID certificate chain is not trusted by this Mac.'
 rm -f "$work/certificate.p12"
 
 # Only Apple tooling below needs credentials. No npm/cargo/build hooks run here.

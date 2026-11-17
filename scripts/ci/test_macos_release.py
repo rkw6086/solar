@@ -31,6 +31,10 @@ elif tool == 'security':
         if os.environ.get('MOCK_KEYCHAIN_LIST_FAIL'): sys.exit(1)
         print('    "/Users/runner/Library/Keychains/login.keychain-db"')
         print('    "/Library/Keychains/System.keychain"')
+    elif action == 'list-keychains' and '-s' in args:
+        # CI can have an effective search list distinct from saved user preferences.
+        if '-d' not in args:
+            pathlib.Path(os.environ['MOCK_EFFECTIVE_LIST']).write_text(json.dumps(args[args.index('-s')+1:]))
     elif action == 'create-keychain': pathlib.Path(args[-1]).touch()
     elif action == 'delete-keychain': pathlib.Path(args[-1]).unlink()
     elif action == 'find-identity': print('1) 1234 "Developer ID Application: Solar Test (ABCDEFGHIJ)"')
@@ -46,12 +50,16 @@ elif tool == 'security':
         assert args[args.index('-p')+1] == 'codeSign' and '-L' in args
         assert '-r' not in args
         assert pathlib.Path(args[args.index('-c')+1]).read_text().strip() == 'dummy-public-leaf'
-        assert pathlib.Path(args[args.index('-k')+1] + '.intermediate').exists()
+        search = json.loads(pathlib.Path(os.environ['MOCK_EFFECTIVE_LIST']).read_text())
+        assert any(pathlib.Path(path + '.intermediate').exists() for path in search)
+        assert '-k' not in args
         if os.environ.get('MOCK_CHAIN_FAIL'): sys.exit(1)
 elif tool == 'codesign':
     if os.environ.get('MOCK_SIGN_FAIL'): sys.exit(1)
     if '--sign' in args:
         assert pathlib.Path(args[args.index('--keychain')+1] + '.intermediate').exists()
+        search = json.loads(pathlib.Path(os.environ['MOCK_EFFECTIVE_LIST']).read_text())
+        assert args[args.index('--keychain')+1] in search
     if '-dv' in args:
         print('TeamIdentifier=ABCDEFGHIJ\nflags=0x10000(runtime)', file=sys.stderr)
 elif tool == 'PlistBuddy': print('0.1.0')
@@ -97,6 +105,7 @@ class ReleaseTest(unittest.TestCase):
             'PATH': f'{self.bin}:{os.environ["PATH"]}',
             'RUNNER_TEMP': str(self.root), 'CARGO_TARGET_DIR': str(self.root / 'target'),
             'SOLAR_RELEASE_DIR': str(self.root / 'artifacts'), 'MOCK_CALLS': str(self.calls),
+            'MOCK_EFFECTIVE_LIST': str(self.root / 'effective-list.json'),
             'APPLE_CERTIFICATE': base64.b64encode(b'dummy-p12').decode(),
             'APPLE_CERTIFICATE_PASSWORD': 'dummy-p12-password',
             'APPLE_SIGNING_IDENTITY': 'Developer ID Application: Solar Test (ABCDEFGHIJ)',
