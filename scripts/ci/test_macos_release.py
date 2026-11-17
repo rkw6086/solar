@@ -19,7 +19,12 @@ elif tool == 'rustc': print('rustc 1.99.1 (test)')
 elif tool == 'node': print('v24.17.0' if '--version' in args else '0.1.0')
 elif tool == 'git':
     print('deadbeef' if args == ['rev-parse', 'HEAD'] else '', end='')
-elif tool == 'openssl': print('a' * 64)
+elif tool == 'openssl':
+    if args[0] == 'rand': print('a' * 64)
+    elif args[0] == 'x509':
+        assert b'BEGIN CERTIFICATE' in pathlib.Path(args[args.index('-in')+1]).read_bytes()
+        assert args[args.index('-outform')+1] == 'DER'
+        pathlib.Path(args[args.index('-out')+1]).write_bytes(b'dummy-intermediate-der')
 elif tool == 'security':
     action = args[0]
     if action == 'list-keychains' and '-s' not in args:
@@ -29,10 +34,24 @@ elif tool == 'security':
     elif action == 'create-keychain': pathlib.Path(args[-1]).touch()
     elif action == 'delete-keychain': pathlib.Path(args[-1]).unlink()
     elif action == 'find-identity': print('1) 1234 "Developer ID Application: Solar Test (ABCDEFGHIJ)"')
+    elif action == 'add-certificates':
+        if os.environ.get('MOCK_INTERMEDIATE_FAIL'): sys.exit(1)
+        assert pathlib.Path(args[-1]).name == 'DeveloperIDG2CA.cer'
+        assert pathlib.Path(args[-1]).read_bytes() == b'dummy-intermediate-der'
+        pathlib.Path(args[args.index('-k')+1] + '.intermediate').touch()
     elif action == 'import':
         assert pathlib.Path(args[1]).read_bytes() == b'dummy-p12'
+    elif action == 'find-certificate': print('dummy-public-leaf')
+    elif action == 'verify-cert':
+        assert args[args.index('-p')+1] == 'codeSign' and '-L' in args
+        assert '-r' not in args
+        assert pathlib.Path(args[args.index('-c')+1]).read_text().strip() == 'dummy-public-leaf'
+        assert pathlib.Path(args[args.index('-k')+1] + '.intermediate').exists()
+        if os.environ.get('MOCK_CHAIN_FAIL'): sys.exit(1)
 elif tool == 'codesign':
     if os.environ.get('MOCK_SIGN_FAIL'): sys.exit(1)
+    if '--sign' in args:
+        assert pathlib.Path(args[args.index('--keychain')+1] + '.intermediate').exists()
     if '-dv' in args:
         print('TeamIdentifier=ABCDEFGHIJ\nflags=0x10000(runtime)', file=sys.stderr)
 elif tool == 'PlistBuddy': print('0.1.0')
@@ -124,6 +143,14 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_cleaned()
         calls = self.recorded()
+        intermediate = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'add-certificates'])
+        identity = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'import'])
+        trust = next(i for i, call in enumerate(calls) if call[:2] == ['security', 'verify-cert'])
+        first_signature = next(i for i, call in enumerate(calls) if call[0] == 'codesign' and '--sign' in call)
+        self.assertLess(intermediate, identity)
+        self.assertLess(identity, trust)
+        self.assertLess(trust, first_signature)
+        self.assertFalse(any(call[:2] == ['security', 'add-trusted-cert'] for call in calls))
         signatures = [call[-1] for call in calls if call[0] == 'codesign' and '--sign' in call]
         self.assertEqual([Path(path).name for path in signatures], ['solar-native-helper', 'solar', 'Solar.app', 'Solar_0.1.0_aarch64.dmg'])
         notarized = [call[3] for call in calls if call[:3] == ['xcrun', 'notarytool', 'submit']]
@@ -148,6 +175,24 @@ class ReleaseTest(unittest.TestCase):
         result = self.run_script('package-macos.sh')
         self.assertNotEqual(result.returncode, 0)
         self.assert_cleaned()
+
+    def test_intermediate_import_failure_cleans_credentials_before_signing(self):
+        self.prepare_app()
+        self.env['MOCK_INTERMEDIATE_FAIL'] = '1'
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assert_cleaned()
+        self.assertFalse(any(call[0] == 'codesign' for call in self.recorded()))
+
+    def test_untrusted_chain_stops_before_signing_or_notarization(self):
+        self.prepare_app()
+        self.env['MOCK_CHAIN_FAIL'] = '1'
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('certificate chain is not trusted', result.stderr)
+        self.assert_cleaned()
+        self.assertFalse(any(call[0] == 'codesign' for call in self.recorded()))
+        self.assertFalse(any(call[:2] == ['xcrun', 'notarytool'] for call in self.recorded()))
 
     def test_keychain_list_failure_never_changes_search_list(self):
         self.prepare_app()

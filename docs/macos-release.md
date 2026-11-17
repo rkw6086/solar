@@ -106,7 +106,7 @@ Remove any repository-level overrides for these seven names after confirming the
 
 Each repository must have **Actions enabled** and a signing workflow that references these secret names. Sharing the credentials makes them available to Galaxy; it does not create Galaxy's release workflow.
 
-The packaging script imports the certificate into a temporary keychain with a generated password. It restores the original keychain search list, deletes the temporary keychain, and removes temporary credential files on exit. The preceding build step receives no signing secrets and uses Tauri's `--no-sign` option; packaging then signs the helper and app explicitly. Do not enable shell tracing (`set -x`) around credential handling. Protect `main` and release tags so unreviewed changes cannot run with signing credentials.
+The packaging script imports the certificate and Apple's public Developer ID G2 intermediate into a temporary keychain with a generated password. It verifies the signing chain against macOS's existing trusted roots before signing; it does not change certificate trust settings. It restores the original keychain search list, deletes the temporary keychain, and removes temporary credential files on exit. The preceding build step receives no signing secrets and uses Tauri's `--no-sign` option; packaging then signs the helper and app explicitly. Do not enable shell tracing (`set -x`) around credential handling. Protect `main` and release tags so unreviewed changes cannot run with signing credentials.
 
 ## 5. Run and download
 

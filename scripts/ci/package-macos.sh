@@ -68,11 +68,17 @@ keychain_list_changed=true
 keychain_created=true
 /usr/bin/security set-keychain-settings -lut 21600 "$keychain"
 /usr/bin/security unlock-keychain -p "$keychain_password" "$keychain"
+# PKCS#12 identity import does not reliably install its additional CA certificates.
+# Add Apple's public intermediate explicitly; retain the Mac's system trust roots.
+/usr/bin/openssl x509 -in scripts/ci/certificates/DeveloperIDG2CA.pem -outform DER -out "$work/DeveloperIDG2CA.cer"
+/usr/bin/security add-certificates -k "$keychain" "$work/DeveloperIDG2CA.cer"
 /usr/bin/security import "$work/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
 /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
 /usr/bin/security list-keychains -d user -s "$keychain" "${original_keychains[@]}"
 /usr/bin/security find-identity -v -p codesigning "$keychain" > "$work/identities.txt"
 grep -F -- "$APPLE_SIGNING_IDENTITY" "$work/identities.txt" >/dev/null || fail 'Certificate with private key is not a valid signing identity.'
+/usr/bin/security find-certificate -c "$APPLE_SIGNING_IDENTITY" -p "$keychain" > "$work/signing-cert.pem"
+/usr/bin/security verify-cert -p codeSign -L -c "$work/signing-cert.pem" -k "$keychain" || fail 'The Developer ID certificate chain is not trusted by this Mac.'
 rm -f "$work/certificate.p12"
 
 # Only Apple tooling below needs credentials. No npm/cargo/build hooks run here.
