@@ -7,6 +7,7 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ### Added
 
+- Slowly moving Solar flares, independent of the star and face, with reduced-motion support.
 - Editable random Orbit names and personalities, distinctive faces, and a gender-free setup form.
 - Solar System, multi-Orbit, and multi-project memories with editable sharing.
 - Orbit-created routines with titles, Markdown details, and a visual cron schedule editor.
@@ -16,6 +17,8 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ### Changed
 
+- Provider, subscription, and MCP credentials use private files under `~/.solar/credentials` instead of macOS Keychain. Existing connections need a fresh sign-in.
+- Solar browser and CLI defaults avoid Keychain prompts, with private browser profiles and file-based command-line credentials.
 - Removed the standalone Activity screen; tool details and approvals stay in conversations.
 
 ### Fixed

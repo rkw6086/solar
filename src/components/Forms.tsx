@@ -888,8 +888,8 @@ export function McpForm({
             />
             <small>
               {native
-                ? "Stored by Solar’s native secure credential service. Leave blank to retain saved values."
-                : "The browser preview discards credentials. Secure storage is available in the native app."}
+                ? "Stored in private files under ~/.solar/credentials. Leave blank to retain saved values."
+                : "The browser preview discards credentials. Private credential storage is available in the desktop app."}
             </small>
           </label>
           {existing?.hasCredentials && (

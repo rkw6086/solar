@@ -236,7 +236,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           {step === "connection" && <>
             <p className="onboarding-lead">First, a place to think.</p>
             <p>Connect your model provider or a local endpoint. You can use different connections and models for different Orbits.</p>
-            <div className="onboarding-note"><LockKeyhole size={17} /><span>On Mac, credentials stay in Keychain. Saving a connection does not start a model request.</span></div>
+            <div className="onboarding-note"><LockKeyhole size={17} /><span>Credentials stay in private files inside ~/.solar. Saving a connection does not start a model request.</span></div>
             <Later>Add, sign in, and discover models later in <strong>Connections</strong>.</Later>
           </>}
           {step === "orbit" && <>

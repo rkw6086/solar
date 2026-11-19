@@ -113,7 +113,7 @@ impl Engine {
         let (events, _) = broadcast::channel(256);
         let engine = Arc::new(Self {
             store: settings_store,
-            providers: ProviderService::new(),
+            providers: ProviderService::new(&data_dir)?,
             tools: ToolBroker::new(data_dir.clone())?,
             data_dir,
             events,

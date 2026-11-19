@@ -172,6 +172,112 @@ fn profile_directory(context: &ToolContext) -> Result<PathBuf, String> {
     managed_subdirectory(&context.data_directory, "browser")
 }
 
+// Solar owns this profile. On macOS Chromium otherwise asks the OS Keychain
+// for its Safe Storage key. Its documented automation mode avoids that lookup;
+// profile files are private, but this is not secret-backed encryption.
+fn browser_flags(without_keychain: bool) -> Vec<&'static str> {
+    let mut flags = vec![
+        "--remote-debugging-port=0",
+        "--remote-debugging-address=127.0.0.1",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--profile-directory=Default",
+    ];
+    if without_keychain {
+        flags.push("--use-mock-keychain");
+    }
+    flags
+}
+
+fn prepare_browser_credentials(directory: &Path, without_keychain: bool) -> Result<(), String> {
+    if !without_keychain {
+        return Ok(());
+    }
+    use cap_std::fs::{Dir, OpenOptions};
+    use std::io::{Read, Write};
+    let profile = managed_subdirectory(directory, "Default")?;
+    let profile = Dir::open_ambient_dir(profile, cap_std::ambient_authority())
+        .map_err(|_| "Cannot open Solar's private browser profile")?;
+    let mut settings = match profile.symlink_metadata("Preferences") {
+        Ok(metadata) => {
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > 4_194_304
+            {
+                return Err(
+                    "Solar browser preferences must be a regular file smaller than 4 MiB".into(),
+                );
+            }
+            let mut options = OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use cap_std::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            }
+            let file = profile
+                .open_with("Preferences", &options)
+                .map_err(|_| "Cannot read Solar browser preferences")?;
+            if !file
+                .metadata()
+                .map_err(|_| "Cannot inspect Solar browser preferences")?
+                .is_file()
+            {
+                return Err("Solar browser preferences must be a regular file".into());
+            }
+            let mut bytes = Vec::new();
+            file.take(4_194_305)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "Cannot read Solar browser preferences")?;
+            if bytes.len() > 4_194_304 {
+                return Err("Solar browser preferences are too large".into());
+            }
+            serde_json::from_slice::<Value>(&bytes).map_err(|_| "Solar browser preferences are invalid; repair this Orbit's browser profile before reopening it")?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(_) => return Err("Cannot inspect Solar browser preferences".into()),
+    };
+    let settings = settings
+        .as_object_mut()
+        .ok_or("Solar browser preferences must be an object")?;
+    // Do not offer password/passkey storage in a profile with no secret-backed key.
+    for key in [
+        "credentials_enable_service",
+        "credentials_enable_passkeys",
+        "credentials_enable_automatic_passkey_upgrades",
+        "credentials_enable_autosignin",
+    ] {
+        settings.insert(key.into(), Value::Bool(false));
+    }
+    let bytes =
+        serde_json::to_vec(settings).map_err(|_| "Cannot prepare Solar browser preferences")?;
+    let temporary = format!(".solar-browser-{}.tmp", uuid::Uuid::new_v4());
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = profile
+            .open_with(&temporary, &options)
+            .map_err(|_| "Cannot save private browser preferences")?;
+        file.write_all(&bytes)
+            .map_err(|_| "Cannot save private browser preferences")?;
+        file.sync_all()
+            .map_err(|_| "Cannot save private browser preferences")?;
+        profile
+            .rename(&temporary, &profile, "Preferences")
+            .map_err(|_| "Cannot finish private browser preferences")?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = profile.remove_file(&temporary);
+    }
+    result
+}
+
 struct BrowserSession {
     directory: PathBuf,
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
@@ -185,6 +291,7 @@ struct BrowserSession {
 impl BrowserSession {
     async fn launch(directory: &Path, data_directory: &Path) -> Result<Self, String> {
         let environment = managed_environment(data_directory)?;
+        prepare_browser_credentials(directory, cfg!(target_os = "macos"))?;
         let active_port = directory.join("DevToolsActivePort");
         let _ = tokio::fs::remove_file(&active_port).await;
         let executable = browser_executable().ok_or("A compatible Chrome or Chromium installation is required. Set SOLAR_BROWSER_EXECUTABLE to its executable path if detection fails.")?;
@@ -192,13 +299,8 @@ impl BrowserSession {
         command
             .envs(environment)
             .arg(format!("--user-data-dir={}", directory.display()))
-            .args([
-                "--remote-debugging-port=0",
-                "--remote-debugging-address=127.0.0.1",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "about:blank",
-            ])
+            .args(browser_flags(cfg!(target_os = "macos")))
+            .arg("about:blank")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -428,5 +530,51 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.path().join("browser")).unwrap();
         assert!(profile_directory(&orbit).is_err());
         assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+    #[test]
+    fn keychain_free_browser_uses_only_private_preferences_and_keeps_other_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = managed_subdirectory(root.path(), "Default").unwrap();
+        std::fs::write(
+            profile.join("Preferences"),
+            r#"{"theme":{"id":"keep"},"credentials_enable_service":true}"#,
+        )
+        .unwrap();
+        prepare_browser_credentials(root.path(), true).unwrap();
+        let settings: Value =
+            serde_json::from_slice(&std::fs::read(profile.join("Preferences")).unwrap()).unwrap();
+        assert_eq!(settings["theme"]["id"], "keep");
+        assert_eq!(settings["credentials_enable_service"], false);
+        assert_eq!(settings["credentials_enable_passkeys"], false);
+        assert!(browser_flags(true).contains(&"--use-mock-keychain"));
+        assert!(!browser_flags(false).contains(&"--use-mock-keychain"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(profile.join("Preferences"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn browser_preferences_never_follow_a_link_outside_the_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(outside.path(), "preserve").unwrap();
+        let profile = managed_subdirectory(root.path(), "Default").unwrap();
+        std::os::unix::fs::symlink(outside.path(), profile.join("Preferences")).unwrap();
+        assert!(prepare_browser_credentials(root.path(), true).is_err());
+        assert_eq!(std::fs::read_to_string(outside.path()).unwrap(), "preserve");
     }
 }

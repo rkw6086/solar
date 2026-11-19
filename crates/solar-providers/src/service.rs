@@ -1,5 +1,7 @@
 //! Solar-owned credentials and provider construction. Tokens never cross into UI state.
+use crate::credential_store::CredentialStore;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -115,30 +117,46 @@ pub struct ProviderService {
     resetting: Arc<AtomicBool>,
     reset_lock: Arc<Mutex<()>>,
     client: reqwest::Client,
+    storage: Arc<CredentialStore>,
     #[cfg(test)]
     token_override: Option<String>,
 }
 
-impl Default for ProviderService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ProviderService {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(data_directory: &Path) -> Result<Self, String> {
+        let storage = Arc::new(CredentialStore::open(data_directory)?);
+        Ok(Self {
             slots: Arc::new(Mutex::new(HashMap::new())),
             resetting: Arc::new(AtomicBool::new(false)),
             reset_lock: Arc::new(Mutex::new(())),
+            storage,
             #[cfg(test)]
             token_override: None,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
-                .expect("static HTTP client configuration is valid"),
+                .map_err(|_| "Cannot initialize Solar's provider connection service.")?,
+        })
+    }
+
+    fn load_secret(
+        &self,
+        key: &str,
+        replace_invalid: bool,
+    ) -> Result<Option<CredentialRecord>, String> {
+        let Some(bytes) = self.storage.load(key)? else {
+            return Ok(None);
+        };
+        match serde_json::from_slice(&bytes) {
+            Ok(record) => Ok(Some(record)),
+            Err(_) if replace_invalid => Ok(None),
+            Err(_) => Err("Stored credentials are invalid. Reconnect this connection.".into()),
         }
+    }
+    fn save_secret(&self, key: &str, record: &CredentialRecord) -> Result<(), String> {
+        let bytes = serde_json::to_vec(record).map_err(|_| "Cannot encode Solar's credential.")?;
+        self.storage.save(key, &bytes)
     }
 
     fn token_url(&self, kind: ProviderKind) -> &str {
@@ -170,7 +188,19 @@ impl ProviderService {
         self.slot_for_key(Self::key(profile)?)
     }
 
+    fn slot_replacing(&self, profile: &ProviderProfile) -> Result<Arc<AuthSlot>, String> {
+        self.slot_for_key_mode(Self::key(profile)?, true)
+    }
+
     fn slot_for_key(&self, key: String) -> Result<Arc<AuthSlot>, String> {
+        self.slot_for_key_mode(key, false)
+    }
+
+    fn slot_for_key_mode(
+        &self,
+        key: String,
+        replace_invalid: bool,
+    ) -> Result<Arc<AuthSlot>, String> {
         if self.resetting.load(Ordering::SeqCst) {
             return Err("Solar credentials are being reset.".into());
         }
@@ -184,7 +214,7 @@ impl ProviderService {
         if let Some(slot) = slots.get(&key) {
             return Ok(slot.clone());
         }
-        let record = load_secret(&key)?;
+        let record = self.load_secret(&key, replace_invalid)?;
         let slot = Arc::new(AuthSlot {
             state: Mutex::new(AuthState {
                 record,
@@ -212,7 +242,7 @@ impl ProviderService {
             account_id: None,
             expires_at: None,
         };
-        let slot = self.slot_for_key(key.clone())?;
+        let slot = self.slot_for_key_mode(key.clone(), true)?;
         let mut state = slot
             .state
             .lock()
@@ -220,7 +250,7 @@ impl ProviderService {
         if self.resetting.load(Ordering::SeqCst) {
             return Err("Solar credentials are being reset.".into());
         }
-        save_secret(&key, &record)?;
+        self.save_secret(&key, &record)?;
         state.generation = state.generation.wrapping_add(1);
         state.record = Some(record);
         Ok(())
@@ -241,12 +271,12 @@ impl ProviderService {
 
     pub fn delete_integration_secret(&self, id: &str) -> Result<(), String> {
         let key = integration_key(id)?;
-        let slot = self.slot_for_key(key.clone())?;
+        let slot = self.slot_for_key_mode(key.clone(), true)?;
         let mut state = slot
             .state
             .lock()
             .map_err(|_| "Credential service is unavailable.")?;
-        let deletion = delete_secret(&key);
+        let deletion = self.storage.delete(&key);
         state.generation = state.generation.wrapping_add(1);
         state.record = None;
         state.error = deletion.as_ref().err().cloned();
@@ -275,7 +305,7 @@ impl ProviderService {
                 .as_ref()
                 .is_some_and(|pending| pending.expires_at > now()),
             message: state.error.clone(),
-            persistent_storage: cfg!(target_os = "macos"),
+            persistent_storage: true,
         })
     }
 
@@ -302,7 +332,7 @@ impl ProviderService {
             account_id: None,
             expires_at: None,
         };
-        let slot = self.slot(profile)?;
+        let slot = self.slot_replacing(profile)?;
         let mut state = slot
             .state
             .lock()
@@ -310,7 +340,7 @@ impl ProviderService {
         if self.resetting.load(Ordering::SeqCst) {
             return Err("Solar credentials are being reset.".into());
         }
-        save_secret(&Self::key(profile)?, &record)?;
+        self.save_secret(&Self::key(profile)?, &record)?;
         state.generation = state.generation.wrapping_add(1);
         slot.cancel_login.notify_waiters();
         state.pending = None;
@@ -320,12 +350,12 @@ impl ProviderService {
     }
 
     pub fn logout(&self, profile: &ProviderProfile) -> Result<(), String> {
-        let slot = self.slot(profile)?;
+        let slot = self.slot_replacing(profile)?;
         let mut state = slot
             .state
             .lock()
             .map_err(|_| "Credential service is unavailable.")?;
-        let deletion = delete_secret(&Self::key(profile)?);
+        let deletion = self.storage.delete(&Self::key(profile)?);
         state.generation = state.generation.wrapping_add(1);
         slot.cancel_login.notify_waiters();
         state.record = None;
@@ -338,7 +368,7 @@ impl ProviderService {
     /// orphaned keys from providers or MCP servers no longer in the database.
     /// Successful reset keeps this service closed until the app restarts.
     pub fn reset_credentials(&self) -> Result<(), String> {
-        self.reset_credentials_with(delete_all_solar_secrets)
+        self.reset_credentials_with(|| self.storage.clear())
     }
 
     fn reset_credentials_with(
@@ -393,7 +423,7 @@ impl ProviderService {
         if profile.kind == ProviderKind::Claude && !profile.experimental {
             return Err(CLAUDE_SUBSCRIPTION_NOTICE.into());
         }
-        let slot = self.slot(profile)?;
+        let slot = self.slot_replacing(profile)?;
         let (port, path) = match profile.kind {
             ProviderKind::ChatGpt => (1455, "/auth/callback"),
             ProviderKind::Claude => (53692, "/callback"),
@@ -534,7 +564,7 @@ impl ProviderService {
             return Err("This sign-in was cancelled or replaced.".into());
         }
         publish_record(&mut state, pending.generation, record, |record| {
-            save_secret(&Self::key(profile)?, record)
+            self.save_secret(&Self::key(profile)?, record)
         })?;
         state.pending = None;
         state.error = None;
@@ -619,7 +649,7 @@ impl ProviderService {
                         .lock()
                         .map_err(|_| "Credential service is unavailable.")?;
                     if state.generation == generation {
-                        let deletion = delete_secret(&Self::key(profile)?);
+                        let deletion = self.storage.delete(&Self::key(profile)?);
                         state.record = None;
                         state.error = Some(error.clone());
                         deletion?;
@@ -636,7 +666,7 @@ impl ProviderService {
             return Err("The provider session was replaced.".into());
         }
         publish_record(&mut state, generation, record.clone(), |record| {
-            save_secret(&Self::key(profile)?, record)
+            self.save_secret(&Self::key(profile)?, record)
         })?;
         Ok(record)
     }
@@ -1056,64 +1086,6 @@ fn validate_endpoint(endpoint: &str) -> Result<String, String> {
     Ok(endpoint.trim().trim_end_matches('/').to_owned())
 }
 
-#[cfg(target_os = "macos")]
-fn load_secret(key: &str) -> Result<Option<CredentialRecord>, String> {
-    match security_framework::passwords::get_generic_password("net.solar-chat.credentials", key) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|_| "Stored provider credentials are invalid. Reconnect the provider.".into()),
-        Err(error) if error.code() == -25300 => Ok(None),
-        Err(_) => Err("Cannot read macOS Keychain credentials.".into()),
-    }
-}
-#[cfg(not(target_os = "macos"))]
-fn load_secret(_key: &str) -> Result<Option<CredentialRecord>, String> {
-    Ok(None)
-}
-#[cfg(target_os = "macos")]
-fn save_secret(key: &str, record: &CredentialRecord) -> Result<(), String> {
-    let data = serde_json::to_vec(record).map_err(|_| "Cannot encode provider credential.")?;
-    security_framework::passwords::set_generic_password("net.solar-chat.credentials", key, &data)
-        .map_err(|_| "Cannot securely save credentials in macOS Keychain.".into())
-}
-#[cfg(not(target_os = "macos"))]
-fn save_secret(_key: &str, _record: &CredentialRecord) -> Result<(), String> {
-    Ok(())
-}
-#[cfg(target_os = "macos")]
-fn delete_secret(key: &str) -> Result<(), String> {
-    match security_framework::passwords::delete_generic_password("net.solar-chat.credentials", key)
-    {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(_) => Err("Cannot delete credentials from macOS Keychain.".into()),
-    }
-}
-#[cfg(not(target_os = "macos"))]
-fn delete_secret(_key: &str) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn delete_all_solar_secrets() -> Result<(), String> {
-    use security_framework::item::{ItemClass, ItemSearchOptions};
-    let result = ItemSearchOptions::new()
-        .class(ItemClass::generic_password())
-        .service("net.solar-chat.credentials")
-        .delete();
-    match result {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(_) => Err("Cannot remove Solar's credentials from macOS Keychain. Solar data has not been erased; try again after unlocking the keychain.".into()),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn delete_all_solar_secrets() -> Result<(), String> {
-    // Other platforms use only the per-service in-memory records cleared above.
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1130,7 +1102,8 @@ mod tests {
 
     #[test]
     fn reset_invalidates_loaded_credentials_and_prevents_late_reconnect() {
-        let service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let service = ProviderService::new(root.path()).unwrap();
         let profile = profile();
         let slot = service.slot(&profile).unwrap();
         let before = slot.state.lock().unwrap().generation;
@@ -1140,7 +1113,7 @@ mod tests {
             account_id: None,
             expires_at: None,
         });
-        // Never invoke the real namespace deletion in a developer's Keychain.
+        // Test the reset state gate independently of storage failure handling.
         service.reset_credentials_with(|| Ok(())).unwrap();
         service
             .reset_credentials_with(|| panic!("A completed credential reset must be idempotent"))
@@ -1160,7 +1133,8 @@ mod tests {
 
     #[test]
     fn failed_credential_reset_can_be_retried() {
-        let service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let service = ProviderService::new(root.path()).unwrap();
         assert!(
             service
                 .reset_credentials_with(|| Err("test deletion failure".into()))
@@ -1187,6 +1161,163 @@ mod tests {
                 .contains("access_token")
         );
     }
+    #[test]
+    fn provider_and_integration_credentials_survive_restart_and_logout_stays_scoped() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = profile();
+        let service = ProviderService::new(root.path()).unwrap();
+        service.set_api_key(&profile, "private-api-key").unwrap();
+        service
+            .set_integration_secret("mcp-one", r#"{"TOKEN":"private-mcp-key"}"#)
+            .unwrap();
+        drop(service);
+        let reopened = ProviderService::new(root.path()).unwrap();
+        assert!(reopened.status(&profile).unwrap());
+        assert!(reopened.login_status(&profile).unwrap().persistent_storage);
+        assert_eq!(
+            reopened.integration_secret("mcp-one").unwrap().as_deref(),
+            Some(r#"{"TOKEN":"private-mcp-key"}"#)
+        );
+        reopened.logout(&profile).unwrap();
+        let third = ProviderService::new(root.path()).unwrap();
+        assert!(!third.status(&profile).unwrap());
+        assert!(third.integration_secret("mcp-one").unwrap().is_some());
+        third.reset_credentials().unwrap();
+        let fourth = ProviderService::new(root.path()).unwrap();
+        assert!(!fourth.status(&profile).unwrap());
+        assert!(fourth.integration_secret("mcp-one").unwrap().is_none());
+    }
+
+    #[test]
+    fn oauth_record_persists_and_failed_rotation_preserves_loaded_session() {
+        let root = tempfile::tempdir().unwrap();
+        let mut profile = profile();
+        profile.kind = ProviderKind::ChatGpt;
+        let service = ProviderService::new(root.path()).unwrap();
+        let original = CredentialRecord {
+            access_token: "access-before".into(),
+            refresh_token: Some("refresh-before".into()),
+            account_id: Some("account".into()),
+            expires_at: Some(now() + 300),
+        };
+        service
+            .save_secret(&ProviderService::key(&profile).unwrap(), &original)
+            .unwrap();
+        let reopened = ProviderService::new(root.path()).unwrap();
+        let slot = reopened.slot(&profile).unwrap();
+        let mut state = slot.state.lock().unwrap();
+        assert_eq!(
+            state.record.as_ref().unwrap().refresh_token.as_deref(),
+            Some("refresh-before")
+        );
+        let generation = state.generation;
+        let rotated = CredentialRecord {
+            access_token: "access-after".into(),
+            refresh_token: Some("refresh-after".into()),
+            account_id: original.account_id,
+            expires_at: original.expires_at,
+        };
+        assert!(
+            publish_record(&mut state, generation, rotated.clone(), |_| Err(
+                "private storage unavailable".into()
+            ))
+            .is_err()
+        );
+        assert_eq!(state.record.as_ref().unwrap().access_token, "access-before");
+        publish_record(&mut state, generation, rotated, |record| {
+            reopened.save_secret(&ProviderService::key(&profile)?, record)
+        })
+        .unwrap();
+        drop(state);
+        let after = ProviderService::new(root.path()).unwrap();
+        let after_slot = after.slot(&profile).unwrap();
+        let after_state = after_slot.state.lock().unwrap();
+        assert_eq!(
+            after_state.record.as_ref().unwrap().access_token,
+            "access-after"
+        );
+        assert_eq!(
+            after_state
+                .record
+                .as_ref()
+                .unwrap()
+                .refresh_token
+                .as_deref(),
+            Some("refresh-after")
+        );
+    }
+
+    #[test]
+    fn corrupt_credential_errors_never_echo_saved_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = profile();
+        let service = ProviderService::new(root.path()).unwrap();
+        service
+            .storage
+            .save(
+                &ProviderService::key(&profile).unwrap(),
+                b"not-json-private-value",
+            )
+            .unwrap();
+        let error = match service.slot(&profile) {
+            Ok(_) => panic!("Corrupt record was accepted"),
+            Err(error) => error,
+        };
+        assert!(!error.contains("not-json-private-value"));
+        assert!(!error.contains(root.path().to_string_lossy().as_ref()));
+        service.reset_credentials().unwrap();
+        assert!(
+            ProviderService::new(root.path())
+                .unwrap()
+                .slot(&profile)
+                .unwrap()
+                .state
+                .lock()
+                .unwrap()
+                .record
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reconnect_and_logout_can_repair_malformed_regular_credentials() {
+        let root = tempfile::tempdir().unwrap();
+        let profile = profile();
+        let service = ProviderService::new(root.path()).unwrap();
+        let key = ProviderService::key(&profile).unwrap();
+        service.storage.save(&key, b"broken-secret-json").unwrap();
+        assert!(service.status(&profile).is_err());
+        service.set_api_key(&profile, "replacement-key").unwrap();
+        assert!(
+            ProviderService::new(root.path())
+                .unwrap()
+                .status(&profile)
+                .unwrap()
+        );
+        service.storage.save(&key, b"broken-again").unwrap();
+        let reopened = ProviderService::new(root.path()).unwrap();
+        assert!(reopened.status(&profile).is_err());
+        reopened.logout(&profile).unwrap();
+        assert!(
+            !ProviderService::new(root.path())
+                .unwrap()
+                .status(&profile)
+                .unwrap()
+        );
+        reopened
+            .storage
+            .save(&integration_key("mcp-one").unwrap(), b"broken-integration")
+            .unwrap();
+        let another = ProviderService::new(root.path()).unwrap();
+        another
+            .set_integration_secret("mcp-one", "valid-integration")
+            .unwrap();
+        assert_eq!(
+            another.integration_secret("mcp-one").unwrap().as_deref(),
+            Some("valid-integration")
+        );
+    }
+
     #[test]
     fn callback_is_bound_to_redirect_and_state() {
         assert!(
@@ -1233,10 +1364,10 @@ mod tests {
         assert!(validate_endpoint("https://key@example.com/v1").is_err());
         assert!(validate_endpoint("file:///tmp/model").is_err());
     }
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn logout_invalidates_credential_and_pending_generation() {
-        let service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let service = ProviderService::new(root.path()).unwrap();
         let profile = profile();
         service.set_api_key(&profile, "test-token").unwrap();
         assert!(service.status(&profile).unwrap());
@@ -1260,7 +1391,7 @@ mod tests {
         };
         assert!(
             publish_record(&mut state, 4, record.clone(), |_| Err(
-                "keychain locked".into()
+                "credential file unavailable".into()
             ))
             .is_err()
         );
@@ -1313,7 +1444,6 @@ mod tests {
         assert_eq!(record.account_id.as_deref(), Some("account"));
         assert!(credential_from_json(&serde_json::json!({"access_token":"secret"}), None).is_err());
     }
-    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn concurrent_requests_share_a_single_refresh() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1327,7 +1457,8 @@ mod tests {
                 r#"{"access_token":"new-token","refresh_token":"rotated","expires_in":3600}"#;
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         });
-        let mut service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let mut service = ProviderService::new(root.path()).unwrap();
         service.token_override = Some(endpoint);
         let mut profile = profile();
         profile.kind = ProviderKind::ChatGpt;
@@ -1344,7 +1475,6 @@ mod tests {
         server.await.unwrap();
     }
 
-    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn logout_during_refresh_cannot_restore_credentials() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1361,7 +1491,8 @@ mod tests {
             let body = r#"{"access_token":"late-token","expires_in":3600}"#;
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         });
-        let mut service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let mut service = ProviderService::new(root.path()).unwrap();
         service.token_override = Some(endpoint);
         let mut profile = profile();
         profile.kind = ProviderKind::ChatGpt;
@@ -1393,10 +1524,10 @@ mod tests {
         assert_eq!(normalize_codex_version("rust-v0.167.0"), Some("0.167.0"));
         assert!(normalize_codex_version("../invalid").is_none());
     }
-    #[cfg(not(target_os = "macos"))]
     #[test]
     fn integration_secrets_are_namespaced_and_removed() {
-        let service = ProviderService::new();
+        let root = tempfile::tempdir().unwrap();
+        let service = ProviderService::new(root.path()).unwrap();
         let profile = profile();
         service.set_api_key(&profile, "provider-key").unwrap();
         service

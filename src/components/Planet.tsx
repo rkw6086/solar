@@ -38,7 +38,8 @@ export function Planet({
   const eyeStyle: EyeStyle = sun ? "bright" : appearance.eyes;
   const smileStyle: SmileStyle = sun ? "smile" : appearance.smile;
   const pixels = useMemo(() => {
-    const cells: { x: number; y: number; color: string }[] = [];
+    const body: { x: number; y: number; color: string }[] = [];
+    const flares: { x: number; y: number; color: string }[] = [];
     for (let y = 0; y < 24; y += 1) {
       for (let x = 0; x < 24; x += 1) {
         const dx = x - 11.5;
@@ -49,18 +50,18 @@ export function Planet({
           let amount = -Math.round((dx + dy) * 2.6);
           if (x < 7 && y < 10) amount += 24;
           if (distance > radius - 1) amount -= 30;
-          cells.push({ x, y, color: shade(color, amount) });
+          body.push({ x, y, color: shade(color, amount) });
         } else if (
           sun &&
           distance < 11.6 &&
           distance > 9 &&
           ((x + y) % 5 === 0 || x === 11 || y === 11)
         ) {
-          cells.push({ x, y, color: shade(color, -20) });
+          flares.push({ x, y, color: shade(color, -20) });
         }
       }
     }
-    return cells;
+    return { body, flares };
   }, [color, sun]);
 
   return (
@@ -73,7 +74,12 @@ export function Planet({
       aria-label={name}
       shapeRendering="crispEdges"
     >
-      {pixels.map((cell) => (
+      {sun && <g className="sun-flares" aria-hidden="true"><g className="sun-flare-pixels">
+        {pixels.flares.map((cell) => (
+          <rect key={`${cell.x}-${cell.y}`} x={cell.x} y={cell.y} width="1" height="1" fill={cell.color} />
+        ))}
+      </g></g>}
+      <g className="planet-body">{pixels.body.map((cell) => (
         <rect
           key={`${cell.x}-${cell.y}`}
           x={cell.x}
@@ -82,7 +88,7 @@ export function Planet({
           height="1"
           fill={cell.color}
         />
-      ))}
+      ))}</g>
       {!sun && (
         <>
           <rect

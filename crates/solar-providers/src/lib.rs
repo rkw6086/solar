@@ -1,6 +1,7 @@
 //! Native Rig providers adapted from Galaxy, with Solar-owned authentication.
 mod anthropic_auth;
 mod chatgpt;
+mod credential_store;
 mod http_client;
 mod native;
 mod openai_compatible;

@@ -571,6 +571,28 @@ p {
   overflow: visible;
   image-rendering: pixelated;
 }
+.sun-flares {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  animation: solar-flares-orbit 38s linear infinite;
+  pointer-events: none;
+}
+.sun-flare-pixels {
+  animation: solar-flares-glow 6s ease-in-out infinite;
+}
+@keyframes solar-flares-orbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes solar-flares-glow {
+  0%, 100% { opacity: .65; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sun-flares, .sun-flare-pixels { animation: none; opacity: 1; }
+}
+:root[data-motion="reduced"] .sun-flares,
+:root[data-motion="reduced"] .sun-flare-pixels { animation: none; opacity: 1; }
 .planet-eyes {
   animation: blink 7s infinite;
   transform-origin: 12px 12px;

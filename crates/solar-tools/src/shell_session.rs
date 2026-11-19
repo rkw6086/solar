@@ -133,6 +133,9 @@ impl ShellSession {
         );
         let glab_directory = managed_subdirectory(&config_directory, "glab-cli")?;
         let git_directory = managed_subdirectory(&config_directory, "git")?;
+        remove_keychain_git_helpers(&git_directory.join("config"))?;
+        let gcm_directory = managed_subdirectory(&config_directory, "gcm")?;
+        let gcm_store = managed_subdirectory(&gcm_directory, "store")?;
         let (private_bin, ssh_config) = initialize_ssh(data_directory, &home)?;
         for (key, value) in &inherited {
             if safe_locale_key(key) || key == "TERM" {
@@ -152,6 +155,13 @@ impl ShellSession {
         environment.insert("ZDOTDIR".into(), home.as_os_str().to_owned());
         environment.insert("GLAB_CONFIG_DIR".into(), glab_directory.into_os_string());
         environment.insert("GLAB_USE_KEYRING".into(), "false".into());
+        // GCM otherwise defaults to Keychain on macOS. Its file store stays
+        // inside this Orbit, matching Solar's explicit file-storage preference.
+        environment.insert("GCM_CREDENTIAL_STORE".into(), "plaintext".into());
+        environment.insert(
+            "GCM_PLAINTEXT_STORE_PATH".into(),
+            gcm_store.into_os_string(),
+        );
         environment.insert(
             "XDG_CONFIG_DIRS".into(),
             config_directory.as_os_str().to_owned(),
@@ -163,7 +173,11 @@ impl ShellSession {
         );
         environment.insert(
             "GIT_SSH_COMMAND".into(),
-            format!("/usr/bin/ssh -F {}", shell_quote(ssh_config.as_os_str())?).into(),
+            format!(
+                "/usr/bin/ssh {SSH_KEYCHAIN_OPTIONS} -F {}",
+                shell_quote(ssh_config.as_os_str())?
+            )
+            .into(),
         );
         initialize_shell_profiles(&home, &config_directory, &private_bin)?;
         Ok(Self {
@@ -323,6 +337,10 @@ fn initialize_bash_profile(home: &Path, path_prefix: &str) -> Result<(), String>
     write_private_file_if_missing(&home.join(".bash_profile"), contents.as_bytes(), 0o600)
 }
 
+// Command-line options take precedence over imported SSH configuration. The
+// IgnoreUnknown option makes this portable to non-Apple OpenSSH builds.
+const SSH_KEYCHAIN_OPTIONS: &str = "-o IgnoreUnknown=UseKeychain -o UseKeychain=no";
+
 fn initialize_ssh(data_directory: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
     let ssh = managed_directory(&home.join(".ssh"))?;
     let config = ssh.join("config");
@@ -338,15 +356,325 @@ fn initialize_ssh(data_directory: &Path, home: &Path) -> Result<(PathBuf, PathBu
     for name in ["ssh", "scp", "sftp"] {
         let executable = Path::new("/usr/bin").join(name);
         if executable.is_file() {
-            let wrapper = format!(
+            let legacy = format!(
                 "#!/bin/sh\nexec {} -F {} \"$@\"\n",
                 shell_quote(executable.as_os_str())?,
                 shell_quote(config.as_os_str())?,
             );
-            write_private_file_if_missing(&private_bin.join(name), wrapper.as_bytes(), 0o700)?;
+            let wrapper = format!(
+                "#!/bin/sh\nexec {} {SSH_KEYCHAIN_OPTIONS} -F {} \"$@\"\n",
+                shell_quote(executable.as_os_str())?,
+                shell_quote(config.as_os_str())?,
+            );
+            update_generated_wrapper(
+                &private_bin.join(name),
+                wrapper.as_bytes(),
+                legacy.as_bytes(),
+            )?;
         }
     }
     Ok((private_bin, config))
+}
+
+/// Upgrade only the exact wrapper emitted by Solar's previous version. A
+/// custom wrapper or symlink is owned by the user and is left alone.
+fn update_generated_wrapper(path: &Path, contents: &[u8], previous: &[u8]) -> Result<(), String> {
+    use std::io::Read;
+    write_private_file_if_missing(path, contents, 0o700)?;
+    let read_previous = || -> Result<bool, String> {
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|_| "Cannot inspect Orbit SSH wrapper".to_owned())?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() != previous.len() as u64
+        {
+            return Ok(false);
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let file = options
+            .open(path)
+            .map_err(|_| "Cannot read Orbit SSH wrapper".to_owned())?;
+        if !file
+            .metadata()
+            .map_err(|_| "Cannot inspect Orbit SSH wrapper")?
+            .is_file()
+        {
+            return Ok(false);
+        }
+        let mut actual = Vec::new();
+        file.take(previous.len() as u64 + 1)
+            .read_to_end(&mut actual)
+            .map_err(|_| "Cannot read Orbit SSH wrapper".to_owned())?;
+        Ok(actual == previous)
+    };
+    if !read_previous()? {
+        return Ok(());
+    }
+    let temporary = path.with_file_name(format!(".solar-ssh-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o700);
+        }
+        let mut file = options
+            .open(&temporary)
+            .map_err(|_| "Cannot update Orbit SSH wrapper".to_owned())?;
+        file.write_all(contents)
+            .map_err(|_| "Cannot update Orbit SSH wrapper".to_owned())?;
+        file.sync_all()
+            .map_err(|_| "Cannot save Orbit SSH wrapper".to_owned())?;
+        if read_previous()? {
+            std::fs::rename(&temporary, path)
+                .map_err(|_| "Cannot finish Orbit SSH wrapper update".to_owned())?;
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temporary);
+    result
+}
+
+// Only the Orbit's own configuration is changed. Parse a private snapshot so
+// Git never follows user includes or writes through the original pathname.
+fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
+    const MAX_CONFIG: usize = 1_048_576;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let Some(original) = read_private_git_config(path, MAX_CONFIG)? else {
+        return Ok(());
+    };
+    // Most shells never need a Git process. The substring is only a cheap
+    // prefilter; Git itself decides which lines are real helper assignments.
+    if !original
+        .windows(11)
+        .any(|value| value.eq_ignore_ascii_case(b"osxkeychain"))
+    {
+        return Ok(());
+    }
+    let Some(git) = [
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+        "/usr/bin/git",
+        "/bin/git",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file()) else {
+        return Err("Git is needed to update this Orbit's imported Git configuration".into());
+    };
+    let parent = path
+        .parent()
+        .ok_or("Invalid private Git configuration path")?;
+    let temporary = parent.join(format!(".solar-git-{}.config", uuid::Uuid::new_v4()));
+    struct Snapshot(PathBuf);
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_file(self.0.with_extension("config.lock"));
+        }
+    }
+    let _snapshot = Snapshot(temporary.clone());
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|_| "Cannot inspect private Git configuration")?;
+    file.write_all(&original)
+        .map_err(|_| "Cannot inspect private Git configuration")?;
+    file.sync_all()
+        .map_err(|_| "Cannot inspect private Git configuration")?;
+    drop(file);
+    let (status, output) = git_config_command(
+        &git,
+        &temporary,
+        &["--null", "--get-regexp", r"^credential(\..*)?\.helper$"],
+        deadline,
+    )?;
+    if status.code() == Some(1) {
+        return Ok(());
+    }
+    if !status.success() {
+        return Err("The Orbit's Git configuration could not be read. Check its syntax.".into());
+    }
+    let text = std::str::from_utf8(&output).map_err(|_| "Git configuration must use UTF-8 text")?;
+    let mut removed = BTreeSet::new();
+    for entry in text.split('\0').filter(|entry| !entry.is_empty()) {
+        let Some((key, value)) = entry.split_once('\n') else {
+            return Err("Cannot inspect private Git credential helpers".into());
+        };
+        if value.to_ascii_lowercase().contains("osxkeychain") {
+            removed.insert((key.to_owned(), value.to_owned()));
+        }
+    }
+    if removed.is_empty() {
+        return Ok(());
+    }
+    if removed.len() > 128 {
+        return Err("Orbit Git configuration has too many Keychain helper entries".into());
+    }
+    for (key, value) in removed {
+        let (status, _) = git_config_command(
+            &git,
+            &temporary,
+            &["--fixed-value", "--unset-all", &key, &value],
+            deadline,
+        )?;
+        if !status.success() {
+            return Err(
+                "Cannot remove a Keychain helper from the Orbit's Git configuration".into(),
+            );
+        }
+    }
+    if read_private_git_config(&temporary, MAX_CONFIG)?.is_none() {
+        return Err("Private Git configuration disappeared".into());
+    }
+    if read_private_git_config(path, MAX_CONFIG)?.as_deref() != Some(original.as_slice()) {
+        return Err("The Orbit's Git configuration changed during its update. Try again.".into());
+    }
+    // Git preserves unrelated lines/comments. Ensure its rewritten copy is
+    // private before the atomic replacement, regardless of the process umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| "Cannot protect private Git configuration")?;
+    }
+    // Flush the final Git-written contents before moving them into place.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .open(&temporary)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| "Cannot save private Git configuration")?;
+    std::fs::rename(&temporary, path).map_err(|_| "Cannot update private Git configuration")?;
+    Ok(())
+}
+
+fn read_private_git_config(path: &Path, maximum: usize) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Cannot inspect private Git configuration".into()),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Orbit Git configuration must be a regular private file".into());
+    }
+    if metadata.len() > maximum as u64 {
+        return Err("Orbit Git configuration exceeds the 1 MiB limit".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options
+        .open(path)
+        .map_err(|_| "Cannot read private Git configuration")?;
+    if !file
+        .metadata()
+        .map_err(|_| "Cannot inspect private Git configuration")?
+        .is_file()
+    {
+        return Err("Orbit Git configuration must be a regular private file".into());
+    }
+    let mut output = Vec::new();
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut output)
+        .map_err(|_| "Cannot read private Git configuration")?;
+    if output.len() > maximum {
+        return Err("Orbit Git configuration exceeds the 1 MiB limit".into());
+    }
+    Ok(Some(output))
+}
+
+fn git_config_command(
+    git: &Path,
+    path: &Path,
+    arguments: &[&str],
+    deadline: std::time::Instant,
+) -> Result<(std::process::ExitStatus, Vec<u8>), String> {
+    use std::{
+        io::Read,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    const MAX_OUTPUT: usize = 2_097_152;
+    if Instant::now() >= deadline {
+        return Err("Git configuration inspection timed out".into());
+    }
+    let mut child = std::process::Command::new(git)
+        .arg("config")
+        .arg("--file")
+        .arg(path)
+        .arg("--no-includes")
+        .args(arguments)
+        .current_dir(
+            path.parent()
+                .ok_or("Invalid private Git configuration path")?,
+        )
+        .env_clear()
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "Cannot run Git to inspect private configuration")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Cannot read Git configuration result")?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut reader = stdout;
+        let mut buffer = [0; 8192];
+        let mut exceeded = false;
+        loop {
+            let count = reader
+                .read(&mut buffer)
+                .map_err(|_| "Cannot read Git configuration result")?;
+            if count == 0 {
+                break;
+            }
+            let keep = count.min(MAX_OUTPUT.saturating_sub(output.len()));
+            output.extend_from_slice(&buffer[..keep]);
+            exceeded |= keep < count;
+        }
+        if exceeded {
+            Err("Private Git configuration result exceeded its limit")
+        } else {
+            Ok(output)
+        }
+    });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err("Git configuration inspection timed out or was interrupted");
+            }
+        }
+    };
+    let output = reader
+        .join()
+        .map_err(|_| "Git configuration inspection was interrupted")??;
+    Ok((status?, output))
 }
 
 fn ssh_config_path(path: &Path) -> Result<String, String> {
@@ -560,6 +888,8 @@ mod tests {
             ("SSH_AUTH_SOCK", "/personal/agent"),
             ("GLAB_CONFIG_DIR", "/personal/glab"),
             ("GLAB_USE_KEYRING", "true"),
+            ("GCM_CREDENTIAL_STORE", "keychain"),
+            ("GCM_PLAINTEXT_STORE_PATH", "/personal/gcm"),
             ("GIT_CONFIG_GLOBAL", "/personal/gitconfig"),
             ("GIT_CONFIG_COUNT", "1"),
             ("GIT_CONFIG_KEY_0", "credential.helper"),
@@ -609,6 +939,11 @@ mod tests {
             root.path().join("config/glab-cli").as_os_str()
         );
         assert_eq!(env[OsStr::new("GLAB_USE_KEYRING")], "false");
+        assert_eq!(env[OsStr::new("GCM_CREDENTIAL_STORE")], "plaintext");
+        assert_eq!(
+            env[OsStr::new("GCM_PLAINTEXT_STORE_PATH")],
+            root.path().join("config/gcm/store").as_os_str()
+        );
         assert_eq!(
             env[OsStr::new("XDG_CONFIG_DIRS")],
             root.path().join("config").as_os_str()
@@ -774,6 +1109,171 @@ mod tests {
                 String::from_utf8_lossy(&output.stdout)
             );
         }
+    }
+
+    #[test]
+    fn private_git_keychain_cleanup_preserves_other_helpers_and_original_source() {
+        let root = private_root();
+        let source = root.path().join("original.gitconfig");
+        let config = root.path().join("config");
+        let included = root.path().join("included.gitconfig");
+        let content = format!(
+            "# keep this comment\n[user]\n\tname = Orbit\n[credential]\n\thelper = osxkeychain\n\thelper = !glab auth git-credential\n[credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n\thelper = /usr/bin/git-credential-osxkeychain\n[include]\n\tpath = {}\n",
+            included.display()
+        );
+        std::fs::write(&source, &content).unwrap();
+        std::fs::write(&config, &content).unwrap();
+        std::fs::write(&included, "[credential]\nhelper = osxkeychain\n").unwrap();
+        remove_keychain_git_helpers(&config).unwrap();
+        let updated = std::fs::read_to_string(&config).unwrap();
+        assert!(!updated.contains("helper = osxkeychain"));
+        assert!(!updated.contains("git-credential-osxkeychain"));
+        assert!(updated.contains("!glab auth git-credential"));
+        assert!(updated.contains("!gh auth git-credential"));
+        assert!(updated.contains("# keep this comment"));
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), content);
+        assert!(
+            std::fs::read_to_string(&included)
+                .unwrap()
+                .contains("osxkeychain")
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 3);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        // A comment about Keychain must not trigger any rewriting by itself.
+        std::fs::write(
+            &config,
+            "# osxkeychain is disabled\n[credential]\nhelper = !glab auth git-credential\n",
+        )
+        .unwrap();
+        let unchanged = std::fs::read(&config).unwrap();
+        remove_keychain_git_helpers(&config).unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), unchanged);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_git_keychain_cleanup_rejects_symlinks_and_does_not_leak_errors() {
+        let root = private_root();
+        let config = root.path().join("config");
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, "[credential]\nhelper = osxkeychain\n").unwrap();
+        std::os::unix::fs::symlink(&outside, &config).unwrap();
+        assert!(remove_keychain_git_helpers(&config).is_err());
+        assert!(
+            std::fs::read_to_string(&outside)
+                .unwrap()
+                .contains("osxkeychain")
+        );
+        std::fs::remove_file(&config).unwrap();
+        std::fs::write(
+            &config,
+            "private-secret-osxkeychain invalid git configuration",
+        )
+        .unwrap();
+        let error = remove_keychain_git_helpers(&config).unwrap_err();
+        assert!(!error.contains("private-secret"));
+    }
+
+    #[test]
+    fn only_unchanged_solar_ssh_wrappers_are_upgraded() {
+        let root = private_root();
+        let wrapper = root.path().join("ssh");
+        let previous = b"#!/bin/sh\nexec /usr/bin/ssh -F private \"$@\"\n";
+        let current = b"#!/bin/sh\nexec /usr/bin/ssh -o UseKeychain=no -F private \"$@\"\n";
+        std::fs::write(&wrapper, previous).unwrap();
+        update_generated_wrapper(&wrapper, current, previous).unwrap();
+        assert_eq!(std::fs::read(&wrapper).unwrap(), current);
+        std::fs::write(&wrapper, b"#!/bin/sh\n# custom wrapper\n").unwrap();
+        update_generated_wrapper(&wrapper, current, previous).unwrap();
+        assert_eq!(
+            std::fs::read(&wrapper).unwrap(),
+            b"#!/bin/sh\n# custom wrapper\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+            let target = root.path().join("user-target");
+            std::fs::write(&target, previous).unwrap();
+            std::fs::remove_file(&wrapper).unwrap();
+            symlink(&target, &wrapper).unwrap();
+            update_generated_wrapper(&wrapper, current, previous).unwrap();
+            assert!(
+                std::fs::symlink_metadata(&wrapper)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), previous);
+            let fresh = root.path().join("fresh");
+            update_generated_wrapper(&fresh, current, previous).unwrap();
+            assert_eq!(
+                std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn imported_ssh_settings_cannot_reenable_keychain() {
+        if !Path::new("/usr/bin/ssh").is_file() {
+            return;
+        }
+        let root = private_root();
+        let shell = fake_shell(root.path(), "bash");
+        let workspace = root.path().join("workspace");
+        ShellSession::for_test(shell.to_str().unwrap(), root.path(), &workspace, vec![]).unwrap();
+        let config = workspace.join(".ssh/config");
+        std::fs::write(
+            &config,
+            "IgnoreUnknown UseKeychain\nHost *\n    UseKeychain yes\n",
+        )
+        .unwrap();
+        let session =
+            ShellSession::for_test(shell.to_str().unwrap(), root.path(), &workspace, vec![])
+                .unwrap();
+        assert!(
+            session
+                .environment
+                .iter()
+                .any(|(key, value)| key == "GIT_SSH_COMMAND"
+                    && value.to_string_lossy().contains(SSH_KEYCHAIN_OPTIONS))
+        );
+        let wrapper = root.path().join("shell/bin/ssh");
+        assert!(
+            std::fs::read_to_string(&wrapper)
+                .unwrap()
+                .contains(SSH_KEYCHAIN_OPTIONS)
+        );
+        let output = std::process::Command::new(&wrapper)
+            .args(["-o", "UseKeychain=yes", "-G", "example.invalid"])
+            .env_clear()
+            .envs(session.environment.iter().cloned())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line == "usekeychain no")
+        );
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("UseKeychain yes")
+        );
     }
 
     #[cfg(unix)]
