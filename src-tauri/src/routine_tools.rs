@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 pub(super) fn definitions() -> Vec<ToolDefinition> {
     let fields = json!({
+        "title": {"type":"string","minLength":1,"maxLength":160,"description":"A short, readable title for this routine."},
+        "cron": {"type":"string","description":"Five-field local-time cron expression: minute hour day month weekday. Required for cron triggers; e.g. 0 9 * * 1-5 means weekdays at 9 AM."},
         "prompt": {"type":"string","minLength":1,"maxLength":16000,"description":"The instructions this Orbit should follow each time the routine runs."},
-        "trigger": {"type":"string","enum":["interval","folder","completion"],"description":"interval: repeat after the given minutes; folder: run when the project folder changes; completion: run after a direct user task finishes successfully. Routine runs do not trigger completion routines again."},
-        "intervalMinutes": {"type":"integer","minimum":1,"maximum":43200,"description":"Minutes between interval runs. Defaults to 60 on creation."},
+        "trigger": {"type":"string","enum":["cron","folder","completion"],"description":"cron: run on the supplied local-time cron schedule; folder: run when the project folder changes; completion: run after a direct user task finishes successfully. Routine runs do not trigger completion routines again."},
         "enabled": {"type":"boolean","description":"Enable or pause automatic runs. Defaults to true on creation."},
         "projectId": {"type":["string","null"],"description":"An accessible project ID from project_list. Required for folder triggers. Null means a private routine; omit on update to preserve the project."}
     });
@@ -24,8 +25,8 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         ),
         (
             "routine_create",
-            "Create a recurring or event-triggered routine for yourself. Check routine_list first to avoid duplicates. Supports intervals, project folder changes, or successful direct-task completion. Available in direct conversations; delegated tasks must ask the user to schedule with the responsible Orbit.",
-            json!({"type":"object","properties":fields,"required":["prompt","trigger"],"additionalProperties":false}),
+            "Create a recurring or event-triggered routine for yourself. Check routine_list first to avoid duplicates. Use cron scheduling, project folder changes, or successful direct-task completion. Available in direct conversations; delegated tasks must ask the user to schedule with the responsible Orbit.",
+            json!({"type":"object","properties":fields,"required":["title","prompt","trigger"],"additionalProperties":false}),
         ),
         (
             "routine_update",
@@ -59,6 +60,9 @@ struct ListArgs {}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateArgs {
+    title: String,
+    #[serde(default)]
+    cron: String,
     prompt: String,
     trigger: String,
     #[serde(default = "default_interval")]
@@ -80,6 +84,8 @@ fn enabled_by_default() -> bool {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UpdateArgs {
     routine_id: String,
+    title: Option<String>,
+    cron: Option<String>,
     prompt: Option<String>,
     trigger: Option<String>,
     interval_minutes: Option<u32>,
@@ -144,6 +150,8 @@ fn routine_view(routine: &Routine) -> Value {
     json!({
         "id": routine.id,
         "orbitId": routine.orbit_id,
+        "title": routine.title,
+        "cron": routine.cron,
         "prompt": routine.prompt,
         "trigger": routine.trigger,
         "intervalMinutes": routine.interval_minutes,
@@ -181,7 +189,13 @@ impl Engine {
                 direct_task(ctx)?;
                 let args: CreateArgs = parse(args)?;
                 validate_interval(args.interval_minutes)?;
+                crate::engine::validate_text(&args.title, "Routine title", 160)?;
+                if !["cron", "folder", "completion"].contains(&args.trigger.as_str()) {
+                    return Err("New routines use cron, folder, or completion triggers".into());
+                }
                 let routine = Routine {
+                    title: args.title,
+                    cron: args.cron,
                     id: String::new(),
                     orbit_id: ctx.task.orbit_id.clone(),
                     prompt: args.prompt,
@@ -198,7 +212,9 @@ impl Engine {
             "routine_update" => {
                 direct_task(ctx)?;
                 let args: UpdateArgs = parse(args)?;
-                if args.prompt.is_none()
+                if args.title.is_none()
+                    && args.cron.is_none()
+                    && args.prompt.is_none()
                     && args.trigger.is_none()
                     && args.interval_minutes.is_none()
                     && args.enabled.is_none()
@@ -211,6 +227,12 @@ impl Engine {
                 }
                 let routine = self.update_routine_with(&args.routine_id, |routine| {
                     check_scope(routine, ctx, &projects)?;
+                    if let Some(title) = args.title {
+                        routine.title = title;
+                    }
+                    if let Some(cron) = args.cron {
+                        routine.cron = cron;
+                    }
                     if let Some(prompt) = args.prompt {
                         routine.prompt = prompt;
                     }
@@ -275,7 +297,7 @@ mod tests {
             ("lastRunAt", json!("1970-01-01T00:00:00Z")),
             ("observedSignature", json!("fake")),
         ] {
-            let mut args = json!({"prompt":"Check the build","trigger":"interval"});
+            let mut args = json!({"title":"Check build","prompt":"Check the build","trigger":"cron","cron":"0 * * * *"});
             args[key] = value;
             assert!(parse::<CreateArgs>(&args).is_err());
         }

@@ -185,7 +185,7 @@ export function AttentionWidget() {
             disabled={pending}
           >
             <span className="attention-planet">
-              <Planet color={color} name={name} size={68} />
+              <Planet identity={orbit?.id} color={color} name={name} size={68} />
               <span className="attention-spark attention-spark-one" aria-hidden="true" />
               <span className="attention-spark attention-spark-two" aria-hidden="true" />
             </span>

@@ -16,8 +16,6 @@ pub struct Orbit {
     pub name: String,
     pub role: String,
     #[serde(default)]
-    pub gender: String,
-    #[serde(default)]
     pub tasks: String,
     pub personality: String,
     pub instructions: String,
@@ -129,16 +127,49 @@ pub struct AttentionItem {
 #[serde(rename_all = "camelCase")]
 pub struct Memory {
     pub id: String,
+    #[serde(default)]
+    pub orbit_ids: Vec<String>,
+    #[serde(default)]
+    pub project_ids: Vec<String>,
     pub orbit_id: Option<String>,
     pub project_id: Option<String>,
     pub content: String,
     pub created_at: String,
 }
 
+impl Memory {
+    pub fn orbit_ids(&self) -> Vec<String> {
+        let mut ids = self.orbit_ids.clone();
+        ids.extend(self.orbit_id.iter().cloned());
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+    pub fn project_ids(&self) -> Vec<String> {
+        let mut ids = self.project_ids.clone();
+        ids.extend(self.project_id.iter().cloned());
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+    pub fn is_system(&self) -> bool {
+        self.orbit_ids().is_empty() && self.project_ids().is_empty()
+    }
+    pub fn visible_to(&self, orbit_id: &str, project_ids: &[String]) -> bool {
+        self.is_system()
+            || self.orbit_ids().iter().any(|id| id == orbit_id)
+            || self.project_ids().iter().any(|id| project_ids.contains(id))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Routine {
     pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub cron: String,
     pub orbit_id: String,
     pub prompt: String,
     pub interval_minutes: u32,

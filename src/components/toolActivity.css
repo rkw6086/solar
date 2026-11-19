@@ -49,3 +49,8 @@
 @media (prefers-reduced-motion: reduce) { .tool-chevron { transition: none; } }
 .tool-file-count { display: inline-block; color: #a3c4ac; background: #244035; font-style: normal; font-size: 9px; font-weight: 400; padding: 2px 5px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }
 .tool-failure { margin: 10px 0 0; color: #e9b2a7; font-size: 11px; line-height: 1.6; }
+.home-import-review { font-size: .82rem; line-height: 1.5; }
+.home-import-review > ul { max-height: 260px; overflow: auto; padding: 0; list-style: none; }
+.home-import-review li { display: grid; gap: 3px; padding: 9px 0; border-bottom: 1px solid var(--border, #ffffff18); overflow-wrap: anywhere; }
+.home-import-review li span, .home-import-review li small { color: var(--muted, #aaa); }
+.home-import-review summary { cursor: pointer; }

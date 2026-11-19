@@ -4,9 +4,20 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 
 const SUN_SIZE: f64 = 192.0;
 const PLANET_SIZE: f64 = 112.0;
-const GAP: f64 = 12.0;
 const EDGE_PADDING: f64 = 8.0;
-const FIRST_RING_RADIUS: f64 = 232.0;
+const FIRST_RING_RADIUS: f64 = 200.0;
+pub(crate) const ORBIT_PERIOD_SECONDS: f64 = 120.0;
+
+/// Keep crowded teams readable and leave unambiguous pointer targets.
+pub(crate) fn planet_art_size(count: usize) -> f64 {
+    if count > 36 {
+        56.0
+    } else if count > 18 {
+        72.0
+    } else {
+        88.0
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Rect {
@@ -30,22 +41,6 @@ struct Extents {
     bottom: f64,
 }
 
-fn extents(offsets: &[(f64, f64)], scale: f64) -> Extents {
-    let mut result = Extents {
-        left: -SUN_SIZE / 2.0,
-        top: -SUN_SIZE / 2.0,
-        right: SUN_SIZE / 2.0,
-        bottom: SUN_SIZE / 2.0,
-    };
-    for &(x, y) in offsets {
-        result.left = result.left.min(x * scale - PLANET_SIZE / 2.0);
-        result.top = result.top.min(y * scale - PLANET_SIZE / 2.0);
-        result.right = result.right.max(x * scale + PLANET_SIZE / 2.0);
-        result.bottom = result.bottom.max(y * scale + PLANET_SIZE / 2.0);
-    }
-    result
-}
-
 fn within(value: f64, low: f64, high: f64) -> f64 {
     if low <= high {
         value.clamp(low, high)
@@ -58,13 +53,23 @@ fn within(value: f64, low: f64, high: f64) -> f64 {
 
 /// Return top-left positions for the sun and each planet in caller-supplied order.
 ///
-/// Each ring starts at twelve o'clock and is evenly populated, so repeating an
-/// expansion for the same ordered roster produces the same relative positions.
-/// Move the formation as a unit at screen edges; never clamp planets separately.
-/// Very large rosters or small screens compress the ring radii together. This
-/// keeps all windows on work areas at least 192px wide/high, but no fixed-size
-/// layout can promise non-overlap when there is insufficient screen space.
+/// Each lane is evenly populated, so repeating an expansion for the same
+/// ordered roster produces the same positions. Move the formation as a unit at
+/// screen edges; never clamp planets separately. Complete paths stay in bounds
+/// as they rotate. Tiny displays and very large rosters necessarily get denser.
 pub(crate) fn orbit_layout(bounds: Rect, sun: (f64, f64), count: usize) -> Layout {
+    orbit_layout_at(bounds, sun, count, 0.0)
+}
+
+/// All members of a lane keep the same angular speed. Adjacent lanes are in a
+/// 2:1 resonance, matching the launcher scene. Reserve each complete circular
+/// path at the screen edge so moving planets never shove the sun around.
+pub(crate) fn orbit_layout_at(
+    bounds: Rect,
+    sun: (f64, f64),
+    count: usize,
+    elapsed_seconds: f64,
+) -> Layout {
     let bounds = Rect {
         x: if bounds.x.is_finite() { bounds.x } else { 0.0 },
         y: if bounds.y.is_finite() { bounds.y } else { 0.0 },
@@ -86,48 +91,43 @@ pub(crate) fn orbit_layout(bounds: Rect, sun: (f64, f64), count: usize) -> Layou
 
     let mut offsets = Vec::with_capacity(count);
     let mut remaining = count;
-    let mut radius = FIRST_RING_RADIUS;
-    let mut first_ring = true;
-    let separation = PLANET_SIZE * 2.0_f64.sqrt() + GAP;
+    let mut ring = 0usize;
+    let elapsed_seconds = if elapsed_seconds.is_finite() {
+        elapsed_seconds.max(0.0)
+    } else {
+        0.0
+    };
     while remaining > 0 {
-        let capacity = if first_ring {
-            8
+        let on_ring = remaining.min(6 * (ring + 1));
+        let radius = FIRST_RING_RADIUS * (ring + 1) as f64;
+        let phase = if ring % 2 == 1 {
+            std::f64::consts::PI / on_ring as f64
         } else {
-            // A chord this long separates even the diagonal corners of two
-            // fixed-size planet windows. Adjacent rings use the same clearance.
-            (TAU / (2.0 * (separation / (2.0 * radius)).asin())).floor() as usize
+            0.0
         };
-        let on_ring = remaining.min(capacity.max(1));
+        let travel = elapsed_seconds / (ORBIT_PERIOD_SECONDS * 2.0_f64.powi(ring as i32)) * TAU;
         for index in 0..on_ring {
-            let angle = -FRAC_PI_2 + TAU * index as f64 / on_ring as f64;
+            let angle = -FRAC_PI_2 + TAU * index as f64 / on_ring as f64 + phase + travel;
             offsets.push((angle.cos() * radius, angle.sin() * radius));
         }
         remaining -= on_ring;
-        radius += separation;
-        first_ring = false;
+        ring += 1;
     }
-
-    let fits = |scale| {
-        let extent = extents(&offsets, scale);
-        extent.right - extent.left <= available_width
-            && extent.bottom - extent.top <= available_height
-    };
-    let scale = if fits(1.0) {
-        1.0
+    let radius = FIRST_RING_RADIUS * ring as f64;
+    let available_radius = ((available_width.min(available_height) - PLANET_SIZE) / 2.0).max(0.0);
+    let scale = if radius > 0.0 {
+        (available_radius / radius).min(1.0)
     } else {
-        let mut low = 0.0;
-        let mut high = 1.0;
-        for _ in 0..48 {
-            let middle = (low + high) / 2.0;
-            if fits(middle) {
-                low = middle;
-            } else {
-                high = middle;
-            }
-        }
-        low
+        1.0
     };
-    let extent = extents(&offsets, scale);
+    let extent_radius =
+        (radius * scale + if count > 0 { PLANET_SIZE / 2.0 } else { 0.0 }).max(SUN_SIZE / 2.0);
+    let extent = Extents {
+        left: -extent_radius,
+        top: -extent_radius,
+        right: extent_radius,
+        bottom: extent_radius,
+    };
     let desired_x = if sun.0.is_finite() {
         sun.0 + SUN_SIZE / 2.0
     } else {
@@ -192,8 +192,8 @@ mod tests {
 
     #[test]
     fn repeated_expansions_have_identical_slots_and_encircle_the_sun() {
-        let layout = orbit_layout(screen(), (1100.0, 550.0), 7);
-        assert_eq!(layout, orbit_layout(screen(), (1100.0, 550.0), 7));
+        let layout = orbit_layout(screen(), (1100.0, 550.0), 6);
+        assert_eq!(layout, orbit_layout(screen(), (1100.0, 550.0), 6));
         let center = (layout.sun.0 + 96.0, layout.sun.1 + 96.0);
         let centers: Vec<_> = layout
             .planets
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn ordinary_rosters_have_clear_planet_windows_and_clear_the_sun() {
-        for count in 1..=22 {
+        for count in 1..=18 {
             let layout = orbit_layout(screen(), (1100.0, 550.0), count);
             for (index, &planet) in layout.planets.iter().enumerate() {
                 assert_inside(planet, PLANET_SIZE, screen());
@@ -268,6 +268,66 @@ mod tests {
         assert_inside(layout.sun, SUN_SIZE, bounds);
         for planet in layout.planets {
             assert_inside(planet, PLANET_SIZE, bounds);
+        }
+    }
+
+    #[test]
+    fn eighteen_orbits_remain_separated_during_resonance_and_stay_in_bounds() {
+        for seconds in [0.0, 15.0, 30.0, 90.0, 120.0, 240.0] {
+            let bounds = Rect {
+                x: 0.0,
+                y: 28.0,
+                width: 1440.0,
+                height: 872.0,
+            };
+            let layout = orbit_layout_at(bounds, (620.0, 350.0), 18, seconds);
+            for (index, &planet) in layout.planets.iter().enumerate() {
+                assert_inside(planet, PLANET_SIZE, bounds);
+                let center_distance = (planet.0 + 56.0 - layout.sun.0 - 96.0)
+                    .hypot(planet.1 + 56.0 - layout.sun.1 - 96.0);
+                assert!(
+                    center_distance >= 110.0,
+                    "visible sun collision at {seconds}s"
+                );
+                for &other in &layout.planets[..index] {
+                    assert!(
+                        separated(planet, PLANET_SIZE, other, PLANET_SIZE),
+                        "collision at {seconds}s"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            orbit_layout_at(screen(), (1100.0, 550.0), 18, 0.0).sun,
+            orbit_layout_at(screen(), (1100.0, 550.0), 18, 120.0).sun
+        );
+    }
+
+    #[test]
+    fn larger_rosters_have_distinct_lanes_and_visible_character_spacing() {
+        let bounds = Rect {
+            x: 0.0,
+            y: 28.0,
+            width: 1280.0,
+            height: 772.0,
+        };
+        for count in [20, 40] {
+            let minimum = planet_art_size(count) * 0.75 + 4.0;
+            for seconds in [0.0, 30.0, 60.0, 120.0, 240.0, 480.0] {
+                let layout = orbit_layout_at(bounds, (550.0, 320.0), count, seconds);
+                for (index, &planet) in layout.planets.iter().enumerate() {
+                    assert_inside(planet, PLANET_SIZE, bounds);
+                    let sun_distance = (planet.0 + 56.0 - layout.sun.0 - 96.0)
+                        .hypot(planet.1 + 56.0 - layout.sun.1 - 96.0);
+                    assert!(sun_distance > 36.0 + minimum / 2.0);
+                    for &other in &layout.planets[..index] {
+                        assert!(
+                            (planet.0 - other.0).hypot(planet.1 - other.1) >= minimum,
+                            "crowded roster collision for {count} at {seconds}s"
+                        );
+                    }
+                }
+            }
         }
     }
 

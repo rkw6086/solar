@@ -4,6 +4,8 @@ pub mod engine;
 mod logging_credentials;
 pub mod model;
 mod onboarding;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod orbit_cli;
 mod orbit_prompt;
 mod orbit_reset;
 mod profile_config;
@@ -35,6 +37,8 @@ mod desktop_intro;
 mod desktop_layout;
 #[cfg(feature = "desktop")]
 mod desktop_logging;
+#[cfg(any(feature = "desktop", test))]
+mod desktop_motion;
 #[cfg(feature = "desktop")]
 mod desktop_onboarding;
 #[cfg(feature = "desktop")]

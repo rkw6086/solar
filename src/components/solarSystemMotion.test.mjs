@@ -1,53 +1,65 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { orbitPosition, orbitTracks } from "./solarSystemMotion.ts";
+import { orbitPosition, orbitTracks, ORBIT_PERIOD } from "./solarSystemMotion.ts";
 
-test("empty systems contain no invented Orbits", () => {
-  assert.deepEqual(orbitTracks([]), []);
-});
+const roster = (count) => Array.from({ length: count }, (_, index) => ({ id: `orbit-${String(index).padStart(3, '0')}` }));
 
-test("the same Orbits keep their tracks and phases regardless of input ordering", () => {
-  const orbits = [{ id: "research" }, { id: "assistant" }, { id: "quality" }];
+test("empty systems contain no invented Orbits", () => assert.deepEqual(orbitTracks([]), []));
+test("tracks are deterministic regardless of input order", () => {
+  const orbits = roster(18);
   assert.deepEqual(orbitTracks(orbits), orbitTracks([...orbits].reverse()));
-  assert.deepEqual(orbits.map(({ id }) => id), ["research", "assistant", "quality"]);
 });
-
-test("integer periods return each Orbit to its starting point in resonance", () => {
-  const tracks = orbitTracks([{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }]);
-  assert.deepEqual(tracks.map(({ period }) => period / tracks[0].period), [1, 2, 3, 4]);
-  for (const track of tracks) {
-    const first = orbitPosition(track, 0, 700, 400);
-    const repeated = orbitPosition(track, 12 * tracks[0].period, 700, 400);
+test("eighteen Orbits share two resonant lanes with stable separation", () => {
+  const tracks = orbitTracks(roster(18));
+  assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD).length, 6);
+  assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD * 2).length, 12);
+  for (const elapsed of [0, 30000, 60000, 120000, 500000]) {
+    const points = tracks.map(t => orbitPosition(t, elapsed, 840, 440));
+    for (let i = 0; i < points.length; i++) {
+      for (let j = 0; j < i; j++) {
+        assert.ok(Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) > 44, `collision at ${elapsed}: ${i}, ${j}`);
+      }
+    }
+  }
+});
+test("the whole system returns to its starting phase every outer orbit", () => {
+  for (const track of orbitTracks(roster(18))) {
+    const first = orbitPosition(track, 0, 700, 440);
+    const repeated = orbitPosition(track, ORBIT_PERIOD * 2, 700, 440);
     assert.ok(Math.abs(first.x - repeated.x) < 1e-9);
     assert.ok(Math.abs(first.y - repeated.y) < 1e-9);
   }
 });
-
-test("shared-prefix IDs start spread around the star instead of in a pile", () => {
-  for (const count of [2, 4, 8]) {
-    const tracks = orbitTracks(Array.from({ length: count }, (_, index) => ({ id: `orbital-fixture-${index + 1}` })));
-    const phases = tracks.map(({ phase }) => phase).sort((a, b) => a - b);
-    const spacing = Math.PI * 2 / count;
-    for (let index = 0; index < phases.length; index += 1) {
-      const next = phases[(index + 1) % phases.length] + (index === phases.length - 1 ? Math.PI * 2 : 0);
-      assert.ok(next - phases[index] >= spacing * 0.8 - 1e-12);
-      assert.ok(next - phases[index] <= spacing * 1.2 + 1e-12);
+test("positions remain bounded after resize", () => {
+  for (const count of [1, 3, 18, 36]) {
+    for (const track of orbitTracks(roster(count))) {
+      for (const elapsed of [0, 12000, 45321, 250000]) {
+        const { x, y } = orbitPosition(track, elapsed, 440, 320);
+        assert.ok(Math.abs(x) <= 440 * .44);
+        assert.ok(Math.abs(y) <= 320 * .44);
+      }
     }
   }
 });
 
-test("all positions remain on their bounded ellipses after resize", () => {
-  for (const count of [1, 3, 12]) {
-    for (const track of orbitTracks(Array.from({ length: count }, (_, i) => ({ id: String(i) })))) {
-      for (const [width, height] of [[440, 320], [700, 450]]) {
-        for (const elapsed of [0, 12_000, 45_321, 250_000]) {
-          const { x, y } = orbitPosition(track, elapsed, width, height);
-          assert.ok(Math.abs(x) <= width * 0.4);
-          assert.ok(Math.abs(y) <= height * 0.35);
-          const ellipse = (x / (width * track.x)) ** 2 + (y / (height * track.y)) ** 2;
-          assert.ok(Math.abs(ellipse - 1) < 1e-12);
+test("twenty and forty Orbits use distinct, proportionate lanes with room for their smaller characters", () => {
+  for (const count of [20, 40]) {
+    const tracks = orbitTracks(roster(count));
+    const minimum = count > 36 ? 32 : 36;
+    const lanes = [...new Set(tracks.map(track => track.x))];
+    assert.equal(lanes.length, count > 36 ? 4 : 3);
+    assert.ok(lanes[lanes.length - 1] <= .4);
+    for (const [width, height] of [[840, 440], [718, 320]]) {
+    for (let elapsed = 0; elapsed < 480000; elapsed += 1000) {
+      const points = tracks.map(track => orbitPosition(track, elapsed, width, height));
+      for (let index = 0; index < points.length; index++) {
+        assert.ok(Math.abs(points[index].x) <= width * .4);
+        assert.ok(Math.abs(points[index].y) <= height * .4);
+        for (let other = 0; other < index; other++) {
+          assert.ok(Math.hypot(points[index].x - points[other].x, points[index].y - points[other].y) >= minimum - 1e-9);
         }
       }
+    }
     }
   }
 });

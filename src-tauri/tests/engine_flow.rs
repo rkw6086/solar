@@ -333,7 +333,6 @@ async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
     let mut draft = engine.orbit("assistant").unwrap();
     draft.id = "profile-expansion-fixture".into();
     draft.name = "Nova".into();
-    draft.gender = "they/them".into();
     draft.personality = "Quiet and practical".into();
     draft.tasks = "Compare public observatory research.".into();
     draft.instructions = "CLIENT_SUPPLIED_INITIAL_INSTRUCTIONS".into();
@@ -346,7 +345,6 @@ async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
 
     let mut edit = created;
     edit.name = "Aster".into();
-    edit.gender = "he/him".into();
     edit.role = "Science editor".into();
     edit.personality = "Warm, skeptical, and precise".into();
     edit.tasks = "Review laboratory evidence and cite reproducible findings.".into();
@@ -357,7 +355,6 @@ async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
         .await
         .unwrap();
     assert_eq!(updated.name, edit.name);
-    assert_eq!(updated.gender, edit.gender);
     assert_eq!(updated.personality, edit.personality);
     assert_eq!(updated.role, edit.role);
     assert_eq!(updated.tasks, edit.tasks);
@@ -400,18 +397,11 @@ async fn selected_model_expands_raw_profile_on_create_and_edit_before_chat() {
     }
     let creation_profile = requests[0]["messages"].to_string();
     assert!(creation_profile.contains(&draft.name));
-    assert!(creation_profile.contains(&draft.gender));
     assert!(creation_profile.contains(&draft.personality));
     assert!(creation_profile.contains(&draft.tasks));
     assert!(!creation_profile.contains(&draft.instructions));
     let edit_profile = requests[1]["messages"].to_string();
-    for value in [
-        &edit.name,
-        &edit.gender,
-        &edit.role,
-        &edit.personality,
-        &edit.tasks,
-    ] {
+    for value in [&edit.name, &edit.role, &edit.personality, &edit.tasks] {
         assert!(edit_profile.contains(value));
     }
     for obsolete in [initial_instructions, &draft.tasks, &edit.instructions] {
@@ -1028,6 +1018,8 @@ fn import_strips_authority_and_private_memory_stays_scoped() {
     assert!(imported.provider_id.is_empty());
     engine
         .save_memory(Memory {
+            orbit_ids: Vec::new(),
+            project_ids: Vec::new(),
             id: "private".into(),
             orbit_id: Some("assistant".into()),
             project_id: None,
@@ -1036,11 +1028,13 @@ fn import_strips_authority_and_private_memory_stays_scoped() {
         })
         .unwrap();
     assert!(engine.memories(Some("qa"), None).unwrap().is_empty());
-    assert!(engine.memories(None, None).unwrap().is_empty());
+    assert_eq!(engine.memories(None, None).unwrap().len(), 1);
 }
 
 fn routine_fixture(id: &str, orbit_id: &str, project_id: Option<&str>) -> Routine {
     Routine {
+        title: String::new(),
+        cron: String::new(),
         id: id.into(),
         orbit_id: orbit_id.into(),
         prompt: format!("Original task for {id}"),
@@ -1067,7 +1061,7 @@ fn tool_result<'a>(request: &'a Value, call_id: &str) -> &'a str {
 #[tokio::test]
 async fn routine_tools_are_advertised_and_persist_changes_through_rig() {
     let create_and_update = json!({"role":"assistant","tool_calls":[
-        {"index":0,"id":"create-routine","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Check the project's open tasks every morning", "trigger":"interval", "intervalMinutes":1440}).to_string()}},
+        {"index":0,"id":"create-routine","type":"function","function":{"name":"routine_create","arguments":json!({"title":"Morning project review", "prompt":"Check the project's open tasks every morning", "trigger":"cron", "cron":"0 9 * * *"}).to_string()}},
         {"index":1,"id":"update-routine","type":"function","function":{"name":"routine_update","arguments":json!({"routineId":"existing-routine","prompt":"Review the weekly release notes", "intervalMinutes":10080, "enabled":true}).to_string()}},
         {"index":2,"id":"list-before-delete","type":"function","function":{"name":"routine_list","arguments":"{}"}}
     ]});
@@ -1128,7 +1122,8 @@ async fn routine_tools_are_advertised_and_persist_changes_through_rig() {
     let created: Routine =
         serde_json::from_str(tool_result(&requests[1], "create-routine")).unwrap();
     assert_eq!(created.orbit_id, "assistant");
-    assert_eq!(created.interval_minutes, 1440);
+    assert_eq!(created.cron, "0 9 * * *");
+    assert_eq!(created.title, "Morning project review");
     assert!(created.enabled);
     let updated: Routine =
         serde_json::from_str(tool_result(&requests[1], "update-routine")).unwrap();
@@ -1158,7 +1153,7 @@ async fn routine_tools_are_advertised_and_persist_changes_through_rig() {
 #[tokio::test]
 async fn routine_creation_respects_a_denied_tool_approval() {
     let call = json!({"role":"assistant","tool_calls":[
-        {"index":0,"id":"denied-routine","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Check my tasks hourly", "trigger":"interval", "intervalMinutes":60}).to_string()}}
+        {"index":0,"id":"denied-routine","type":"function","function":{"name":"routine_create","arguments":json!({"title":"Hourly check", "prompt":"Check my tasks hourly", "trigger":"cron", "cron":"0 * * * *"}).to_string()}}
     ]});
     let (url, server) = fixture(vec![
         response(call, "tool_calls"),
@@ -1216,7 +1211,7 @@ async fn delegated_routine_tools_cannot_escape_inherited_project_access() {
     // consecutive-failure limit while exercising every routine mutation.
     let child_calls = json!({"role":"assistant","tool_calls":[
         {"index":0,"id":"child-routine-list","type":"function","function":{"name":"routine_list","arguments":"{}"}},
-        {"index":1,"id":"child-routine-create","type":"function","function":{"name":"routine_create","arguments":json!({"prompt":"Schedule a future task", "trigger":"interval", "intervalMinutes":60}).to_string()}},
+        {"index":1,"id":"child-routine-create","type":"function","function":{"name":"routine_create","arguments":json!({"title":"Future task", "prompt":"Schedule a future task", "trigger":"cron", "cron":"0 * * * *"}).to_string()}},
         {"index":2,"id":"child-routine-update","type":"function","function":{"name":"routine_update","arguments":json!({"routineId":"child-visible","enabled":true}).to_string()}},
         {"index":3,"id":"child-routine-list-again","type":"function","function":{"name":"routine_list","arguments":"{}"}},
         {"index":4,"id":"child-routine-delete","type":"function","function":{"name":"routine_delete","arguments":json!({"routineId":"child-visible"}).to_string()}},

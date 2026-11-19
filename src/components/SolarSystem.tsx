@@ -93,6 +93,8 @@ export function SolarSystem({
   }, [tracks, hovered, focused, reducedMotion]);
 
   const empty = !tracks.length;
+  const planetSize = tracks.length > 36 ? 32 : tracks.length > 18 ? 36 : tracks.length > 8 ? 42 : 58;
+  const starSize = tracks.length > 36 ? 56 : tracks.length > 8 ? 84 : 112;
   return (
     <section className={`solar-system ${empty ? "solar-system-empty" : ""} ${compact ? "solar-system-compact" : ""}`} aria-labelledby="solar-system-title">
       <header className="solar-system-heading">
@@ -106,6 +108,7 @@ export function SolarSystem({
       <div
         className={`solar-system-stage ${tracks.length > 8 ? "solar-system-crowded" : ""}`}
         ref={stage}
+        style={{ "--scene-planet-size": `${planetSize}px`, "--scene-star-size": `${starSize}px` } as CSSProperties}
         onFocusCapture={() => setFocused(true)}
         onBlurCapture={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
@@ -114,7 +117,7 @@ export function SolarSystem({
       >
         <div className="solar-system-dust" aria-hidden="true" />
         <div className="solar-system-halo" aria-hidden="true" />
-        {tracks.map(({ orbit, x, y }) => (
+        {tracks.filter((track, index) => index === 0 || track.period !== tracks[index - 1].period).map(({ orbit, x, y }) => (
           <div
             key={orbit.id}
             className="solar-system-track"
@@ -123,7 +126,7 @@ export function SolarSystem({
           />
         ))}
         <div className="solar-system-star">
-          <Planet sun color="#e8ad66" name="Solar" size={112} />
+          <Planet sun color="#e8ad66" name="Solar" size={starSize} />
           <span>Solar</span>
         </div>
         {tracks.map(({ orbit }) => (
@@ -141,7 +144,7 @@ export function SolarSystem({
             aria-label={`Chat with ${orbit.name}, ${orbit.role}`}
             title={`${orbit.name} · ${orbit.role}`}
           >
-            <Planet color={orbit.color} name={orbit.name} size={58} />
+            <Planet color={orbit.color} name={orbit.name} identity={orbit.id} size={planetSize} />
             <span className="solar-system-orbit-name">{orbit.name}</span>
           </button>
         ))}

@@ -311,8 +311,8 @@ impl Engine {
         validate_id(&orbit.id)?;
         validate_text(&orbit.name, "Name", 100)?;
         validate_text(&orbit.role, "Role", 300)?;
-        if orbit.gender.len() > 200 || orbit.tasks.len() > 32_000 {
-            return Err("Orbit gender or tasks are too long".into());
+        if orbit.tasks.len() > 32_000 {
+            return Err("Orbit tasks are too long".into());
         }
         if orbit.instructions.len() > 32_000 || orbit.personality.len() > 8_000 {
             return Err("Orbit instructions are too long".into());
@@ -620,8 +620,13 @@ impl Engine {
             .list::<Memory>("memories")?
             .into_iter()
             .filter(|m| {
-                (orbit_id.is_some() && m.orbit_id.as_deref() == orbit_id)
-                    || (project_id.is_some() && m.project_id.as_deref() == project_id)
+                if orbit_id.is_none() && project_id.is_none() {
+                    return true;
+                }
+                m.is_system()
+                    || orbit_id.is_some_and(|id| m.orbit_ids().iter().any(|owner| owner == id))
+                    || project_id
+                        .is_some_and(|id| m.project_ids().iter().any(|project| project == id))
             })
             .collect())
     }
@@ -633,15 +638,20 @@ impl Engine {
         }
         validate_id(&memory.id)?;
         validate_text(&memory.content, "Memory", 16_000)?;
-        match (&memory.orbit_id, &memory.project_id) {
-            (Some(orbit_id), None) => {
-                self.orbit(orbit_id)?;
-            }
-            (None, Some(project_id)) => {
-                self.project(project_id)?;
-            }
-            _ => return Err("A memory belongs to exactly one Orbit or shared project".into()),
+        memory.orbit_ids = memory.orbit_ids();
+        memory.project_ids = memory.project_ids();
+        if !memory.orbit_ids.is_empty() && !memory.project_ids.is_empty() {
+            return Err("Choose Orbit sharing or project sharing for a memory".into());
         }
+        for owner in &memory.orbit_ids {
+            self.orbit(owner)?;
+        }
+        for project in &memory.project_ids {
+            self.project(project)?;
+        }
+        // One private owner lives in that Orbit's database; shared memories live centrally.
+        memory.orbit_id = (memory.orbit_ids.len() == 1).then(|| memory.orbit_ids[0].clone());
+        memory.project_id = (memory.project_ids.len() == 1).then(|| memory.project_ids[0].clone());
         if memory.created_at.is_empty() {
             memory.created_at = now();
         }
@@ -765,8 +775,22 @@ impl Engine {
         let previous = self.store.get::<Routine>("routines", &routine.id)?;
         self.orbit(&routine.orbit_id)?;
         validate_text(&routine.prompt, "Routine prompt", 16_000)?;
-        if !["interval", "folder", "completion"].contains(&routine.trigger.as_str()) {
+        if !["cron", "interval", "folder", "completion"].contains(&routine.trigger.as_str()) {
             return Err("Unknown routine trigger".into());
+        }
+        if routine.title.trim().is_empty() {
+            routine.title = routine
+                .prompt
+                .lines()
+                .next()
+                .unwrap_or("Routine")
+                .chars()
+                .take(100)
+                .collect();
+        }
+        validate_text(&routine.title, "Routine title", 160)?;
+        if routine.trigger == "cron" {
+            crate::routines::parse_cron(&routine.cron)?;
         }
         routine.interval_minutes = routine.interval_minutes.clamp(1, 43_200);
         if routine.trigger == "folder" && routine.project_id.is_none() {

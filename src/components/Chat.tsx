@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowLeft,
   ArrowUp,
@@ -17,6 +19,7 @@ import { api, native } from "../api";
 import { activeTask, errorText, isProviderConfigured } from "../types";
 import type { Bootstrap, Conversation, Message } from "../types";
 import { Planet } from "./Planet";
+import { mergeChatMessages } from "./chatMessages";
 import { OrbitSettingsPanel } from "./OrbitSettingsPanel";
 import { ToolActivityPanel, ToolApprovalDetails } from "./ToolActivityPanel";
 
@@ -47,9 +50,15 @@ export function Chat({
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const messagePane = useRef<HTMLDivElement>(null);
+  const messageContent = useRef<HTMLDivElement>(null);
+  const userScrollUntil = useRef(0);
+  const touchY = useRef(0);
+  const headerDrag = useRef<{ x: number; y: number } | null>(null);
   const followMessages = useRef(true);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const currentRequest = useRef(0);
+  const liveMessages = useRef(new Map<string, Message>());
   const orbit = data.orbits.find(
     (item) => item.id === conversation.leadOrbitId,
   );
@@ -88,7 +97,9 @@ export function Chat({
     const sequence = ++currentRequest.current;
     void api<Message[]>("get_messages", { conversationId: conversation.id })
       .then((result) => {
-        if (sequence === currentRequest.current) setMessages(result);
+        if (sequence === currentRequest.current) {
+          setMessages(mergeChatMessages(result, liveMessages.current.values(), conversation.id));
+        }
       })
       .catch((failure) => {
         if (sequence === currentRequest.current) setError(errorText(failure));
@@ -96,12 +107,44 @@ export function Chat({
   }, [conversation.id, data]);
 
   useEffect(() => {
-    if (followMessages.current) bottom.current?.scrollIntoView({ behavior: "instant", block: "end" });
-  }, [messages]);
-  useEffect(() => {
+    if (!native) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void listen<Message>("solar://message", ({ payload }) => {
+      if (disposed || payload.conversationId !== conversation.id) return;
+      liveMessages.current.set(payload.id, payload);
+      setMessages(current => current.some(message => message.id === payload.id)
+        ? current.map(message => message.id === payload.id ? payload : message)
+        : [...current, payload]);
+    }).then(unlisten => { if (disposed) unlisten(); else cleanup = unlisten; }).catch(() => {});
+    return () => { disposed = true; cleanup?.(); };
+  }, [conversation.id]);
+
+  function scrollToLatest() {
+    const pane = messagePane.current;
+    if (pane && followMessages.current) pane.scrollTop = pane.scrollHeight;
+  }
+  useLayoutEffect(() => { scrollToLatest(); }, [messages, data.tasks, data.approvals]);
+  useLayoutEffect(() => {
     followMessages.current = true;
+    liveMessages.current.clear();
+    userScrollUntil.current = 0;
     setDraft("");
     setError("");
+    scrollToLatest();
+  }, [conversation.id]);
+  useEffect(() => {
+    const content = messageContent.current;
+    if (!content) return;
+    // Markdown, images, expanding tools and streamed text can change height
+    // without changing the outer message list's dimensions or identity.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(scrollToLatest);
+    });
+    observer.observe(content);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, [conversation.id]);
 
   async function send() {
@@ -112,11 +155,8 @@ export function Chat({
     try {
       await api("send_message", { conversationId: conversation.id, content });
       setDraft("");
-      setMessages(
-        await api<Message[]>("get_messages", {
-          conversationId: conversation.id,
-        }),
-      );
+      const result = await api<Message[]>("get_messages", { conversationId: conversation.id });
+      setMessages(mergeChatMessages(result, liveMessages.current.values(), conversation.id));
       textarea.current?.focus();
     } catch (failure) {
       setError(errorText(failure));
@@ -148,7 +188,21 @@ export function Chat({
 
   return (
     <section className={`chat-view ${compact ? "chat-compact" : ""}`}>
-      <header className="chat-header">
+      <header className={`chat-header ${compact ? "chat-drag-handle" : ""}`}
+        onPointerDown={(event) => {
+          if (!compact || !native || event.button !== 0 || (event.target as HTMLElement).closest("button,a,input,textarea,select")) return;
+          headerDrag.current = { x: event.screenX, y: event.screenY };
+        }}
+        onPointerMove={(event) => {
+          const start = headerDrag.current;
+          if (!(event.buttons & 1)) { headerDrag.current = null; return; }
+          if (start && Math.hypot(event.screenX - start.x, event.screenY - start.y) > 5) {
+            headerDrag.current = null;
+            void getCurrentWindow().startDragging().catch(() => {});
+          }
+        }}
+        onPointerUp={() => { headerDrag.current = null; }}
+        title={compact ? "Drag here to move this conversation" : undefined}>
         {onBack && (
           <button
             className="icon-button"
@@ -163,6 +217,7 @@ export function Chat({
             <Planet
               key={item.id}
               name={item.name}
+              identity={item.id}
               color={item.color}
               size={42}
             />
@@ -199,20 +254,51 @@ export function Chat({
       </header>
       <div
         className="chat-messages"
+        ref={messagePane}
+        tabIndex={0}
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
+        onWheel={(event) => {
+          userScrollUntil.current = Date.now() + 500;
+          if (event.deltaY < 0) followMessages.current = false;
+        }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {
+            userScrollUntil.current = Date.now() + 500;
+            followMessages.current = false;
+          }
+          if (["ArrowDown", "PageDown", "End"].includes(event.key)) userScrollUntil.current = Date.now() + 500;
+        }}
+        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? 0; }}
+        onTouchMove={(event) => {
+          const y = event.touches[0]?.clientY ?? touchY.current;
+          userScrollUntil.current = Date.now() + 500;
+          if (y > touchY.current) followMessages.current = false;
+          touchY.current = y;
+        }}
+        onPointerDown={(event) => {
+          const pane = event.currentTarget;
+          if (event.clientX >= pane.getBoundingClientRect().right - 20) {
+            userScrollUntil.current = Date.now() + 30000;
+          }
+        }}
+        onPointerUp={() => { if (userScrollUntil.current > Date.now() + 500) userScrollUntil.current = Date.now() + 500; }}
         onScroll={(event) => {
           const pane = event.currentTarget;
-          followMessages.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 70;
+          const atBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 70;
+          if (atBottom) followMessages.current = true;
+          else if (Date.now() < userScrollUntil.current) followMessages.current = false;
         }}
       >
+        <div ref={messageContent} className="chat-message-content">
         {messages.length === 0 && (
           <div className="chat-welcome">
             <div className="chat-welcome-planet">
               <Planet
                 color={orbit?.color}
                 name={orbit?.name}
+                identity={orbit?.id}
                 size={compact ? 90 : 128}
               />
             </div>
@@ -267,7 +353,7 @@ export function Chat({
             >
               <div className="message-avatar">
                 {message.role === "assistant" ? (
-                  <Planet color={author?.color} name={author?.name} size={34} />
+                  <Planet color={author?.color} name={author?.name} identity={author?.id} size={34} />
                 ) : (
                   <span>You</span>
                 )}
@@ -363,6 +449,7 @@ export function Chat({
           </div>
         ))}
         <div ref={bottom} />
+        </div>
       </div>
       <div className="composer-region">
         {error && (

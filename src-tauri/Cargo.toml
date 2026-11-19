@@ -41,6 +41,7 @@ url = "2"
 tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
+croner = { version = "4.0.3", features = ["chrono"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

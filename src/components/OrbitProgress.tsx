@@ -13,8 +13,8 @@ const messages = [
   "Orbit check: all systems curious. No astronaut training required.",
 ];
 
-export function OrbitProgress({ name, color, creating }: {
-  name: string; color: string; creating: boolean;
+export function OrbitProgress({ name, color, creating, identity }: {
+  name: string; color: string; creating: boolean; identity?: string;
 }) {
   const [message, setMessage] = useState(0);
   const panel = useRef<HTMLDivElement>(null);
@@ -29,7 +29,7 @@ export function OrbitProgress({ name, color, creating }: {
       tabIndex={-1} ref={panel} onKeyDown={(event) => {
         if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); event.stopPropagation(); }
       }}>
-      <div className="orbit-progress-planet"><Planet name={name || "Your Orbit"} color={color} size={76} /></div>
+      <div className="orbit-progress-planet"><Planet identity={identity} name={name || "Your Orbit"} color={color} size={76} /></div>
       <h2 id="orbit-progress-title">{creating ? `Getting ${name || "your Orbit"} ready` : `Updating ${name || "your Orbit"}`}</h2>
       <p id="orbit-progress-description">Shaping their instructions from your ideas.</p>
       <div className="orbit-progress-status" role="status" aria-live="polite">

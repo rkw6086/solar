@@ -4,7 +4,6 @@ export type ProviderKind = "openai" | "litellm" | "chatgpt" | "claude";
 export interface Orbit {
   id: string;
   name: string;
-  gender?: string;
   role: string;
   personality: string;
   instructions: string;
@@ -112,6 +111,8 @@ export interface AttentionState {
 
 export interface Memory {
   id: string;
+  orbitIds?: string[];
+  projectIds?: string[];
   orbitId?: string;
   projectId?: string;
   content: string;
@@ -120,12 +121,14 @@ export interface Memory {
 
 export interface Routine {
   id: string;
+  title?: string;
+  cron?: string;
   orbitId: string;
   prompt: string;
   intervalMinutes: number;
   enabled: boolean;
   projectId?: string;
-  trigger: "interval" | "folder" | "completion";
+  trigger: "cron" | "interval" | "folder" | "completion";
   lastRunAt?: string;
   observedSignature?: string;
 }

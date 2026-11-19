@@ -225,7 +225,6 @@ fn validate_orbit(orbit: &Orbit) -> Result<(), String> {
         || orbit.name.len() > 100
         || orbit.role.trim().is_empty()
         || orbit.role.len() > 300
-        || orbit.gender.len() > 200
         || orbit.tasks.len() > 32_000
         || orbit.personality.len() > 8_000
         || orbit.instructions.len() > 32_000

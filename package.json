@@ -11,9 +11,10 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
     "test:intro": "node --test src/onboarding/birthTimeline.test.mjs",
+    "test:chat": "node --test src/components/chatMessages.test.mjs",
     "test:system": "node --test src/components/solarSystemMotion.test.mjs",
     "test:models": "node --test src/components/modelSearch.test.mjs",
-    "test:profiles": "node --test src/components/orbitProfile.test.mjs",
+    "test:profiles": "node --test src/components/orbitProfile.test.mjs src/components/orbitIdentity.test.mjs",
     "test:tools": "node --test src/components/toolPresentation.test.mjs",
     "test:projects": "node --test src/projectLocation.test.mjs",
     "test:release": "node --test scripts/release.test.mjs",
@@ -25,9 +26,11 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
+    "antd": "6.3.5",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-js-cron": "6.0.2",
     "react-markdown": "^10.0.0",
     "remark-gfm": "^4.0.0"
   },

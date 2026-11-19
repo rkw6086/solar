@@ -7,14 +7,18 @@
 
 mod browser;
 mod files;
+mod home_import;
 mod mcp;
 mod native;
 mod shell;
 mod shell_scope;
+mod shell_session;
 
+pub use home_import::HomeImportPlan;
 pub use mcp::{McpConfig, McpServerInfo, McpTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+pub use shell_session::{OrbitShellSetup, orbit_shell_setup};
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 pub use tokio_util::sync::CancellationToken;
@@ -100,6 +104,7 @@ impl ToolBroker {
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         let mut result = Vec::new();
         result.extend(files::definitions());
+        result.push(home_import::definition());
         result.extend(shell::definitions());
         result.extend(browser::definitions());
         result.extend(native::definitions());

@@ -3,21 +3,22 @@
 //! purpose sandbox for hostile code or for separately running services.
 use std::{
     collections::BTreeSet,
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
 pub(crate) fn command(
-    shell: &str,
-    script: &str,
+    shell: &Path,
+    arguments: &[OsString],
     denied_roots: &[PathBuf],
 ) -> Result<tokio::process::Command, String> {
     let roots = canonical_roots(denied_roots)?;
     if roots.is_empty() {
         let mut command = tokio::process::Command::new(shell);
-        command.args(["-c", script]);
+        command.args(arguments);
         return Ok(command);
     }
-    scoped_command(shell, script, &roots)
+    scoped_command(shell, arguments, &roots)
 }
 
 fn canonical_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
@@ -48,8 +49,8 @@ fn canonical_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
 
 #[cfg(target_os = "linux")]
 fn scoped_command(
-    shell: &str,
-    script: &str,
+    shell: &Path,
+    arguments: &[OsString],
     roots: &[PathBuf],
 ) -> Result<tokio::process::Command, String> {
     let executable = ["/usr/bin/bwrap", "/bin/bwrap"].into_iter().find(|path| Path::new(path).is_file())
@@ -81,14 +82,14 @@ fn scoped_command(
             .arg("--remount-ro")
             .arg(root);
     }
-    command.arg("--").arg(shell).args(["-c", script]);
+    command.arg("--").arg(shell).args(arguments);
     Ok(command)
 }
 
 #[cfg(target_os = "macos")]
 fn scoped_command(
-    shell: &str,
-    script: &str,
+    shell: &Path,
+    arguments: &[OsString],
     roots: &[PathBuf],
 ) -> Result<tokio::process::Command, String> {
     let executable = Path::new("/usr/bin/sandbox-exec");
@@ -102,12 +103,16 @@ fn scoped_command(
         .arg("-p")
         .arg(macos_profile(roots)?)
         .arg(shell)
-        .args(["-c", script]);
+        .args(arguments);
     Ok(command)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn scoped_command(_: &str, _: &str, _: &[PathBuf]) -> Result<tokio::process::Command, String> {
+fn scoped_command(
+    _: &Path,
+    _: &[OsString],
+    _: &[PathBuf],
+) -> Result<tokio::process::Command, String> {
     Err("Shell project isolation is not supported on this operating system. Commands were not started.".into())
 }
 
@@ -169,6 +174,13 @@ mod tests {
         std::fs::create_dir(temp.path().join("child")).unwrap();
         let roots = canonical_roots(&[temp.path().into(), temp.path().join("child")]).unwrap();
         assert_eq!(roots, vec![temp.path().canonicalize().unwrap()]);
-        assert!(command("/bin/sh", "true", &[temp.path().join("missing")]).is_err());
+        assert!(
+            command(
+                Path::new("/bin/sh"),
+                &["-c".into(), "true".into()],
+                &[temp.path().join("missing")]
+            )
+            .is_err()
+        );
     }
 }

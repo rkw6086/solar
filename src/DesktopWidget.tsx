@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { PointerEvent } from "react";
+import type { CSSProperties, PointerEvent } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowUpRight, LoaderCircle, Sun } from "lucide-react";
 import { api, native } from "./api";
@@ -53,6 +54,11 @@ export function DesktopWidget({
   const { data, loading, error } = useSolar();
   const [expanded, setExpanded] = useState(false);
   const [failure, setFailure] = useState("");
+  const [sunMood, setSunMood] = useState<"smile" | "yawn" | "neutral">("neutral");
+  const [sunAntic, setSunAntic] = useState("");
+  const [popupPhase, setPopupPhase] = useState("opening");
+  const [popupOrigin, setPopupOrigin] = useState({ x: 206, y: 216 });
+  const lastInteraction = useRef(0);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const openingConversation = useRef<{
     orbitId: string;
@@ -60,6 +66,52 @@ export function DesktopWidget({
   } | null>(null);
   const drag = useCharacterDrag();
   const orbit = data.orbits.find((item) => item.id === orbitId);
+  const visibleCount = data.orbits.filter(item => item.enabled).length;
+  const planetSize = visibleCount > 36 ? 56 : visibleCount > 18 ? 72 : 88;
+
+  function interaction(hovered?: boolean) {
+    if (!native) return;
+    const now = Date.now();
+    if (hovered === undefined && now - lastInteraction.current < 1000) return;
+    lastInteraction.current = now;
+    void api("desktop_interaction", hovered === undefined ? {} : { hovered }).catch(() => {});
+  }
+
+  useEffect(() => {
+    if (type !== "sun" || expanded || data.settings.reducedMotion) return;
+    let reset: ReturnType<typeof setTimeout>;
+    const timer = setInterval(() => {
+      const choice = Math.floor(Math.random() * 3);
+      setSunMood(choice === 1 ? "yawn" : "smile");
+      setSunAntic(choice === 0 ? "sun-roll" : choice === 1 ? "sun-yawn" : "sun-rocket");
+      reset = setTimeout(() => { setSunMood("neutral"); setSunAntic(""); }, 3200);
+    }, 18000);
+    return () => { clearInterval(timer); clearTimeout(reset); setSunAntic(""); setSunMood("neutral"); };
+  }, [type, expanded, data.settings.reducedMotion]);
+
+  useEffect(() => {
+    if (type !== "chat" || loading) return;
+    if (!native) { setPopupPhase("open"); return; }
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    let frame = 0;
+    void Promise.all([
+      listen<{ x: number; y: number }>("solar://popup-close", ({ payload }) => {
+        setPopupOrigin(payload);
+        setPopupPhase("closing");
+      }),
+      listen("solar://popup-open", () => setPopupPhase("open")),
+    ]).then(async (unlisteners) => {
+      const unlisten = () => unlisteners.forEach(stop => stop());
+      if (disposed) { unlisten(); return; }
+      cleanup = unlisten;
+      const origin = await api<{ x: number; y: number }>("popup_ready");
+      if (disposed) return;
+      setPopupOrigin(origin);
+      frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setPopupPhase("open")); });
+    }).catch(reason => { if (!disposed) setFailure(errorText(reason)); });
+    return () => { disposed = true; cleanup?.(); cancelAnimationFrame(frame); };
+  }, [type, loading]);
 
   useEffect(() => {
     document.documentElement.dataset.motion = data.settings.reducedMotion ? "reduced" : "full";
@@ -120,6 +172,9 @@ export function DesktopWidget({
 
   if (type === "chat")
     return (
+      <div className={`floating-chat-shell popup-${popupPhase}`} style={{ "--popup-x": `${popupOrigin.x}px`, "--popup-y": `${popupOrigin.y}px` } as CSSProperties}
+        onPointerDown={() => interaction()} onKeyDown={() => interaction()}>
+      <div className="popup-planet" aria-hidden="true"><Planet color={orbit?.color} name={orbit?.name} identity={orbit?.id} size={planetSize} /></div>
       <div className="floating-chat">
         {conversation ? (
           <Chat
@@ -141,11 +196,13 @@ export function DesktopWidget({
         )}
         {failure && conversation && <p className="widget-error">{failure}</p>}
       </div>
+      </div>
     );
 
   if (type === "sun")
     return (
-      <div className="sun-widget">
+      <div className={`sun-widget ${sunAntic}`} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
+        <div className="pixel-rocket-track" aria-hidden="true"><svg className="pixel-rocket" viewBox="0 0 16 20" shapeRendering="crispEdges"><path fill="#d4dfdf" d="M6 1h4v2h2v9H4V3h2z"/><path fill="#7cc3d2" d="M6 5h4v4H6z"/><path fill="#d68777" d="M2 10h3v6H1v-3h1zm9 0h3v3h1v3h-4z"/><path fill="#efbb69" d="M5 13h6v3H5zm2 3h2v3H7z"/></svg></div>
         <div className="widget-orbit-path widget-orbit-one" />
         <div className="widget-orbit-path widget-orbit-two" />
         <button
@@ -159,7 +216,7 @@ export function DesktopWidget({
             void api("open_launcher");
           }}
         >
-          <Planet sun color="#e8aa62" size={100} name="Solar sun" />
+          <Planet sun color="#e8aa62" size={100} name="Solar sun" mood={sunMood} />
           <span className="sun-widget-label">
             {expanded ? "Gather Orbits" : "Your Orbits"}
           </span>
@@ -193,7 +250,7 @@ export function DesktopWidget({
     Boolean(data.attentionItems?.some((item) => item.orbitId === orbit.id)) ||
     data.approvals.some((approval) => approval.orbitId === orbit.id);
   return (
-    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`}>
+    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`} style={{ "--orbit-planet-size": `${planetSize}px` } as CSSProperties} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
@@ -208,7 +265,7 @@ export function DesktopWidget({
         }}
         title={`${orbit.name} · right-click for settings`}
       >
-        <Planet color={orbit.color} size={88} name={orbit.name} busy={busy} />
+        <Planet color={orbit.color} size={planetSize} name={orbit.name} identity={orbit.id} busy={busy} />
         <span className="orbit-widget-name">
           {orbit.name}
           {needsAttention ? (

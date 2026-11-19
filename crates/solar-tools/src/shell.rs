@@ -1,7 +1,4 @@
-use crate::{
-    ToolContext, ToolDefinition, ToolOutput, ToolProgress, definition, managed_environment,
-    required_str,
-};
+use crate::{ToolContext, ToolDefinition, ToolOutput, ToolProgress, definition, required_str};
 use serde_json::{Value, json};
 use std::process::Stdio;
 use std::time::Duration;
@@ -10,8 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![definition(
         "shell_run",
-        "Run a shell command after host execution is approved. Optional workingDirectory must be the Orbit workspace or an assigned project folder. Unassigned registered project folders are excluded from the command and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
-        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Orbit workspace. Defaults to the Orbit workspace."},"shell":{"type":"string","enum":["/bin/sh","/bin/bash","/bin/zsh"]},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
+        "Run a command in the user's default shell with this Orbit's own interactive/login startup files and private CLI configuration. User-level credentials and SSH agents are not inherited. When authentication or profile setup is missing, request the specific needed files with pull_from_user_home (requires explicit user approval), or ask the user to use this Orbit's CLI sign-ins settings. Optional workingDirectory must be the Orbit workspace or an assigned project folder. Unassigned registered project folders are excluded from the shell, its startup files, and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
+        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Orbit workspace. Defaults to the Orbit workspace."},"shell":{"type":"string","description":"Optional absolute shell executable path. Omit to use the user's configured default shell; only override when a task specifically requires another shell."},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
         &["command"],
     )]
 }
@@ -20,14 +17,31 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
     if !context.allow_host_execution {
         return Err("Shell requires an explicit host-execution grant for this Orbit".into());
     }
-    let command = required_str(args, "command")?;
-    let shell = args
+    let explicit = args
         .get("shell")
-        .and_then(Value::as_str)
-        .unwrap_or("/bin/sh");
-    if !["/bin/sh", "/bin/bash", "/bin/zsh"].contains(&shell) {
-        return Err("Unsupported shell".into());
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or("shell must be an absolute executable path")
+        })
+        .transpose()?;
+    let session = crate::shell_session::ShellSession::resolve(
+        explicit,
+        &context.data_directory,
+        &context.workspace,
+    )?;
+    execute_with_session(args, context, session).await
+}
+
+async fn execute_with_session(
+    args: &Value,
+    context: &ToolContext,
+    session: crate::shell_session::ShellSession,
+) -> Result<ToolOutput, String> {
+    if !context.allow_host_execution {
+        return Err("Shell requires an explicit host-execution grant for this Orbit".into());
     }
+    let command = required_str(args, "command")?;
     let timeout = Duration::from_secs(
         args.get("timeoutSeconds")
             .and_then(Value::as_u64)
@@ -60,24 +74,26 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
     } else {
         workspace.clone()
     };
-    let environment = managed_environment(&context.data_directory)?;
-    let mut cmd = crate::shell_scope::command(shell, command, &context.denied_roots)?;
+    let arguments = session.arguments(command, &working_directory)?;
+    let mut cmd =
+        crate::shell_scope::command(session.executable(), &arguments, &context.denied_roots)?;
+    session.apply_environment(&mut cmd);
     cmd.current_dir(working_directory)
-        .env_clear()
-        .env(
-            "PATH",
-            std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin:/usr/sbin:/sbin".into()),
-        )
-        .envs(environment)
-        .env("HOME", &workspace)
-        .env("LANG", "en_US.UTF-8")
-        .env("TERM", "dumb")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
-    cmd.process_group(0);
+    // Interactive startup must not take control of the launching app's terminal.
+    // A new session also owns a process group for cancellation and timeout cleanup.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Could not start shell: {e}"))?;
@@ -208,6 +224,22 @@ async fn read_bounded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep tests away from the operator's real startup files and CLI logins.
+    async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, String> {
+        let session = crate::shell_session::ShellSession::for_test(
+            args.get("shell")
+                .and_then(Value::as_str)
+                .unwrap_or("/bin/sh"),
+            &context.data_directory,
+            &context.workspace,
+            vec![
+                ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
+                ("TERM".into(), "dumb".into()),
+            ],
+        )?;
+        execute_with_session(args, context, session).await
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[tokio::test]
@@ -384,12 +416,17 @@ mod tests {
         tokio::pin!(execution);
         tokio::select! {
             result = &mut execution => panic!("command finished before output: {result:?}"),
-            result = tokio::time::timeout(Duration::from_secs(3), updates.changed()) => result.unwrap().unwrap(),
+            result = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    updates.changed().await.unwrap();
+                    if updates.borrow().output.contains("first") { break; }
+                }
+            }) => result.unwrap(),
         }
-        assert_eq!(updates.borrow().output, "first");
+        assert!(updates.borrow().output.contains("first"));
         context.cancellation.cancel();
         assert!(execution.await.unwrap_err().contains("cancelled"));
-        assert_eq!(updates.borrow().output, "first");
+        assert!(!updates.borrow().output.contains("last"));
     }
 
     #[tokio::test]
@@ -414,33 +451,152 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_uses_orbit_storage_for_preferences_cache_and_temporary_files() {
+    async fn private_cli_login_is_separate_per_orbit_and_startup_restores_working_directory() {
         let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
+        let bin = root.path().join("installed-cli");
+        std::fs::create_dir(&bin).unwrap();
+        let glab = bin.join("glab");
+        std::fs::write(&glab, "#!/bin/sh\n[ -z \"$GITLAB_TOKEN$SSH_AUTH_SOCK\" ] || exit 41\n[ \"$GLAB_USE_KEYRING\" = false ] || exit 42\n[ -f \"$GLAB_CONFIG_DIR/config.yml\" ] || exit 40\n[ \"$(cat \"$GLAB_CONFIG_DIR/config.yml\")\" = orbit-a-login ] || exit 43\nprintf 'Authenticated Orbit A CLI\\n'\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&glab, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let contexts: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let data = root.path().join(name);
+                let workspace = data.join("workspace with spaces ' and $dollars");
+                std::fs::create_dir_all(&workspace).unwrap();
+                std::fs::write(
+                    workspace.join(".bashrc"),
+                    "export RC_MARKER=private\ncd /\n",
+                )
+                .unwrap();
+                ToolContext {
+                    orbit_id: name.into(),
+                    data_directory: data,
+                    workspace,
+                    allowed_roots: vec![],
+                    denied_roots: vec![],
+                    allow_host_execution: true,
+                    screen_share_allowed: false,
+                    cancellation: Default::default(),
+                    progress: None,
+                }
+            })
+            .collect();
+        let host = root.path().join("host-login");
+        std::fs::create_dir(&host).unwrap();
+        std::fs::write(host.join("config.yml"), "host-login-must-not-be-used").unwrap();
+        let environment = vec![
+            (
+                "PATH".into(),
+                format!("{}:/usr/bin:/bin", bin.display()).into(),
+            ),
+            ("GLAB_CONFIG_DIR".into(), host.clone().into_os_string()),
+            ("XDG_CONFIG_HOME".into(), host.clone().into_os_string()),
+            ("GITLAB_TOKEN".into(), "host-token-must-not-be-used".into()),
+            ("SSH_AUTH_SOCK".into(), "host-agent-must-not-be-used".into()),
+            ("ZDOTDIR".into(), host.into_os_string()),
+        ];
+        let args = json!({"command":"glab auth status && printf '%s\\n' \"$HOME\" \"$PWD\" \"$RC_MARKER\""});
+        async fn run(
+            args: &Value,
+            context: &ToolContext,
+            environment: &[(std::ffi::OsString, std::ffi::OsString)],
+        ) -> Result<ToolOutput, String> {
+            let session = crate::shell_session::ShellSession::for_test(
+                "/bin/bash",
+                &context.data_directory,
+                &context.workspace,
+                environment.to_vec(),
+            )
+            .unwrap();
+            execute_with_session(args, context, session).await
+        }
+        let first = run(&args, &contexts[0], &environment).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&first.content).unwrap()["exitCode"],
+            40
+        );
+        std::fs::write(
+            contexts[0]
+                .data_directory
+                .join("config/glab-cli/config.yml"),
+            "orbit-a-login",
+        )
+        .unwrap();
+        let logged_in = run(&args, &contexts[0], &environment).await.unwrap();
+        let value: Value = serde_json::from_str(&logged_in.content).unwrap();
+        assert_eq!(value["exitCode"], 0, "{value}");
+        let expected = format!(
+            "Authenticated Orbit A CLI\n{}\n{}\nprivate\n",
+            contexts[0].workspace.display(),
+            contexts[0].workspace.display()
+        );
+        assert!(
+            value["stdout"].as_str().unwrap().ends_with(&expected),
+            "{value}"
+        );
+        let other = run(&args, &contexts[1], &environment).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&other.content).unwrap()["exitCode"],
+            40
+        );
+    }
+
+    #[tokio::test]
+    async fn private_zsh_startup_files_run_inside_project_exclusions() {
+        if !std::path::Path::new("/bin/zsh").is_file() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("orbit");
+        let workspace = data.join("workspace");
+        let denied = root.path().join("unassigned");
+        let host = root.path().join("host");
+        for path in [&workspace, &denied, &host] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        std::fs::write(denied.join("secret"), "must not reach startup").unwrap();
+        std::fs::write(host.join(".zshrc"), "export HOST_SECRET=should-not-load\n").unwrap();
+        std::fs::write(workspace.join(".zshenv"), "export PRIVATE_ENV=loaded\n").unwrap();
+        std::fs::write(
+            workspace.join(".zprofile"),
+            "export PRIVATE_PROFILE=loaded\n",
+        )
+        .unwrap();
+        let secret = denied
+            .join("secret")
+            .to_string_lossy()
+            .replace('\'', "'\\''");
+        std::fs::write(workspace.join(".zshrc"), format!("if cat '{secret}' 2>/dev/null; then export STARTUP_SCOPE=leaked; else export STARTUP_SCOPE=protected; fi\nexport PRIVATE_RC=loaded\ncd /\n")).unwrap();
         let context = ToolContext {
-            orbit_id: "test".into(),
-            data_directory: root.path().into(),
+            orbit_id: "private-zsh".into(),
+            data_directory: data.clone(),
             workspace: workspace.clone(),
             allowed_roots: vec![],
-            denied_roots: vec![],
+            denied_roots: vec![denied],
             allow_host_execution: true,
             screen_share_allowed: false,
             cancellation: Default::default(),
             progress: None,
         };
-        let output = execute(
-            &json!({"command":"printf '%s\\n' \"$HOME\" \"$XDG_CACHE_HOME\" \"$XDG_CONFIG_HOME\" \"$XDG_DATA_HOME\" \"$XDG_STATE_HOME\" \"$TMPDIR\""}),
-            &context,
-        ).await.unwrap();
+        let session = crate::shell_session::ShellSession::for_test(
+            "/bin/zsh",
+            &data,
+            &workspace,
+            vec![("ZDOTDIR".into(), host.into_os_string())],
+        )
+        .unwrap();
+        let output = execute_with_session(&json!({"command":"printf '%s|%s|%s|%s|%s|%s' \"$PRIVATE_ENV\" \"$PRIVATE_PROFILE\" \"$PRIVATE_RC\" \"$STARTUP_SCOPE\" \"$HOST_SECRET\" \"$PWD\""}), &context, session).await.unwrap();
         let value: Value = serde_json::from_str(&output.content).unwrap();
-        let paths: Vec<_> = value["stdout"].as_str().unwrap().lines().collect();
-        assert_eq!(std::path::Path::new(paths[0]), workspace);
-        for path in &paths[1..] {
-            let path = std::path::Path::new(path);
-            assert!(path.starts_with(root.path()));
-            assert!(path.is_dir());
-        }
+        assert_eq!(value["exitCode"], 0, "{value}");
+        assert_eq!(
+            value["stdout"],
+            format!("loaded|loaded|loaded|protected||{}", workspace.display())
+        );
     }
 
     #[tokio::test]

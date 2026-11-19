@@ -148,6 +148,8 @@ mod tests {
         for owner in ["assistant", "other"] {
             engine
                 .save_memory(Memory {
+                    orbit_ids: Vec::new(),
+                    project_ids: Vec::new(),
                     id: format!("memory-{owner}"),
                     orbit_id: Some(owner.into()),
                     project_id: None,

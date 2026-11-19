@@ -272,6 +272,55 @@ impl StoreState {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    fn detach_memory_audience(&mut self, kind: &str, removed_id: &str) -> Result<(), String> {
+        if !["orbits", "projects"].contains(&kind) {
+            return Ok(());
+        }
+        for row in self.documents("memories")? {
+            let mut memory: crate::model::Memory =
+                serde_json::from_str(&row.data).map_err(|e| e.to_string())?;
+            let mut orbits = memory.orbit_ids();
+            let mut projects = memory.project_ids();
+            let audience = if kind == "orbits" {
+                &mut orbits
+            } else {
+                &mut projects
+            };
+            if !audience.iter().any(|id| id == removed_id) {
+                continue;
+            }
+            audience.retain(|id| id != removed_id);
+            if orbits.is_empty() && projects.is_empty() {
+                // Losing the final attachment must never turn a private fact public.
+                remove_document(&mut self.main, "memories", &memory.id)?;
+                for owner in self.orbit_ids() {
+                    remove_document(self.connection(Some(&owner))?, "memories", &memory.id)?;
+                }
+                continue;
+            }
+            memory.orbit_id = (orbits.len() == 1).then(|| orbits[0].clone());
+            memory.project_id = (projects.len() == 1).then(|| projects[0].clone());
+            memory.orbit_ids = orbits;
+            memory.project_ids = projects;
+            let data = serde_json::to_value(&memory).map_err(|e| e.to_string())?;
+            let owner = self.owner("memories", &memory.id, &data)?;
+            // Preserve the remaining readers' copy before removing old locations.
+            put_documents(
+                self.connection(owner.as_deref())?,
+                vec![("memories", memory.id.clone(), data)],
+            )?;
+            if owner.is_some() {
+                remove_document(&mut self.main, "memories", &memory.id)?;
+            }
+            for old_owner in self.orbit_ids() {
+                if owner.as_deref() != Some(&old_owner) {
+                    remove_document(self.connection(Some(&old_owner))?, "memories", &memory.id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn document(&mut self, kind: &str, id: &str) -> Result<Option<Document>, String> {
         let mut result = query_document(&self.main, kind, id)?;
         if private_kind(kind) {
@@ -420,6 +469,7 @@ impl Store {
 
     pub fn remove(&self, kind: &str, id: &str) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "Database lock unavailable")?;
+        state.detach_memory_audience(kind, id)?;
         if CONFIG_KINDS.contains(&kind) && state.profile.is_some() {
             state.profile.as_mut().unwrap().remove(kind, id)?;
             return state.sync_configuration();
@@ -473,39 +523,29 @@ impl Store {
         if query.is_empty() {
             return Ok(vec![]);
         }
-        fn search(
-            db: &Connection,
-            query: &str,
-            orbit_id: Option<&str>,
-            project_id: Option<&str>,
-        ) -> Result<Vec<String>, String> {
-            let mut stmt=db.prepare("SELECT memory_search.id FROM memory_search JOIN documents d ON d.kind='memories' AND d.id=memory_search.id WHERE memory_search MATCH ?1 AND (json_extract(d.data,'$.orbitId')=?2 OR json_extract(d.data,'$.projectId')=?3) ORDER BY rank LIMIT 30").map_err(|e|e.to_string())?;
-            stmt.query_map(params![query, orbit_id, project_id], |r| r.get(0))
+        fn search(db: &Connection, query: &str) -> Result<Vec<String>, String> {
+            let mut stmt = db.prepare("SELECT memory_search.id FROM memory_search JOIN documents d ON d.kind='memories' AND d.id=memory_search.id WHERE memory_search MATCH ?1 ORDER BY rank LIMIT 100").map_err(|e|e.to_string())?;
+            stmt.query_map(params![query], |r| r.get(0))
                 .map_err(|e| e.to_string())?
                 .collect::<Result<_, _>>()
                 .map_err(|e| e.to_string())
         }
         let mut state = self.0.lock().map_err(|_| "Database lock unavailable")?;
-        let mut ids = search(
-            &state.main,
-            &query,
-            if state.profile.is_some() {
-                None
-            } else {
-                orbit_id
-            },
-            project_id,
-        )?;
+        let mut ids = search(&state.main, &query)?;
         if state.profile.is_some()
             && let Some(owner) = orbit_id
         {
-            ids.extend(search(
-                state.connection(Some(owner))?,
-                &query,
-                orbit_id,
-                None,
-            )?);
+            ids.extend(search(state.connection(Some(owner))?, &query)?);
         }
+        let projects: Vec<String> = project_id.into_iter().map(str::to_owned).collect();
+        ids.retain(|id| {
+            state
+                .document("memories", id)
+                .ok()
+                .flatten()
+                .and_then(|row| serde_json::from_str::<crate::model::Memory>(&row.data).ok())
+                .is_some_and(|memory| memory.visible_to(orbit_id.unwrap_or(""), &projects))
+        });
         let mut seen = HashSet::new();
         ids.retain(|id| seen.insert(id.clone()));
         ids.truncate(30);
@@ -578,7 +618,6 @@ mod tests {
             id: id.into(),
             name: name.into(),
             role: "Assistant".into(),
-            gender: String::new(),
             tasks: String::new(),
             personality: "Calm".into(),
             instructions: String::new(),
@@ -600,6 +639,8 @@ mod tests {
         let path = dir.path().join("solar.sqlite");
         let store = Store::open(&path).unwrap();
         let mut memory = Memory {
+            orbit_ids: Vec::new(),
+            project_ids: Vec::new(),
             id: "one".into(),
             orbit_id: Some("a".into()),
             project_id: None,
@@ -667,6 +708,8 @@ mod tests {
         store.put("orbits", "a", &orbit("a", "Nova")).unwrap();
         store.put("orbits", "b", &orbit("b", "Lyra")).unwrap();
         let memory = Memory {
+            orbit_ids: Vec::new(),
+            project_ids: Vec::new(),
             id: "one".into(),
             orbit_id: Some("a".into()),
             project_id: None,
@@ -862,5 +905,67 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         symlink(outside.path(), &path).unwrap();
         assert!(Store::open_profile(dir.path()).is_err());
+    }
+    #[test]
+    fn deleting_audiences_preserves_remaining_readers_without_making_memories_public() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open_profile(root.path()).unwrap();
+        store.put("orbits", "a", &orbit("a", "Nova")).unwrap();
+        store.put("orbits", "b", &orbit("b", "Lyra")).unwrap();
+        for project in ["p1", "p2"] {
+            store.put("projects", project, &serde_json::json!({"id":project,"name":project,"directory":root.path().join(project),"description":""})).unwrap();
+        }
+        let memory = |id: &str, orbits: Vec<String>, projects: Vec<String>| Memory {
+            id: id.into(),
+            orbit_id: (orbits.len() == 1).then(|| orbits[0].clone()),
+            project_id: (projects.len() == 1).then(|| projects[0].clone()),
+            orbit_ids: orbits,
+            project_ids: projects,
+            content: "Kept private".into(),
+            created_at: now(),
+        };
+        for item in [
+            memory("private", vec!["a".into()], vec![]),
+            memory("shared", vec!["a".into(), "b".into()], vec![]),
+            memory("project-shared", vec![], vec!["p1".into(), "p2".into()]),
+            memory("global", vec![], vec![]),
+        ] {
+            store.put("memories", &item.id, &item).unwrap();
+        }
+        store.remove("orbits", "a").unwrap();
+        assert!(
+            store
+                .get::<Memory>("memories", "private")
+                .unwrap()
+                .is_none()
+        );
+        let shared = store.get::<Memory>("memories", "shared").unwrap().unwrap();
+        assert_eq!(shared.orbit_ids(), vec!["b"]);
+        assert!(!shared.is_system());
+        let main = Store::open(&root.path().join("solar.sqlite")).unwrap();
+        assert!(main.get::<Memory>("memories", "shared").unwrap().is_none());
+        store.remove("orbits", "b").unwrap();
+        assert!(store.get::<Memory>("memories", "shared").unwrap().is_none());
+        store.remove("projects", "p1").unwrap();
+        let shared = store
+            .get::<Memory>("memories", "project-shared")
+            .unwrap()
+            .unwrap();
+        assert_eq!(shared.project_ids(), vec!["p2"]);
+        assert!(!shared.is_system());
+        store.remove("projects", "p2").unwrap();
+        assert!(
+            store
+                .get::<Memory>("memories", "project-shared")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .get::<Memory>("memories", "global")
+                .unwrap()
+                .unwrap()
+                .is_system()
+        );
     }
 }

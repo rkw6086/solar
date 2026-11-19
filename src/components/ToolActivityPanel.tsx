@@ -72,9 +72,18 @@ export function ToolActivityPanel({ message, servers = [] }: { message: Message;
 
 export function ToolApprovalDetails({ name, args, servers = [] }: { name: string; args: unknown; servers?: McpServer[] }) {
   const view = presentApproval(name, args, servers);
+  const importReview = name === "pull_from_user_home" && args && typeof args === "object" ? args as { files?: { source: string; destination: string; bytes: number; replace: boolean; dependency: boolean }[]; warnings?: string[]; notice?: string } : undefined;
   return <div className="tool-approval-details">
     <p><strong>{view.title}</strong>{view.category === "shell" ? "" : <span>{view.summary}</span>}</p>
     {view.command && <pre className="tool-command" aria-label="Command awaiting approval"><code>{view.command}</code></pre>}
     {view.directory && <p className="tool-directory"><span>Working folder</span>{view.directory}</p>}
+    {importReview && <section className="home-import-review" aria-label="Files awaiting import approval">
+      <p>{importReview.notice}</p>
+      <ul>{importReview.files?.map(file => <li key={file.destination}>
+        <strong>{file.source}</strong><span>{file.replace ? "Replace existing copy" : "New private copy"}{file.dependency ? " · linked dependency" : ""} · {(file.bytes / 1024).toFixed(1)} KB</span>
+        <small>{file.destination}</small>
+      </li>)}</ul>
+      {Boolean(importReview.warnings?.length) && <details><summary>References that need attention ({importReview.warnings?.length})</summary><ul>{importReview.warnings?.map(warning => <li key={warning}>{warning}</li>)}</ul></details>}
+    </section>}
   </div>;
 }

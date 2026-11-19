@@ -22,6 +22,8 @@ static COMPANIONS_HIDDEN: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
 static ANIMATING: AtomicBool = AtomicBool::new(false);
 static ANIMATION_EPOCH: AtomicU64 = AtomicU64::new(0);
+static ORBIT_MOTION: LazyLock<Mutex<crate::desktop_motion::MotionState>> =
+    LazyLock::new(|| Mutex::new(crate::desktop_motion::MotionState::default()));
 static READY_WIDGETS: LazyLock<Mutex<std::collections::HashSet<String>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 
@@ -43,8 +45,129 @@ fn widget_ready(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn desktop_interaction(window: tauri::WebviewWindow, hovered: Option<bool>) -> Result<(), String> {
+    let label = window.label();
+    if label != "sun" && !label.starts_with("orbit-") && !label.starts_with("chat-") {
+        return Err("This window is not a desktop companion".into());
+    }
+    let mut motion = ORBIT_MOTION
+        .lock()
+        .map_err(|_| "Desktop motion is unavailable")?;
+    if let Some(hovered) = hovered {
+        motion.hover(label, hovered, std::time::Instant::now());
+    } else {
+        motion.activity(std::time::Instant::now());
+    }
+    Ok(())
+}
+
+fn start_orbital_clock(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut clock = tokio::time::interval(Duration::from_millis(80));
+        clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            clock.tick().await;
+            if QUITTING.load(Ordering::SeqCst) {
+                return;
+            }
+            let tick_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let expanded = EXPANDED.load(Ordering::SeqCst)
+                    && !ANIMATING.load(Ordering::SeqCst)
+                    && !launcher_open(&tick_app);
+                let chat_open = tick_app
+                    .webview_windows()
+                    .keys()
+                    .any(|label| label.starts_with("chat-"));
+                let engine = tick_app.state::<Arc<Engine>>();
+                let reduced = engine.settings().map(|s| s.reduced_motion).unwrap_or(true);
+                let collapse = ORBIT_MOTION
+                    .lock()
+                    .map(|mut motion| {
+                        motion.tick(std::time::Instant::now(), expanded, chat_open, reduced)
+                    })
+                    .unwrap_or(false);
+                if collapse {
+                    let _ = set_desktop_expanded(tick_app.clone(), engine, false);
+                } else if expanded && !chat_open && !reduced {
+                    let _ = align_companions(&tick_app);
+                }
+            });
+        }
+    });
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PopupOrigin {
+    x: f64,
+    y: f64,
+}
+
+fn chat_origin(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<PopupOrigin, String> {
+    let id = window
+        .label()
+        .strip_prefix("chat-")
+        .ok_or("This is not an Orbit chat")?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let chat = window.outer_position().map_err(|e| e.to_string())?;
+    let planet = app.get_webview_window(&format!("orbit-{id}"));
+    let source = planet.or_else(|| app.get_webview_window("sun"));
+    if let Some(source) = source {
+        let point = source.outer_position().map_err(|e| e.to_string())?;
+        let source_scale = source.scale_factor().map_err(|e| e.to_string())?;
+        let center = if source.label() == "sun" { 96.0 } else { 56.0 };
+        Ok(PopupOrigin {
+            x: (f64::from(point.x) + center * source_scale - f64::from(chat.x)) / scale,
+            y: (f64::from(point.y) + center * source_scale - f64::from(chat.y)) / scale,
+        })
+    } else {
+        Ok(PopupOrigin { x: 70.0, y: 70.0 })
+    }
+}
+
+#[tauri::command]
+fn popup_ready(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<PopupOrigin, String> {
+    let origin = chat_origin(&app, &window)?;
+    if let Some(id) = window.label().strip_prefix("chat-") {
+        if let Some(planet) = app.get_webview_window(&format!("orbit-{id}")) {
+            let _ = planet.hide();
+        }
+        if let Ok(mut motion) = ORBIT_MOTION.lock() {
+            motion.remove(&format!("orbit-{id}"), std::time::Instant::now());
+        }
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(origin)
+}
+
+pub(crate) fn dismiss_orbit_chat(window: &tauri::WebviewWindow) {
+    let origin =
+        chat_origin(window.app_handle(), window).unwrap_or(PopupOrigin { x: 70.0, y: 70.0 });
+    let _ = window.emit("solar://popup-close", origin);
+}
+
+pub(crate) fn cancel_orbit_chat_dismissal(window: &tauri::WebviewWindow) {
+    let _ = window.emit("solar://popup-open", ());
+}
+
+#[tauri::command]
 fn get_bootstrap(engine: AppState<'_>) -> Result<Bootstrap, String> {
     engine.bootstrap()
+}
+#[tauri::command]
+fn get_orbit_cli_setup(
+    engine: AppState<'_>,
+    orbit_id: String,
+) -> Result<crate::orbit_cli::OrbitCliSetup, String> {
+    crate::orbit_cli::describe(&engine, &orbit_id)
+}
+#[tauri::command]
+async fn open_orbit_cli_setup(engine: AppState<'_>, orbit_id: String) -> Result<(), String> {
+    crate::orbit_cli::open(&engine, &orbit_id).await
 }
 #[tauri::command]
 fn save_orbit(app: tauri::AppHandle, engine: AppState<'_>, orbit: Orbit) -> Result<Orbit, String> {
@@ -194,7 +317,20 @@ fn save_settings(
 }
 #[tauri::command]
 fn save_routine(engine: AppState<'_>, routine: Routine) -> Result<Routine, String> {
-    engine.save_routine(routine)
+    engine.update_routine_with(&routine.id, |stored| {
+        stored.enabled = routine.enabled;
+        stored.trigger = routine.trigger;
+        stored.cron = routine.cron;
+        Ok(())
+    })
+}
+#[tauri::command]
+fn delete_routine(engine: AppState<'_>, id: String) -> Result<(), String> {
+    engine.delete_routine(&id)
+}
+#[tauri::command]
+fn run_routine(engine: AppState<'_>, id: String) -> Result<Conversation, String> {
+    engine.inner().clone().run_routine(&id)
 }
 #[tauri::command]
 async fn start_screen_share(
@@ -302,6 +438,12 @@ fn set_desktop_expanded(
         .filter(|o| o.enabled)
         .collect();
     orbits.sort_by(|a, b| a.id.cmp(&b.id));
+    if let Ok(mut motion) = ORBIT_MOTION.lock() {
+        motion.reset(
+            orbits.iter().map(|o| o.id.clone()).collect(),
+            std::time::Instant::now(),
+        );
+    }
     let layout = crate::desktop_layout::orbit_layout(
         bounds,
         (sun_position.x, sun_position.y),
@@ -497,6 +639,7 @@ pub(crate) fn open_orbit_chat(
     }
     let position = app
         .get_webview_window(&format!("orbit-{orbit_id}"))
+        .or_else(|| app.get_webview_window("sun"))
         .and_then(|w| Some((w.outer_position().ok()?, w.scale_factor().ok()?)))
         .map(|(p, s)| p.to_logical::<f64>(s));
     let conversation = engine
@@ -523,13 +666,14 @@ pub(crate) fn open_orbit_chat(
     .incognito(true)
     .decorations(false)
     .visible(false)
-    .background_color(tauri::webview::Color(22, 31, 36, 255))
+    .transparent(true)
+    .background_color(tauri::webview::Color(0, 0, 0, 0))
     .inner_size(410.0, 560.0)
     .min_inner_size(320.0, 400.0)
     .always_on_top(true)
     .skip_taskbar(true);
     if let Some(p) = position {
-        let (x, y) = clamp_to_screen(&app, p.x + 90.0, p.y - 180.0, 410.0, 560.0);
+        let (x, y) = clamp_to_screen(&app, p.x - 150.0, p.y - 160.0, 410.0, 560.0);
         builder = builder.position(x, y);
     }
     let window = builder.build().map_err(|error| {
@@ -537,8 +681,7 @@ pub(crate) fn open_orbit_chat(
         error.to_string()
     })?;
     crate::desktop_popup::attach(&window);
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    // popup_ready shows the window once its first frame and transition origin are ready.
     crate::desktop_attention::refresh(&app);
     Ok(())
 }
@@ -660,34 +803,30 @@ fn align_companions(app: &tauri::AppHandle) -> Result<(), String> {
     let Some(sun) = app.get_webview_window("sun") else {
         return Ok(());
     };
-    let engine = app.state::<Arc<Engine>>();
     let (bounds, formation_scale) = desktop_screen(app, &sun);
-    let mut orbits: Vec<_> = engine
-        .bootstrap()?
-        .orbits
-        .into_iter()
-        .filter(|o| o.enabled)
-        .collect();
-    orbits.sort_by(|a, b| a.id.cmp(&b.id));
+    let (orbits, elapsed) = ORBIT_MOTION
+        .lock()
+        .map(|motion| (motion.roster.clone(), motion.elapsed.as_secs_f64()))
+        .map_err(|_| "Desktop motion is unavailable")?;
     let p = sun
         .outer_position()
         .map_err(|e| e.to_string())?
         .to_logical::<f64>(formation_scale);
     let expanded = EXPANDED.load(Ordering::SeqCst);
-    let layout = crate::desktop_layout::orbit_layout(
+    let layout = crate::desktop_layout::orbit_layout_at(
         bounds,
         (p.x, p.y),
         if expanded { orbits.len() } else { 0 },
+        elapsed,
     );
     position_window(&sun, layout.sun, formation_scale)?;
     if expanded {
         for (orbit, target) in orbits.iter().zip(layout.planets) {
-            if let Some(window) = app.get_webview_window(&format!("orbit-{}", orbit.id)) {
+            if let Some(window) = app.get_webview_window(&format!("orbit-{orbit}")) {
                 position_window(&window, target, formation_scale)?;
             }
         }
     }
-    engine.store.put("desktop", "sun", &layout.sun)?;
     Ok(())
 }
 
@@ -768,11 +907,21 @@ fn create_companion(
         {
             widgets.remove(&owned_label);
         }
-        if matches!(
-            event,
-            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
-        ) {
+        if (owned_label == "sun" && matches!(event, WindowEvent::Moved(_)))
+            || matches!(event, WindowEvent::ScaleFactorChanged { .. })
+        {
             let _ = align_companions(&app_for_event);
+            if owned_label == "sun" {
+                if let (Some(engine), Some(sun)) = (
+                    app_for_event.try_state::<Arc<Engine>>(),
+                    app_for_event.get_webview_window("sun"),
+                ) {
+                    if let (Ok(point), Ok(scale)) = (sun.outer_position(), sun.scale_factor()) {
+                        let point = point.to_logical::<f64>(scale);
+                        let _ = engine.store.put("desktop", "sun", &(point.x, point.y));
+                    }
+                }
+            }
         }
     });
     Ok(())
@@ -862,6 +1011,7 @@ pub fn run() {
             );
             let mut events = engine.subscribe();
             app.manage(engine.clone());
+            start_orbital_clock(app.handle().clone());
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -966,7 +1116,11 @@ pub fn run() {
                             let radius = if label == "sun" {
                                 60.0 * scale
                             } else {
-                                size.width.min(size.height) as f64 * 0.44
+                                let count = ORBIT_MOTION
+                                    .lock()
+                                    .map(|motion| motion.roster.len())
+                                    .unwrap_or(0);
+                                crate::desktop_layout::planet_art_size(count) * 0.46 * scale
                             };
                             let launcher = label == "sun"
                                 && cursor.x - position.x as f64 > size.width as f64 - 40.0 * scale
@@ -1007,6 +1161,28 @@ pub fn run() {
                 crate::orbit_prompt::cancel_window_analyses(window.label());
                 crate::desktop_chat::clear_window(window.app_handle(), window.label());
                 crate::desktop_attention::refresh(window.app_handle());
+                if let Ok(mut motion) = ORBIT_MOTION.lock() {
+                    motion.remove(window.label(), std::time::Instant::now());
+                }
+                if let Some(id) = window.label().strip_prefix("chat-") {
+                    let enabled = window
+                        .app_handle()
+                        .state::<Arc<Engine>>()
+                        .orbit(id)
+                        .map(|orbit| orbit.enabled)
+                        .unwrap_or(false);
+                    if enabled
+                        && EXPANDED.load(Ordering::SeqCst)
+                        && !launcher_open(window.app_handle())
+                    {
+                        if let Some(planet) = window
+                            .app_handle()
+                            .get_webview_window(&format!("orbit-{id}"))
+                        {
+                            let _ = planet.show();
+                        }
+                    }
+                }
             }
             if window.label() == "main"
                 && let WindowEvent::CloseRequested { api, .. } = event
@@ -1054,6 +1230,8 @@ pub fn run() {
             crate::desktop_attention::preview_attention,
             widget_ready,
             get_bootstrap,
+            get_orbit_cli_setup,
+            open_orbit_cli_setup,
             save_orbit,
             delete_orbit,
             save_provider,
@@ -1077,6 +1255,8 @@ pub fn run() {
             import_orbit,
             save_settings,
             save_routine,
+            delete_routine,
+            run_routine,
             start_screen_share,
             stop_screen_share,
             save_mcp_server,
@@ -1086,6 +1266,8 @@ pub fn run() {
             open_orbit_settings,
             open_external_url,
             open_full_chat,
+            desktop_interaction,
+            popup_ready,
             set_desktop_expanded,
             open_orbit_chat
         ])

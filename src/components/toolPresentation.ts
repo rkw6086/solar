@@ -46,12 +46,13 @@ function mcpName(name: string, servers: McpServer[]): { service: string; command
 function routineSummary(args: Record<string, unknown>, result: Record<string, unknown>, fallback: string): string {
   const saved = Object.keys(record(result.routine)).length ? record(result.routine) : result;
   const value = (key: string) => Object.hasOwn(args, key) ? args[key] : saved[key];
-  const prompt = compact(value("prompt"), 300);
+  const prompt = compact(value("title"), 160) || compact(value("prompt"), 300);
   const trigger = value("trigger");
   const minutes = value("intervalMinutes");
   const interval = typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0
     ? `${minutes} ${minutes === 1 ? "minute" : "minutes"}` : "";
-  const timing = trigger === "folder" ? "When project files change"
+  const timing = trigger === "cron" ? `Scheduled: ${compact(value("cron"), 100)} (local time)`
+    : trigger === "folder" ? "When project files change"
     : trigger === "completion" ? "After a task completes"
     : trigger === "interval" ? interval ? `Every ${interval}` : "On a repeating interval"
     : interval ? `Repeat interval: ${interval}` : "";
@@ -134,6 +135,10 @@ export function presentTool(message: Message, servers: McpServer[] = []): ToolPr
     const titles: Record<string, string> = { files_read: "Read a file", files_write: "Write a file", files_list: "Browse files", files_search: "Search files" };
     const count = Array.isArray(result.matches) ? result.matches.length : Array.isArray(result.entries) ? result.entries.length : undefined;
     return { ...base, category: "files", title: titles[name] || "File activity", summary: args.query ? `“${compact(args.query)}” · ${path}` : path, outcome: count !== undefined && activity.status === "completed" ? `${count} ${name === "files_search" ? "matches" : "items"}` : base.outcome };
+  }
+  if (name === "pull_from_user_home") {
+    const count = Array.isArray(result.copied) ? result.copied.length : Array.isArray(args.files) ? args.files.length : undefined;
+    return { ...base, category: "files", title: "Import into Orbit home", summary: count === undefined ? "Copy approved home files and their dependencies" : `${count} ${count === 1 ? "file" : "files"} · private copies for this Orbit` };
   }
   if (name.startsWith("memory_")) return { ...base, category: "memory", title: name === "memory_save" ? "Save a memory" : "Search memories", summary: args.query ? `“${compact(args.query)}”` : args.shared ? "Shared project memory" : "Private Orbit memory" };
   if (name === "orbit_delegate") return { ...base, category: "team", title: "Ask a teammate", summary: compact(args.task, 240) || "Delegating a focused task" };

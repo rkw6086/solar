@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   FolderOpen,
   LoaderCircle,
   ShieldCheck,
+  Shuffle,
   Sparkles,
 } from "lucide-react";
 import { api, native } from "../api";
@@ -21,10 +22,13 @@ import type {
   Settings,
 } from "../types";
 import { Modal } from "./Modal";
+const CronEditor = lazy(() => import("./CronEditor").then(module => ({ default: module.CronEditor })));
+import { memoryOrbitIds, memoryProjectIds, memoryScope } from "./memoryScope";
 import { Planet } from "./Planet";
 import { ModelPicker } from "./ModelPicker";
 import { OrbitProgress } from "./OrbitProgress";
 import { orbitProfileNeedsGeneration } from "./orbitProfile";
+import { generateOrbitName, generateOrbitPersonality } from "./orbitIdentity";
 import type { ProjectLocation } from "../projectLocation";
 import "./simpleOrbit.css";
 import "./projectForm.css";
@@ -113,7 +117,7 @@ export function OrbitForm({
   const [orbit, setOrbit] = useState<Orbit>(() => existing ? {
     ...existing, tasks: existing.tasks ?? "",
   } : {
-    id: id(), name: "", gender: "", role: "Personal Orbit", personality: "",
+    id: id(), name: "", role: "Personal Orbit", personality: "",
     tasks: "", instructions: "", color: colors[data.orbits.length % colors.length],
     model: "", providerId: "", autonomy: "ask", toolGrants: ["*"],
     projectIds: [], enabled: true,
@@ -152,7 +156,7 @@ export function OrbitForm({
     const requestId = id();
     request.current = requestId;
     try {
-      const draft = { ...orbit, name: orbit.name.trim(), gender: (orbit.gender ?? "").trim(),
+      const draft = { ...orbit, name: orbit.name.trim(),
         tasks: (orbit.tasks ?? "").trim(), toolGrants: ["*"] };
       await api(existing ? "update_orbit_profile" : "create_orbit", { orbit: draft, requestId });
       if (mounted.current && request.current === requestId) onSaved();
@@ -171,18 +175,24 @@ export function OrbitForm({
       onClose={close} wide dismissible={!busy}>
       <form onSubmit={(event) => void submit(event)} className="simple-orbit-form" inert={busy}>
         <div className="simple-orbit-heading">
-          <Planet name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
+          <Planet identity={orbit.id} name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
           <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p></div>
         </div>
         <div className="form-body">
-          <div className="field-grid">
-            <label className="field"><span>Name</span><input required maxLength={100} disabled={busy}
-              autoComplete="off" placeholder="e.g. Nova" value={orbit.name} onChange={(event) => update("name", event.target.value)} /></label>
-            <label className="field"><span>Gender <span className="optional">optional</span></span><input maxLength={200} disabled={busy}
-              placeholder="e.g. female, male, nonbinary, or none" value={orbit.gender ?? ""} onChange={(event) => update("gender", event.target.value)} /></label>
+          <div className="field orbit-generated-field">
+            <div className="orbit-field-heading"><label htmlFor="orbit-name">Name</label>
+              <button type="button" className="orbit-suggest-button" disabled={busy} onClick={() => update("name", generateOrbitName([...data.orbits.filter((item) => item.id !== orbit.id).map((item) => item.name), orbit.name]))}><Shuffle size={13} />Suggest a name</button>
+            </div>
+            <input id="orbit-name" required maxLength={100} disabled={busy} autoComplete="off" placeholder="Type a name, or try a suggestion" value={orbit.name} onChange={(event) => update("name", event.target.value)} />
           </div>
-          <label className="field"><span>Personality</span><textarea required={needsGeneration} rows={2} maxLength={8000} disabled={busy}
-            placeholder="Warm, curious, direct, with a dry sense of humor…" value={orbit.personality} onChange={(event) => update("personality", event.target.value)} /></label>
+          <div className="field orbit-generated-field">
+            <div className="orbit-field-heading"><label htmlFor="orbit-personality">Personality</label>
+              <button type="button" className="orbit-suggest-button" disabled={busy} onClick={() => update("personality", generateOrbitPersonality())}><Shuffle size={13} />Surprise me</button>
+            </div>
+            <textarea id="orbit-personality" required={needsGeneration} rows={3} maxLength={8000} disabled={busy}
+              placeholder="Describe their personality, or try a suggestion" value={orbit.personality} onChange={(event) => update("personality", event.target.value)} />
+            <small className="orbit-field-hint">Every suggestion is yours to edit.</small>
+          </div>
           <label className="field"><span>Tasks</span><textarea required={needsGeneration} rows={3} maxLength={32000} disabled={busy}
             placeholder="What should they help you do? Include any important boundaries or preferences."
             value={orbit.tasks ?? ""} onChange={(event) => update("tasks", event.target.value)} /></label>
@@ -210,7 +220,7 @@ export function OrbitForm({
         </div>
         <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Orbit" : "Create Orbit"} />
       </form>
-    </Modal>{busy && needsGeneration && <OrbitProgress name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
+    </Modal>{busy && needsGeneration && <OrbitProgress identity={orbit.id} name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
   );
 }
 
@@ -467,7 +477,7 @@ export function GroupForm({
                       if (!next.includes(lead)) setLead(next[0] ?? "");
                     }}
                   />
-                  <Planet color={orbit.color} name={orbit.name} size={45} />
+                  <Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={45} />
                   <span>
                     <strong>{orbit.name}</strong>
                     <small>{orbit.role}</small>
@@ -658,229 +668,62 @@ export function ProjectForm({
   );
 }
 
-export function MemoryForm({
-  data,
-  existing,
-  onClose,
-  onSaved,
-}: {
-  data: Bootstrap;
-  existing?: Memory;
-  onClose: () => void;
-  onSaved: () => void;
+export function MemoryForm({ data, existing, onClose, onSaved }: {
+  data: Bootstrap; existing?: Memory; onClose: () => void; onSaved: () => void;
 }) {
-  const [owner, setOwner] = useState(
-    existing?.orbitId
-      ? `orbit:${existing.orbitId}`
-      : existing?.projectId
-        ? `project:${existing.projectId}`
-        : data.orbits[0]
-          ? `orbit:${data.orbits[0].id}`
-          : "",
-  );
+  const [scope, setScope] = useState<"system" | "orbit" | "project">(existing ? memoryScope(existing) : "system");
+  const [orbitIds, setOrbitIds] = useState(existing ? memoryOrbitIds(existing) : []);
+  const [projectIds, setProjectIds] = useState(existing ? memoryProjectIds(existing) : []);
   const [content, setContent] = useState(existing?.content ?? "");
   const status = useSubmit(onSaved);
-  return (
-    <Modal
-      title="Something worth remembering"
-      subtitle="Keep knowledge with one Orbit or share it with a project."
-      onClose={onClose}
-    >
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          const [kind, ownerId] = owner.split(":");
-          void status.submit(() =>
-            api("save_memory", {
-              memory: {
-                id: existing?.id ?? id(),
-                content,
-                createdAt: existing?.createdAt ?? new Date().toISOString(),
-                orbitId: kind === "orbit" ? ownerId : undefined,
-                projectId: kind === "project" ? ownerId : undefined,
-              },
-            }),
-          );
-        }}
-      >
-        <div className="form-body">
-          <label className="field">
-            <span>Who can access this memory?</span>
-            <select
-              required
-              value={owner}
-              onChange={(event) => setOwner(event.target.value)}
-            >
-              <option value="" disabled>
-                Choose an Orbit or project
-              </option>
-              <optgroup label="Private to an Orbit">
-                {data.orbits.map((orbit) => (
-                  <option key={orbit.id} value={`orbit:${orbit.id}`}>
-                    {orbit.name}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Shared project">
-                {data.projects.map((project) => (
-                  <option key={project.id} value={`project:${project.id}`}>
-                    {project.name}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </label>
-          <label className="field">
-            <span>Memory</span>
-            <textarea
-              required
-              rows={6}
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              placeholder="Preferences, background, decisions, or information they should keep in mind."
-            />
-          </label>
-        </div>
-        <FormFooter {...status} label="Save memory" onClose={onClose} />
-      </form>
-    </Modal>
-  );
+  const choices = scope === "orbit" ? data.orbits : data.projects;
+  const selected = scope === "orbit" ? orbitIds : projectIds;
+  function toggle(value: string) {
+    const next = selected.includes(value) ? selected.filter(item => item !== value) : [...selected, value];
+    if (scope === "orbit") setOrbitIds(next); else setProjectIds(next);
+  }
+  return <Modal title={existing ? "Edit memory" : "Something worth remembering"}
+    subtitle="Share a fact with the whole Solar System, selected Orbits, or selected projects."
+    onClose={onClose} dismissible={!status.busy}>
+    <form onSubmit={event => { event.preventDefault(); void status.submit(async () => {
+      if (scope !== "system" && !selected.length) throw new Error(`Choose at least one ${scope === "orbit" ? "Orbit" : "project"}.`);
+      return api("save_memory", { memory: { id: existing?.id ?? id(), content,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        orbitIds: scope === "orbit" ? orbitIds : [], projectIds: scope === "project" ? projectIds : [],
+        orbitId: null, projectId: null } });
+    }); }}>
+      <div className="form-body">
+        <label className="field"><span>Share with</span><select aria-label="Share with" value={scope} onChange={event => setScope(event.target.value as typeof scope)}>
+          <option value="system">Entire Solar System</option><option value="orbit">Selected Orbits</option><option value="project">Selected projects</option>
+        </select><small>{scope === "system" ? "Every Orbit can see and update this memory." : scope === "orbit" ? "Choose one or more Orbits that should share this memory." : "Orbits can use this memory when they have access to one of these projects."}</small></label>
+        {scope !== "system" && <fieldset className="memory-share-options"><legend>{scope === "orbit" ? "Orbits" : "Projects"}</legend>
+          {choices.map(choice => <label className="check-row" key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={() => toggle(choice.id)} /><span>{choice.name}</span></label>)}
+          {!choices.length && <p className="subtle-label">Add {scope === "orbit" ? "an Orbit" : "a project"} first, or share with the entire Solar System.</p>}
+        </fieldset>}
+        <label className="field"><span>Memory</span><textarea required maxLength={16000} rows={6} value={content} onChange={event => setContent(event.target.value)} placeholder="Preferences, decisions, context, or a useful fact." /></label>
+      </div><FormFooter {...status} label="Save memory" onClose={onClose} />
+    </form>
+  </Modal>;
 }
 
-export function RoutineForm({
-  data,
-  existing,
-  onClose,
-  onSaved,
-}: {
-  data: Bootstrap;
-  existing?: Routine;
-  onClose: () => void;
-  onSaved: () => void;
+export function RoutineForm({ existing, onClose, onSaved }: {
+  data: Bootstrap; existing?: Routine; onClose: () => void; onSaved: () => void;
 }) {
-  const [routine, setRoutine] = useState<Routine>(
-    existing ?? {
-      id: id(),
-      orbitId: data.orbits[0]?.id ?? "",
-      prompt: "",
-      intervalMinutes: 60,
-      enabled: true,
-      trigger: "interval",
-    },
-  );
+  const [routine, setRoutine] = useState<Routine | undefined>(existing);
   const status = useSubmit(onSaved);
-  return (
-    <Modal
-      title={existing ? "Edit routine" : "A little help, on repeat"}
-      subtitle="Routines run while Solar is open and your Mac is awake."
-      onClose={onClose}
-    >
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void status.submit(() => api("save_routine", { routine }));
-        }}
-      >
-        <div className="form-body">
-          <label className="field">
-            <span>Orbit</span>
-            <select
-              required
-              value={routine.orbitId}
-              onChange={(event) =>
-                setRoutine({ ...routine, orbitId: event.target.value })
-              }
-            >
-              {data.orbits.map((orbit) => (
-                <option key={orbit.id} value={orbit.id}>
-                  {orbit.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>When should it run?</span>
-            <select
-              value={routine.trigger}
-              onChange={(event) =>
-                setRoutine({
-                  ...routine,
-                  trigger: event.target.value as Routine["trigger"],
-                })
-              }
-            >
-              <option value="interval">On a repeating interval</option>
-              <option value="folder">When project files change</option>
-              <option value="completion">After a task completes</option>
-            </select>
-          </label>
-          {routine.trigger === "interval" && (
-            <label className="field">
-              <span>Repeat every (minutes)</span>
-              <input
-                type="number"
-                min={1}
-                max={43200}
-                required
-                value={routine.intervalMinutes}
-                onChange={(event) =>
-                  setRoutine({
-                    ...routine,
-                    intervalMinutes: Number(event.target.value),
-                  })
-                }
-              />
-            </label>
-          )}
-          <label className="field">
-            <span>
-              Project {routine.trigger === "folder" ? "" : "(optional)"}
-            </span>
-            <select
-              required={routine.trigger === "folder"}
-              value={routine.projectId ?? ""}
-              onChange={(event) =>
-                setRoutine({
-                  ...routine,
-                  projectId: event.target.value || undefined,
-                })
-              }
-            >
-              <option value="">Choose a project</option>
-              {data.projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>What should they do?</span>
-            <textarea
-              required
-              rows={4}
-              value={routine.prompt}
-              onChange={(event) =>
-                setRoutine({ ...routine, prompt: event.target.value })
-              }
-              placeholder="Check the project for new test failures and summarize what changed."
-            />
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={routine.enabled}
-              onChange={(event) =>
-                setRoutine({ ...routine, enabled: event.target.checked })
-              }
-            />
-            <span>Enable this routine</span>
-          </label>
-        </div>
-        <FormFooter {...status} label="Save routine" onClose={onClose} />
-      </form>
-    </Modal>
-  );
+  if (!routine) return <Modal title="Ask an Orbit" onClose={onClose}><div className="form-body">Describe the routine in chat and your Orbit will set it up.</div></Modal>;
+  return <Modal title="Routine schedule" subtitle="Ask the Orbit in chat to change what this routine does." onClose={onClose} dismissible={!status.busy}>
+    <form onSubmit={event => { event.preventDefault(); void status.submit(() => api("save_routine", { routine })); }}>
+      <div className="form-body"><h3>{routine.title || routine.prompt.split("\n")[0]}</h3>
+        <label className="field"><span>When should it run?</span><select value={routine.trigger} onChange={event => setRoutine({ ...routine, trigger: event.target.value as Routine["trigger"], cron: routine.cron || "0 9 * * 1-5" })}>
+          {routine.trigger === "interval" && <option value="interval">Existing interval (choose a schedule to replace)</option>}
+          <option value="cron">On a schedule</option><option value="folder" disabled={!routine.projectId}>When project files change</option><option value="completion">After a task completes</option>
+        </select></label>
+        {routine.trigger === "cron" && <Suspense fallback={<p role="status">Loading schedule editor…</p>}><CronEditor value={routine.cron || "0 9 * * 1-5"} onChange={cron => setRoutine({ ...routine, cron })} /></Suspense>}
+        <label className="check-row"><input type="checkbox" checked={routine.enabled} onChange={event => setRoutine({ ...routine, enabled: event.target.checked })} /><span>Enable this routine</span></label>
+      </div><FormFooter {...status} label="Save schedule" onClose={onClose} />
+    </form>
+  </Modal>;
 }
 
 export function McpForm({

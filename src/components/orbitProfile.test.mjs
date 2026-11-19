@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 import { orbitProfileNeedsGeneration } from "./orbitProfile.ts";
 
 const original = {
-  name: "Nova", gender: "none", role: "Researcher", personality: "Curious",
+  name: "Nova", role: "Researcher", personality: "Curious",
   tasks: "Check sources", instructions: "Private generated prompt", model: "one", providerId: "a",
 };
 
 test("only user profile text requests a new generation", () => {
   assert(orbitProfileNeedsGeneration(original));
   assert(!orbitProfileNeedsGeneration({ ...original, model: "two", providerId: "b", autonomy: "trusted", projectIds: ["new"], instructions: "ignored" }, original));
-  for (const key of ["name", "gender", "role", "personality", "tasks"]) {
+  for (const key of ["name", "role", "personality", "tasks"]) {
     assert(orbitProfileNeedsGeneration({ ...original, [key]: original[key] + " changed" }, original), key);
     assert(!orbitProfileNeedsGeneration({ ...original, [key]: ` ${original[key]} ` }, original), `${key} whitespace`);
   }

@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Bell,
   Check,
-  CheckCheck,
   ChevronRight,
   CircleHelp,
   Clock3,
@@ -27,7 +26,6 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  Square,
   Sun,
   Trash2,
   Unplug,
@@ -49,6 +47,9 @@ import type {
   Routine,
 } from "./types";
 import { Planet } from "./components/Planet";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { memoryOrbitIds, memoryProjectIds, memoryScope } from "./components/memoryScope";
 import { OrbitSettingsPanel } from "./components/OrbitSettingsPanel";
 import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
@@ -72,7 +73,6 @@ type Page =
   | "connections"
   | "memory"
   | "routines"
-  | "activity"
   | "settings";
 
 const Onboarding = lazy(() => import("./onboarding/Onboarding").then(({ Onboarding }) => ({ default: Onboarding })));
@@ -94,7 +94,6 @@ const navigation: { id: Page; label: string; icon: typeof Sun }[] = [
   { id: "projects", label: "Projects", icon: Folder },
   { id: "memory", label: "Memory", icon: Layers3 },
   { id: "routines", label: "Routines", icon: Clock3 },
-  { id: "activity", label: "Activity", icon: Activity },
 ];
 
 function Empty({
@@ -288,35 +287,7 @@ export function App() {
   useEffect(() => {
     if (page !== "memory") return;
     let current = true;
-    const [kind, ownerId] = memoryOwner.split(":");
-    const scopes = memoryOwner
-      ? [
-          {
-            orbitId: kind === "orbit" ? ownerId : undefined,
-            projectId: kind === "project" ? ownerId : undefined,
-          },
-        ]
-      : [
-          ...data.orbits.map((orbit) => ({
-            orbitId: orbit.id,
-            projectId: undefined,
-          })),
-          ...data.projects.map((project) => ({
-            orbitId: undefined,
-            projectId: project.id,
-          })),
-        ];
-    void Promise.all(
-      scopes.map((scope) => api<Memory[]>("get_memories", scope)),
-    )
-      .then((results) => {
-        if (current)
-          setMemories([
-            ...new Map(
-              results.flat().map((memory) => [memory.id, memory]),
-            ).values(),
-          ]);
-      })
+    void api<Memory[]>("get_memories", {}).then(results => { if (current) setMemories(results); })
       .catch((failure) => {
         if (current) setError(errorText(failure));
       });
@@ -471,9 +442,7 @@ export function App() {
               {id === "orbits" && (
                 <span className="nav-count">{data.orbits.length}</span>
               )}
-              {id === "activity" && running.length > 0 && (
-                <span className="activity-count">{running.length}</span>
-              )}
+
             </button>
           ))}
         </nav>
@@ -496,7 +465,7 @@ export function App() {
               key={orbit.id}
               onClick={() => void startChat(orbit)}
             >
-              <Planet color={orbit.color} name={orbit.name} size={32} />
+              <Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={32} />
               <span>{orbit.name}</span>
               <span
                 className={`tiny-dot ${running.some((task) => task.orbitId === orbit.id) ? "working" : ""}`}
@@ -562,7 +531,11 @@ export function App() {
             <button
               className="notification-button"
               aria-label="View pending approvals"
-              onClick={() => go("activity")}
+              onClick={() => {
+                const pending = data.approvals[0];
+                const task = data.tasks.find(task => task.id === pending?.taskId);
+                if (task) { setPage("conversations"); setConversationId(task.conversationId); }
+              }}
             >
               <Bell size={17} />
               {data.approvals.length > 0 && (
@@ -666,6 +639,7 @@ export function App() {
                         key={orbit.id}
                       >
                         <Planet
+                          identity={orbit.id}
                           color={orbit.color}
                           size={index === 1 ? 69 : 55}
                         />
@@ -809,6 +783,7 @@ export function App() {
                         </div>
                         <div className="card-planet">
                           <Planet
+                            identity={orbit.id}
                             color={orbit.color}
                             name={orbit.name}
                             size={103}
@@ -907,6 +882,7 @@ export function App() {
                               .slice(0, 3)
                               .map((orbitId) => (
                                 <Planet
+                                  identity={orbitId}
                                   key={orbitId}
                                   color={
                                     data.orbits.find(
@@ -1236,333 +1212,45 @@ export function App() {
             )}
             {page === "memory" && (
               <div className="page-content">
-                <PageHeading
-                  title="Memory"
-                  description="Review what your Orbits remember and what projects share."
-                >
-                  <button
-                    className="button button-primary"
-                    disabled={!data.orbits.length && !data.projects.length}
-                    onClick={() => setDialog({ kind: "memory" })}
-                  >
-                    <Plus size={16} />
-                    Add memory
-                  </button>
+                <PageHeading title="Memories" description="Knowledge shared across your Solar System, selected Orbits, or projects.">
+                  <button className="button button-primary" onClick={() => setDialog({ kind: "memory" })}><Plus size={16} />Add memory</button>
                 </PageHeading>
-                <div className="filter-bar">
-                  <div className="search-input">
-                    <Search size={15} />
-                    <input
-                      placeholder="Search memories…"
-                      aria-label="Search memories"
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                    />
-                  </div>
-                  <select
-                    value={memoryOwner}
-                    onChange={(event) => setMemoryOwner(event.target.value)}
-                    aria-label="Filter memories by owner"
-                  >
-                    <option value="">All memories</option>
-                    <optgroup label="Private to an Orbit">
-                      {data.orbits.map((orbit) => (
-                        <option key={orbit.id} value={`orbit:${orbit.id}`}>
-                          {orbit.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Shared projects">
-                      {data.projects.map((project) => (
-                        <option
-                          key={project.id}
-                          value={`project:${project.id}`}
-                        >
-                          {project.name}
-                        </option>
-                      ))}
-                    </optgroup>
+                <div className="filter-bar"><div className="search-input"><Search size={15} /><input placeholder="Search memories…" aria-label="Search memories" value={search} onChange={event => setSearch(event.target.value)} /></div>
+                  <select value={memoryOwner} onChange={event => setMemoryOwner(event.target.value)} aria-label="Filter memories">
+                    <option value="">All memories</option><option value="system">Solar System</option>
+                    <optgroup label="Orbits">{data.orbits.map(orbit => <option key={orbit.id} value={`orbit:${orbit.id}`}>{orbit.name}</option>)}</optgroup>
+                    <optgroup label="Projects">{data.projects.map(project => <option key={project.id} value={`project:${project.id}`}>{project.name}</option>)}</optgroup>
                   </select>
                 </div>
-                {memories.length ? (
-                  <div className="memory-grid">
-                    {memories
-                      .filter((memory) =>
-                        memory.content
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                      )
-                      .map((memory) => (
-                        <article
-                          className="surface-card memory-card"
-                          key={memory.id}
-                        >
-                          <div className="surface-card-title">
-                            <span className="memory-owner">
-                              {memory.projectId ? (
-                                <Users size={13} />
-                              ) : (
-                                <LockKeyhole size={13} />
-                              )}
-                              {memory.projectId
-                                ? (data.projects.find(
-                                    (project) =>
-                                      project.id === memory.projectId,
-                                  )?.name ?? "Shared project")
-                                : orbitName(memory.orbitId ?? "")}
-                            </span>
-                            <button
-                              className="icon-button"
-                              aria-label="Edit memory"
-                              onClick={() =>
-                                setDialog({ kind: "memory", value: memory })
-                              }
-                            >
-                              <Settings2 size={14} />
-                            </button>
-                            <button
-                              className="icon-button"
-                              aria-label="Delete memory"
-                              onClick={() =>
-                                setConfirm({
-                                  title: "Forget this memory?",
-                                  description:
-                                    "This removes the saved memory. Existing conversation messages remain.",
-                                  action: () =>
-                                    api("delete_memory", { id: memory.id }),
-                                })
-                              }
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                          <p>{memory.content}</p>
-                          <time>
-                            {new Date(memory.createdAt).toLocaleDateString()}
-                          </time>
-                        </article>
-                      ))}
-                  </div>
-                ) : (
-                  <Empty
-                    icon={<Layers3 size={29} />}
-                    title="A little context goes a long way"
-                  >
-                    Save preferences, decisions, and useful facts. Private
-                    memories belong to one Orbit. Project memories are shared
-                    with its team.
-                  </Empty>
-                )}
+                {memories.length ? <div className="memory-grid">{memories.filter(memory => {
+                  if (!memory.content.toLowerCase().includes(search.toLowerCase())) return false;
+                  if (!memoryOwner) return true;
+                  if (memoryOwner === "system") return memoryScope(memory) === "system";
+                  const [kind, owner] = memoryOwner.split(":");
+                  return kind === "orbit" ? memoryOrbitIds(memory).includes(owner) : memoryProjectIds(memory).includes(owner);
+                }).map(memory => <article className="surface-card memory-card" key={memory.id}>
+                  <div className="surface-card-title"><span className="memory-owner"><Users size={13} />{memoryScope(memory) === "system" ? "Solar System" : memoryScope(memory) === "orbit" ? memoryOrbitIds(memory).map(orbitName).join(", ") : memoryProjectIds(memory).map(id => data.projects.find(project => project.id === id)?.name ?? "Project").join(", ")}</span>
+                    <button className="icon-button" aria-label="Edit memory" onClick={() => setDialog({ kind: "memory", value: memory })}><Settings2 size={14} /></button>
+                    <button className="icon-button" aria-label="Delete memory" onClick={() => setConfirm({ title: "Forget this memory?", description: "This removes the shared memory for everyone attached to it. Conversation messages remain.", action: () => api("delete_memory", { id: memory.id }) })}><Trash2 size={14} /></button>
+                  </div><div className="memory-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{memory.content}</ReactMarkdown></div><time>{new Date(memory.createdAt).toLocaleDateString()}</time>
+                </article>)}</div> : <Empty icon={<Layers3 size={29} />} title="A little context goes a long way">Save preferences, decisions, and useful facts. Share with everyone, selected Orbits, or selected projects.</Empty>}
               </div>
             )}
             {page === "routines" && (
               <div className="page-content">
-                <PageHeading
-                  title="Routines"
-                  description="Choose the work your Orbits can start on their own."
-                >
-                  <button
-                    className="button button-primary"
-                    disabled={!data.orbits.length}
-                    onClick={() => setDialog({ kind: "routine" })}
-                  >
-                    <Plus size={16} />
-                    New routine
-                  </button>
-                </PageHeading>
-                <div className="notice page-notice">
-                  <Clock3 size={18} />
-                  <p>
-                    Routines run while Solar is open and your Mac is awake,
-                    within the Orbit’s existing permissions.
-                  </p>
-                </div>
-                {data.routines.length ? (
-                  <div className="routine-list">
-                    {data.routines.map((routine) => (
-                      <article
-                        className="surface-card routine-card"
-                        key={routine.id}
-                      >
-                        <Planet
-                          color={
-                            data.orbits.find(
-                              (orbit) => orbit.id === routine.orbitId,
-                            )?.color
-                          }
-                          size={58}
-                        />
-                        <div>
-                          <span className="eyebrow">
-                            {orbitName(routine.orbitId)} ·{" "}
-                            {routine.trigger === "interval"
-                              ? `Every ${routine.intervalMinutes} minutes`
-                              : routine.trigger === "folder"
-                                ? "When project files change"
-                                : "After task completion"}
-                          </span>
-                          <h3>{routine.prompt}</h3>
-                          <span className="subtle-label">
-                            {routine.projectId
-                              ? data.projects.find(
-                                  (project) => project.id === routine.projectId,
-                                )?.name
-                              : "Private Orbit routine"}
-                          </span>
-                        </div>
-                        <button
-                          className={`switch ${routine.enabled ? "on" : ""}`}
-                          role="switch"
-                          aria-checked={routine.enabled}
-                          aria-label={`Enable routine ${routine.prompt}`}
-                          onClick={() =>
-                            void action("save_routine", {
-                              routine: {
-                                ...routine,
-                                enabled: !routine.enabled,
-                              },
-                            })
-                          }
-                        >
-                          <span />
-                        </button>
-                        <button
-                          className="icon-button"
-                          aria-label="Edit routine"
-                          onClick={() =>
-                            setDialog({ kind: "routine", value: routine })
-                          }
-                        >
-                          <Settings2 size={16} />
-                        </button>
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty
-                    icon={<Clock3 size={29} />}
-                    title="Helpful habits, on your terms"
-                    action={
-                      <button
-                        className="button button-primary"
-                        disabled={!data.orbits.length}
-                        onClick={() => setDialog({ kind: "routine" })}
-                      >
-                        Create a routine
-                      </button>
-                    }
-                  >
-                    Schedule a check-in, watch a project folder, or follow up
-                    after a task. You decide when work begins.
-                  </Empty>
-                )}
-              </div>
-            )}
-            {page === "activity" && (
-              <div className="page-content">
-                <PageHeading
-                  title="Activity"
-                  description="See who’s working, what’s waiting, and how things turned out."
-                >
-                  <span className="status-pill working">
-                    <span />
-                    {running.length} active
-                  </span>
-                </PageHeading>
-                {data.approvals.map((approval) => (
-                  <article key={approval.id} className="approval-card">
-                    <div className="approval-title">
-                      <ShieldCheck size={18} />
-                      <strong>
-                        {orbitName(approval.orbitId)} requests {approval.tool}
-                      </strong>
-                      <span className="experimental-pill">
-                        Your approval needed
-                      </span>
-                    </div>
-                    <pre>{JSON.stringify(approval.arguments, null, 2)}</pre>
-                    <div className="button-row">
-                      <button
-                        className="button button-secondary"
-                        onClick={() =>
-                          void action("resolve_approval", {
-                            id: approval.id,
-                            allow: false,
-                          })
-                        }
-                      >
-                        Decline
-                      </button>
-                      <button
-                        className="button button-primary"
-                        onClick={() =>
-                          void action("resolve_approval", {
-                            id: approval.id,
-                            allow: true,
-                          })
-                        }
-                      >
-                        <Check size={15} />
-                        Allow once
-                      </button>
-                    </div>
-                  </article>
-                ))}
-                {data.tasks.length ? (
-                  <div className="activity-list">
-                    {[...data.tasks].reverse().map((task) => (
-                      <article className="activity-row" key={task.id}>
-                        <span className={`activity-state ${task.status}`}>
-                          {activeTask(task) ? (
-                            <LoaderCircle size={17} className="spin" />
-                          ) : task.status === "completed" ? (
-                            <CheckCheck size={18} />
-                          ) : (
-                            <Activity size={17} />
-                          )}
-                        </span>
-                        <div>
-                          <h3>{task.summary || "Orbit task"}</h3>
-                          <p>
-                            {orbitName(task.orbitId)} <span>·</span>{" "}
-                            {task.status.replaceAll("_", " ")}
-                            {task.error && (
-                              <span className="danger-text">
-                                {" "}
-                                · {task.error}
-                              </span>
-                            )}
-                          </p>
-                        </div>
-                        <time>
-                          {new Date(task.createdAt).toLocaleTimeString([], {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </time>
-                        {activeTask(task) && (
-                          <button
-                            className="icon-button"
-                            onClick={() =>
-                              void action("stop_task", { taskId: task.id })
-                            }
-                            aria-label="Stop task"
-                          >
-                            <Square size={14} />
-                          </button>
-                        )}
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty
-                    icon={<Activity size={29} />}
-                    title="Your team’s work appears here"
-                  >
-                    Tool requests, running tasks, and completed work will be
-                    visible as your Orbits get started.
-                  </Empty>
-                )}
+                <PageHeading title="Routines" description="Ask an Orbit in chat to set up a routine. Manage its schedule here." />
+                <div className="notice page-notice"><Clock3 size={18} /><p>Routines run while Solar is open and your computer is awake, within the Orbit’s existing permissions. Schedules use this computer’s local time.</p></div>
+                {data.routines.length ? <div className="routine-list">{data.routines.map(routine => <article className="surface-card routine-card" key={routine.id}>
+                  <Planet identity={routine.orbitId} color={data.orbits.find(orbit => orbit.id === routine.orbitId)?.color} size={52} />
+                  <details className="routine-details"><summary><strong>{routine.title || routine.prompt.split("\n")[0]}</strong><span className="subtle-label">{orbitName(routine.orbitId)} · {routine.trigger === "cron" ? "Scheduled" : routine.trigger === "folder" ? "When project files change" : routine.trigger === "completion" ? "After task completion" : `Every ${routine.intervalMinutes} minutes`}</span></summary>
+                    <div className="routine-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{routine.prompt}</ReactMarkdown></div>
+                    {routine.projectId && <p className="subtle-label">Project: {data.projects.find(project => project.id === routine.projectId)?.name ?? "Unavailable"}</p>}
+                    {routine.lastRunAt && <p className="subtle-label">Last run: {new Date(routine.lastRunAt).toLocaleString()}</p>}
+                    <div className="button-row"><button className="button button-secondary" onClick={() => void action("run_routine", { id: routine.id })}>Run now</button><button className="button button-quiet" onClick={() => setConfirm({ title: `Delete ${routine.title || "this routine"}?`, description: "Stop future scheduled runs. Running work will continue.", action: () => api("delete_routine", { id: routine.id }) })}>Delete</button></div>
+                  </details>
+                  <button className={`switch ${routine.enabled ? "on" : ""}`} role="switch" aria-checked={routine.enabled} aria-label={`Enable ${routine.title || "routine"}`} onClick={() => void action("save_routine", { routine: { ...routine, enabled: !routine.enabled } })}><span /></button>
+                  <button className="icon-button" aria-label="Edit routine schedule" onClick={() => setDialog({ kind: "routine", value: routine })}><Settings2 size={16} /></button>
+                </article>)}</div> : <Empty icon={<Clock3 size={29} />} title="Helpful habits start with a conversation">Ask an Orbit something like “Check my project every weekday at 9 AM.” It will create the routine and choose a clear title and instructions.</Empty>}
               </div>
             )}
             {page === "settings" && (
@@ -1831,7 +1519,7 @@ export function App() {
       )}
       {dialog?.kind === "orbit-settings" && (() => {
         const orbit = data.orbits.find((item) => item.id === dialog.orbitId);
-        return orbit ? <OrbitSettingsPanel orbit={orbit} data={data}
+        return orbit ? <OrbitSettingsPanel key={orbit.id} orbit={orbit} data={data}
           onClose={() => setDialog(null)} onChanged={(change) => { if (change !== "edit") setDialog(null); void refresh(); }} /> : null;
       })()}
       {dialog?.kind === "provider" && (

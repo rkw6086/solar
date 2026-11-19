@@ -130,3 +130,12 @@
 }
 :root[data-motion="reduced"] .solar-system-orbit .planet-art,
 :root[data-motion="reduced"] .solar-system-orbit-name { transition: none; }
+
+.solar-system-crowded .solar-system-orbit { width: calc(var(--scene-planet-size, 42px) + 6px); height: calc(var(--scene-planet-size, 42px) + 6px); }
+.solar-system-crowded .solar-system-star .planet-art { width: var(--scene-star-size, 84px); height: var(--scene-star-size, 84px); }
+.solar-system-crowded .solar-system-orbit .planet-art { width: var(--scene-planet-size, 42px); height: var(--scene-planet-size, 42px); }
+.solar-system-compact .solar-system-crowded { min-height: 320px; }
+.solar-system-compact .solar-system-crowded .solar-system-star .planet-art { width: min(var(--scene-star-size, 84px), 64px); height: min(var(--scene-star-size, 84px), 64px); }
+@media (max-width: 700px) {
+  .solar-system-crowded { min-height: 400px; }
+}

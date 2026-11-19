@@ -114,15 +114,13 @@ function previewOrbitProfile(draft: Orbit, existing?: Orbit): Orbit {
   if (!draft.name.trim() || !draft.personality.trim() || !tasks) throw new Error("Name, personality, and tasks are required.");
   if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model for your Orbit.");
   const name = draft.name.trim();
-  const gender = draft.gender?.trim() ?? "";
   const personality = draft.personality.trim();
   const role = existing ? draft.role.trim() : "Personal Orbit";
   if (!role) throw new Error("Role is required.");
   return {
-    ...draft, name, gender, personality, tasks, role, toolGrants: ["*"],
+    ...draft, name, personality, tasks, role, toolGrants: ["*"],
     instructions: [
       `You are ${name}, a ${role} in Solar.`,
-      gender && `Gender: ${gender}.`,
       `Personality: ${personality}`,
       `Responsibilities: ${tasks}`,
       "Use available tools to complete the user's request. Gather evidence, respect their boundaries, and report outcomes clearly.",
@@ -223,6 +221,21 @@ async function previewCommand(
       savePreview();
       return orbit;
     }
+    case "get_orbit_cli_setup": {
+      const orbitId = requiredString(args, "orbitId");
+      const orbit = preview.orbits.find((item) => item.id === orbitId);
+      if (!orbit) throw new Error("This Orbit no longer exists.");
+      const folder = orbit.id.replace(/[^a-zA-Z0-9_-]/g, "_") || "orbit";
+      const base = `/Users/you/.solar/orbits/${folder}`;
+      return {
+        shell: "/bin/zsh",
+        home: `${base}/workspace`,
+        configDirectory: `${base}/config`,
+        command: `env -i HOME='${base}/workspace' XDG_CONFIG_HOME='${base}/config' PATH='/usr/bin:/bin:/usr/sbin:/sbin' /bin/zsh -i -l`,
+      };
+    }
+    case "open_orbit_cli_setup":
+      throw new Error("Orbit terminals are available in Solar’s desktop app. Open the desktop app to set up this Orbit’s CLI sign-ins.");
     case "reset_orbit": {
       if (args.confirmed !== true) throw new Error("Confirm before clearing this Orbit's saved data.");
       const privateIds = new Set(preview.conversations.filter((chat) => chat.orbitIds.length === 1 && chat.orbitIds[0] === args.orbitId).map((chat) => chat.id));
@@ -236,6 +249,12 @@ async function previewCommand(
       return;
     }
     case "delete_orbit":
+      preview.memories = preview.memories.flatMap(memory => {
+        const ids = [...new Set([...(memory.orbitIds ?? []), ...(memory.orbitId ? [memory.orbitId] : [])])];
+        if (!ids.includes(String(args.id))) return [memory];
+        const remaining = ids.filter(id => id !== args.id);
+        return remaining.length ? [{ ...memory, orbitIds: remaining, orbitId: undefined }] : [];
+      });
       preview.orbits = preview.orbits.filter((orbit) => orbit.id !== args.id);
       previewAttention = previewAttention.filter((item) => item.orbitId !== args.id);
       if ([`chat/${String(args.id)}`, `orbit/${String(args.id)}`].includes(window.location.hash.slice(1))) window.location.hash = "";
@@ -319,18 +338,25 @@ async function previewCommand(
       return saved;
     }
     case "save_routine":
+      if (!preview.routines.some(routine => routine.id === (args.routine as {id: string}).id)) throw new Error("Ask an Orbit to create a routine in chat first.");
       preview.routines = replaceById(
         preview.routines,
         args.routine as PreviewState["routines"][number],
       );
       savePreview();
       return args.routine;
+    case "delete_routine":
+      preview.routines = preview.routines.filter(routine => routine.id !== args.id);
+      savePreview();
+      return;
+    case "run_routine":
+      throw new Error("Run routines in the desktop app with a connected Orbit.");
     case "get_memories":
       return preview.memories.filter((memory) =>
         args.orbitId
-          ? memory.orbitId === args.orbitId
+          ? memory.orbitId === args.orbitId || memory.orbitIds?.includes(String(args.orbitId))
           : args.projectId
-            ? memory.projectId === args.projectId
+            ? memory.projectId === args.projectId || memory.projectIds?.includes(String(args.projectId))
             : true,
       );
     case "save_memory":

@@ -2,12 +2,35 @@ use crate::{
     engine::{Engine, background_runtime, validate_id},
     model::{Conversation, Routine, Task, now},
 };
-use chrono::Utc;
+use chrono::{Local, Utc};
+use std::str::FromStr;
 use std::{
     path::Path,
     sync::Arc,
     time::{Duration, SystemTime},
 };
+
+/// Five-field local-time cron; after sleep, coalesce missed runs into one run.
+pub(crate) fn parse_cron(value: &str) -> Result<croner::Cron, String> {
+    if value.split_whitespace().count() != 5 || value.len() > 256 {
+        return Err("Use a five-part cron schedule: minute hour day month weekday".into());
+    }
+    croner::Cron::from_str(value).map_err(|error| format!("Invalid schedule: {error}"))
+}
+fn cron_due(
+    value: &str,
+    last_run: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) -> Result<bool, String> {
+    let cron = parse_cron(value)?;
+    let Some(last) = last_run.and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok()) else {
+        return Ok(false);
+    };
+    let next = cron
+        .find_next_occurrence(&last.with_timezone(&Local), false)
+        .map_err(|error| format!("Cannot calculate next scheduled run: {error}"))?;
+    Ok(next.with_timezone(&Utc) <= now)
+}
 
 impl Engine {
     pub fn start_routines(self: &Arc<Self>) -> Result<(), String> {
@@ -133,6 +156,8 @@ impl Engine {
                 self.store.put("routines", &routine.id, &routine)?;
             }
             changed
+        } else if routine.trigger == "cron" {
+            cron_due(&routine.cron, routine.last_run_at.as_deref(), Utc::now())?
         } else if routine.trigger == "interval" {
             routine
                 .last_run_at
@@ -248,7 +273,7 @@ impl Engine {
             routine.orbit_id.clone(),
             format!(
                 "Routine · {}",
-                routine.prompt.chars().take(45).collect::<String>()
+                routine.title.chars().take(80).collect::<String>()
             ),
             routine.project_id.clone(),
         )?;
@@ -300,8 +325,24 @@ mod tests {
     use super::*;
     use crate::model::Project;
 
+    #[test]
+    fn cron_rejects_invalid_fields_and_coalesces_due_runs() {
+        assert!(parse_cron("not a schedule").is_err());
+        assert!(parse_cron("* * * * * *").is_err());
+        assert!(parse_cron("60 * * * *").is_err());
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-19T12:00:30Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(!cron_due("* * * * *", Some("2026-11-19T12:00:10Z"), now).unwrap());
+        assert!(cron_due("* * * * *", Some("2026-11-19T11:59:10Z"), now).unwrap());
+        assert!(cron_due("* * * * *", Some("2026-11-18T11:59:10Z"), now).unwrap());
+        assert!(!cron_due("* * * * *", None, now).unwrap());
+    }
+
     fn routine(id: &str) -> Routine {
         Routine {
+            title: String::new(),
+            cron: String::new(),
             id: id.into(),
             orbit_id: "assistant".into(),
             prompt: "Summarize the latest changes.".into(),

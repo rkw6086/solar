@@ -16,6 +16,7 @@ struct FocusState {
     holds: usize,
     alive: bool,
     revision: u64,
+    closing_revision: Option<u64>,
 }
 
 impl Default for FocusState {
@@ -26,6 +27,7 @@ impl Default for FocusState {
             holds: 0,
             alive: true,
             revision: 0,
+            closing_revision: None,
         }
     }
 }
@@ -56,10 +58,30 @@ impl FocusState {
     fn destroy(&mut self) {
         self.alive = false;
         self.revision += 1;
+        self.closing_revision = None;
     }
 
     fn can_close(&self, revision: u64, native_focused: bool) -> bool {
         !native_focused && self.pending() == Some(revision)
+    }
+    fn begin_close(&mut self, revision: u64, native_focused: bool) -> bool {
+        if !self.can_close(revision, native_focused) || self.closing_revision == Some(revision) {
+            return false;
+        }
+        self.closing_revision = Some(revision);
+        true
+    }
+
+    fn cancel_animation(&mut self) -> bool {
+        self.closing_revision.take().is_some()
+    }
+
+    fn finish_close(&mut self, revision: u64, native_focused: bool) -> Option<bool> {
+        if self.closing_revision != Some(revision) {
+            return None;
+        }
+        self.closing_revision = None;
+        Some(self.can_close(revision, native_focused))
     }
 }
 
@@ -73,10 +95,28 @@ fn schedule(window: WebviewWindow, state: Arc<Mutex<FocusState>>, revision: u64)
             let focused = window.is_focused().unwrap_or(true);
             let close = state
                 .lock()
-                .map(|state| state.can_close(revision, focused))
+                .map(|mut state| state.begin_close(revision, focused))
                 .unwrap_or(false);
             if close {
-                let _ = window.close();
+                crate::desktop::dismiss_orbit_chat(&window);
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(280)).await;
+                    let app = window.app_handle().clone();
+                    let _ = app.run_on_main_thread(move || {
+                        let focused = window.is_focused().unwrap_or(true);
+                        let close = state
+                            .lock()
+                            .ok()
+                            .and_then(|mut state| state.finish_close(revision, focused));
+                        match close {
+                            Some(true) => {
+                                let _ = window.close();
+                            }
+                            Some(false) => crate::desktop::cancel_orbit_chat_dismissal(&window),
+                            None => {}
+                        }
+                    });
+                });
             }
         });
     });
@@ -96,10 +136,17 @@ pub(crate) fn attach(window: &WebviewWindow) {
     let original = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Focused(focused) => {
-            let revision = state
+            let (revision, cancel_animation) = state
                 .lock()
-                .ok()
-                .and_then(|mut state| state.focus(*focused));
+                .map(|mut state| {
+                    let revision = state.focus(*focused);
+                    let cancel = *focused && state.cancel_animation();
+                    (revision, cancel)
+                })
+                .unwrap_or((None, false));
+            if cancel_animation {
+                crate::desktop::cancel_orbit_chat_dismissal(&original);
+            }
             if let Some(revision) = revision {
                 schedule(original.clone(), state.clone(), revision);
             }
@@ -133,12 +180,16 @@ pub(crate) fn hold(window: &WebviewWindow) -> Option<PopupHold> {
     }
     let registry = window.try_state::<PopupDismissals>()?;
     let state = registry.0.lock().ok()?.get(window.label())?.clone();
-    {
+    let cancel_animation = {
         let mut state = state.lock().ok()?;
         if !state.alive {
             return None;
         }
         state.acquire();
+        state.cancel_animation()
+    };
+    if cancel_animation {
+        crate::desktop::cancel_orbit_chat_dismissal(window);
     }
     Some(PopupHold {
         window: window.clone(),
@@ -181,6 +232,39 @@ mod tests {
         assert!(!state.can_close(revision, false));
         // A replacement window has separate state even if it reuses a label.
         assert!(FocusState::default().pending().is_none());
+    }
+
+    #[test]
+    fn final_animation_frame_rechecks_focus_and_protected_operations() {
+        let mut state = FocusState::default();
+        state.focus(true);
+        let revision = state.focus(false).unwrap();
+        assert!(state.begin_close(revision, false));
+        assert!(!state.begin_close(revision, false));
+        state.focus(true);
+        assert_eq!(state.finish_close(revision, true), Some(false));
+
+        let revision = state.focus(false).unwrap();
+        assert!(state.begin_close(revision, false));
+        state.acquire();
+        assert_eq!(state.finish_close(revision, false), Some(false));
+        let revision = state.release().unwrap();
+        assert!(state.begin_close(revision, false));
+        assert_eq!(state.finish_close(revision, false), Some(true));
+    }
+
+    #[test]
+    fn an_obsolete_animation_cannot_close_or_reopen_a_newer_one() {
+        let mut state = FocusState::default();
+        state.focus(true);
+        let old = state.focus(false).unwrap();
+        assert!(state.begin_close(old, false));
+        state.focus(true);
+        assert!(state.cancel_animation());
+        let next = state.focus(false).unwrap();
+        assert!(state.begin_close(next, false));
+        assert_eq!(state.finish_close(old, false), None);
+        assert_eq!(state.finish_close(next, false), Some(true));
     }
 
     #[test]

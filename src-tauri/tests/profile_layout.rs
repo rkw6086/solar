@@ -12,7 +12,6 @@ fn configured_orbit() -> Orbit {
         id: "custom".into(),
         name: "My Assistant".into(),
         role: "Assistant".into(),
-        gender: String::new(),
         tasks: String::new(),
         personality: "Thoughtful".into(),
         instructions: String::new(),
@@ -89,6 +88,8 @@ fn private_memory_is_in_the_orbit_database_and_survives_a_display_rename() {
     common::add_assistant(&engine);
     engine
         .save_memory(Memory {
+            orbit_ids: Vec::new(),
+            project_ids: Vec::new(),
             id: "private-note".into(),
             orbit_id: Some("assistant".into()),
             project_id: None,
