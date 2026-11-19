@@ -5,6 +5,10 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ## [Unreleased]
 
+## [0.1.2]
+
+**Upgrading:** Reconnect existing providers and re-enter saved MCP secrets once. Credentials now use owner-only, unencrypted files under `~/.solar/credentials`. Existing browser sessions may also need a fresh sign-in.
+
 ### Added
 
 - Slowly moving Solar flares, independent of the star and face, with reduced-motion support.
