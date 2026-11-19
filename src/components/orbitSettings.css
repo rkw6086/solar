@@ -24,3 +24,6 @@
 .orbit-cli-details[open] summary { margin-bottom: 18px; }
 .orbit-cli-command-label { display: block; color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 8px; }
 .orbit-cli-command { width: 100%; resize: vertical; min-height: 100px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; margin-bottom: 8px; }
+
+.orbit-settings-avatar { margin-top: 7px; padding: 5px 8px; font-size: 11px; }
+.orbit-avatar-status { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }

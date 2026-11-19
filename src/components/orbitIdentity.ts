@@ -61,3 +61,15 @@ export function orbitAppearance(identity: string, color = ""): { eyes: EyeStyle;
   const smiles: SmileStyle[] = ["smile", "grin", "cheeky", "beam", "soft"];
   return { eyes: eyes[hash % eyes.length], smile: smiles[Math.floor(hash / eyes.length) % smiles.length], freckles: (hash & 64) !== 0 };
 }
+
+/** A fresh face without renaming the Sprite or changing its workspace identity. */
+export function generateOrbitAvatarSeed(identity: string, color: string, newSeed = () => crypto.randomUUID()): string {
+  const current = orbitAppearance(identity, color);
+  const seed = newSeed();
+  for (let attempt = 0; attempt < 128; attempt += 1) {
+    const candidate = attempt === 0 ? seed : `${seed}-${attempt}`;
+    const appearance = orbitAppearance(candidate, color);
+    if (candidate !== identity && (appearance.eyes !== current.eyes || appearance.smile !== current.smile || appearance.freckles !== current.freckles)) return candidate;
+  }
+  throw new Error("Could not create a new avatar. Please try again.");
+}

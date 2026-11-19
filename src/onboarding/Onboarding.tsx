@@ -278,9 +278,9 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </div>}
           {step === "desktop" && <div className={`onboarding-desktop-demo ${desktopDemoExpanded ? "expanded" : ""}`}>
             <div className="onboarding-desktop-menu"><span /><span /><span /><i>YOUR DESKTOP</i></div>
-            {data.orbits[0] && <div className="onboarding-peek-demo"><Planet identity={data.orbits[0].id} color={data.orbits[0].color} name={data.orbits[0].name} size={38} /><span>A little help?</span></div>}
+            {data.orbits[0] && <div className="onboarding-peek-demo"><Planet identity={data.orbits[0].avatarSeed || data.orbits[0].id} color={data.orbits[0].color} name={data.orbits[0].name} size={38} /><span>A little help?</span></div>}
             <button type="button" className="onboarding-sun-demo" aria-label={desktopDemoExpanded ? "Gather the example Sprites" : "Expand the example Sprites"} aria-expanded={desktopDemoExpanded} onClick={() => setDesktopDemoExpanded((current) => !current)}><Planet sun color="#edb56d" name="Solar" size={87} /></button>
-            {data.orbits.slice(0, 3).map((orbit, position) => <span className={`onboarding-desktop-orbit demo-orbit-${position}`} key={orbit.id}><Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={53} /></span>)}
+            {data.orbits.slice(0, 3).map((orbit, position) => <span className={`onboarding-desktop-orbit demo-orbit-${position}`} key={orbit.id}><Planet identity={orbit.avatarSeed || orbit.id} color={orbit.color} name={orbit.name} size={53} /></span>)}
             <span className="onboarding-desktop-hint">Your own Sprites appear here after you create them.</span>
           </div>}
           {step === "connection" && <div className="onboarding-setup-card">
@@ -299,7 +299,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </div>}
           {step === "orbit" && <div className="onboarding-setup-card onboarding-orbit-setup">
             {selectedOrbit ? <>
-              <div className="onboarding-orbit-showcase" style={{ "--onboarding-orbit-color": selectedOrbit.color } as CSSProperties}><Planet identity={selectedOrbit.id} color={selectedOrbit.color} name={selectedOrbit.name} size={114} /></div>
+              <div className="onboarding-orbit-showcase" style={{ "--onboarding-orbit-color": selectedOrbit.color } as CSSProperties}><Planet identity={selectedOrbit.avatarSeed || selectedOrbit.id} color={selectedOrbit.color} name={selectedOrbit.name} size={114} /></div>
               <h2>{selectedOrbit.name}</h2><p>{selectedOrbit.role}</p>
               <label className="field"><span>Your Sprites</span><select aria-label="Choose a Sprite to edit" value={selectedOrbit.id} onChange={(event) => setSelectedOrbitId(event.target.value)}>{enabledOrbits.map((orbit) => <option value={orbit.id} key={orbit.id}>{orbit.name} · {orbit.role}</option>)}</select></label>
               <button type="button" className="button button-primary" onClick={editFirstOrbit}><Settings2 size={15} />Shape this Sprite</button>

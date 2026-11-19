@@ -10,6 +10,7 @@ pub(crate) fn add_assistant(engine: &Engine) {
             personality: "Thoughtful and precise".into(),
             instructions: String::new(),
             color: "#f5b45b".into(),
+            avatar_seed: None,
             model: String::new(),
             provider_id: String::new(),
             autonomy: "workspace".into(),

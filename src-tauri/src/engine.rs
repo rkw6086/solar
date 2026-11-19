@@ -245,6 +245,21 @@ impl Engine {
         Ok(saved)
     }
 
+    /// Update only the avatar, preserving profile edits and private instructions.
+    pub fn set_orbit_avatar(&self, orbit_id: &str, avatar_seed: String) -> Result<Orbit, String> {
+        validate_id(orbit_id)?;
+        validate_id(&avatar_seed)?;
+        let mut writes = self
+            .orbit_write
+            .lock()
+            .map_err(|_| "Sprite storage unavailable")?;
+        let mut orbit = self.orbit(orbit_id)?;
+        orbit.avatar_seed = Some(avatar_seed);
+        let saved = self.save_orbit_inner(orbit)?;
+        *writes.entry(saved.id.clone()).or_default() += 1;
+        Ok(saved)
+    }
+
     pub(crate) fn save_new_orbit(
         &self,
         orbit: Orbit,
@@ -309,6 +324,9 @@ impl Engine {
             orbit.id = id();
         }
         validate_id(&orbit.id)?;
+        if let Some(seed) = &orbit.avatar_seed {
+            validate_id(seed)?;
+        }
         validate_text(&orbit.name, "Name", 100)?;
         validate_text(&orbit.role, "Role", 300)?;
         if orbit.tasks.len() > 32_000 {

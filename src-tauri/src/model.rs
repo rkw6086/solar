@@ -20,6 +20,8 @@ pub struct Orbit {
     pub personality: String,
     pub instructions: String,
     pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_seed: Option<String>,
     pub model: String,
     pub provider_id: String,
     pub autonomy: String,

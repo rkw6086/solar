@@ -405,6 +405,22 @@ pub(crate) async fn update_orbit_profile(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+pub(crate) async fn set_orbit_avatar(
+    window: tauri::WebviewWindow,
+    engine: tauri::State<'_, Arc<Engine>>,
+    orbit_id: String,
+    avatar_seed: String,
+) -> Result<Orbit, String> {
+    if window.label() != "main" && window.label() != format!("chat-{orbit_id}") {
+        return Err("Change this Sprite’s avatar in its chat or the main Solar window.".into());
+    }
+    let _popup = crate::desktop_popup::hold(&window);
+    let _reset_guard = engine.reset_operations.read().await;
+    engine.set_orbit_avatar(&orbit_id, avatar_seed)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn cancel_orbit_prompt_analysis(
     window: tauri::WebviewWindow,
     request_id: String,
@@ -511,6 +527,7 @@ mod tests {
             personality: "Warm and precise".into(),
             instructions: String::new(),
             color: "#e8aa62".into(),
+            avatar_seed: None,
             model: "chosen-model".into(),
             provider_id: "chosen-provider".into(),
             autonomy: "ask".into(),
@@ -850,6 +867,7 @@ mod tests {
         edited.model = "different-model".into();
         edited.autonomy = "trusted".into();
         edited.color = "#123456".into();
+        edited.avatar_seed = Some("new-avatar".into());
         edited.enabled = false;
         edited.name = format!("  {}  ", original.name.trim());
         edited.instructions = "CLIENT_OVERRIDE_MUST_NOT_BE_SAVED".into();
@@ -861,10 +879,61 @@ mod tests {
         assert_eq!(saved.model, edited.model);
         assert_eq!(saved.autonomy, edited.autonomy);
         assert_eq!(saved.color, edited.color);
+        assert_eq!(saved.avatar_seed, edited.avatar_seed);
         assert!(!saved.enabled);
         // The configured endpoint is intentionally unreachable. Successful
         // persistence proves that this branch did not request an expansion.
         assert_same_profile(&engine.orbit("draft").unwrap(), &saved);
+    }
+
+    #[test]
+    fn avatar_change_only_updates_appearance_and_survives_restart() {
+        let temporary = tempfile::tempdir().unwrap();
+        let engine = Engine::open(temporary.path().into()).unwrap();
+        let mut original = draft();
+        original.model.clear();
+        original.provider_id.clear();
+        original.instructions = "Keep my private working instructions".into();
+        let original = engine.save_orbit(original).unwrap();
+        let workspace = engine.workspace(&original.id).unwrap();
+        let updated = engine
+            .set_orbit_avatar(&original.id, "regenerated-avatar".into())
+            .unwrap();
+        let mut expected = original.clone();
+        expected.avatar_seed = Some("regenerated-avatar".into());
+        assert_same_profile(&updated, &expected);
+        assert_eq!(engine.workspace(&original.id).unwrap(), workspace);
+        drop(engine);
+        let reopened = Engine::open(temporary.path().into()).unwrap();
+        assert_same_profile(&reopened.orbit(&original.id).unwrap(), &expected);
+    }
+
+    #[test]
+    fn legacy_profiles_keep_their_original_avatar_until_regenerated() {
+        let original = draft();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json.as_object_mut().unwrap().remove("avatarSeed");
+        let restored: Orbit = serde_json::from_value(json).unwrap();
+        assert!(restored.avatar_seed.is_none());
+        assert_same_profile(&restored, &original);
+    }
+
+    #[test]
+    fn invalid_avatar_seed_does_not_change_the_profile() {
+        let temporary = tempfile::tempdir().unwrap();
+        let engine = Engine::open(temporary.path().into()).unwrap();
+        let mut original = draft();
+        original.provider_id.clear();
+        let original = engine.save_orbit(original).unwrap();
+        for seed in ["", "../outside", "a new face"] {
+            assert!(engine.set_orbit_avatar(&original.id, seed.into()).is_err());
+            assert_same_profile(&engine.orbit(&original.id).unwrap(), &original);
+        }
+        assert!(
+            engine
+                .set_orbit_avatar("missing-sprite", "valid-seed".into())
+                .is_err()
+        );
     }
 
     #[tokio::test]

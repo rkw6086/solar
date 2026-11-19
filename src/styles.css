@@ -2127,6 +2127,7 @@ legend {
   width: 100vw;
 }
 .character-button {
+  position: relative;
   background: transparent;
   padding: 0;
   display: flex;
@@ -2138,11 +2139,19 @@ legend {
   touch-action: none;
 }
 .character-button .planet-art {
-  transition: transform 0.2s;
+  transition: scale 180ms cubic-bezier(.2,.7,.25,1), filter 180ms ease;
   filter: drop-shadow(0 2px 5px #0004);
+  will-change: scale;
 }
-.character-button:hover .planet-art {
-  transform: scale(1.1);
+.character-button:hover .planet-art,
+.character-button:focus-visible .planet-art {
+  scale: 1.1;
+}
+.character-button:focus-visible {
+  outline: none;
+}
+.character-button:focus-visible .planet-art {
+  filter: drop-shadow(0 0 6px #bcdde7b3);
 }
 .sun-character .planet-art {
   filter: drop-shadow(0 0 15px #e5ad4b40);
@@ -2167,32 +2176,22 @@ legend {
   align-items: center;
   gap: 5px;
 }
+.sun-widget-label {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translate(-50%, -3px);
+}
 .character-button:hover .sun-widget-label,
 .character-button:hover .orbit-widget-name,
 .character-button:focus-visible .orbit-widget-name {
   opacity: 1;
   transform: translateY(0);
 }
-.widget-orbit-path {
-  position: absolute;
-  pointer-events: none;
-  border: 1px solid #d4b97566;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-.widget-orbit-one {
-  width: 139px;
-  height: 80px;
-  transform: rotate(-25deg);
-}
-.widget-orbit-two {
-  width: 174px;
-  height: 107px;
-  transform: rotate(25deg);
-}
-.sun-widget:hover .widget-orbit-path {
+.character-button:hover .sun-widget-label,
+.character-button:focus-visible .sun-widget-label {
   opacity: 1;
+  transform: translate(-50%, 0);
 }
 .widget-launcher {
   position: absolute;
@@ -2726,10 +2725,12 @@ legend {
 @keyframes sun-rocket-orbit { 0% { transform: rotate(-70deg) scale(.5); opacity: 0; } 15%,80% { opacity: 1; } 100% { transform: rotate(290deg) scale(.5); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .floating-chat-shell .floating-chat, .popup-planet { transition: none; }
+  .character-button .planet-art { transition: none; }
   .sun-widget .planet-art, .sun-widget .pixel-rocket-track { animation: none; }
 }
 :root[data-motion="reduced"] .floating-chat-shell .floating-chat,
-:root[data-motion="reduced"] .popup-planet { transition: none; }
+:root[data-motion="reduced"] .popup-planet,
+:root[data-motion="reduced"] .character-button .planet-art { transition: none; }
 :root[data-motion="reduced"] .sun-widget .planet-art,
 :root[data-motion="reduced"] .sun-widget .pixel-rocket-track { animation: none; }
 

@@ -622,6 +622,7 @@ mod tests {
             personality: "Calm".into(),
             instructions: String::new(),
             color: "#fff".into(),
+            avatar_seed: None,
             model: String::new(),
             provider_id: String::new(),
             autonomy: "ask".into(),

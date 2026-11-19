@@ -9,6 +9,7 @@ export interface Orbit {
   instructions: string;
   tasks?: string;
   color: string;
+  avatarSeed?: string;
   model: string;
   providerId: string;
   autonomy: Autonomy;

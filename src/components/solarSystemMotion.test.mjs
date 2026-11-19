@@ -5,61 +5,58 @@ import { orbitPosition, orbitTracks, ORBIT_PERIOD } from "./solarSystemMotion.ts
 const roster = (count) => Array.from({ length: count }, (_, index) => ({ id: `orbit-${String(index).padStart(3, '0')}` }));
 
 test("empty systems contain no invented Sprites", () => assert.deepEqual(orbitTracks([]), []));
-test("tracks are deterministic regardless of input order", () => {
-  const orbits = roster(18);
+test("tracks are deterministic regardless of input order without changing the roster", () => {
+  const orbits = roster(18).reverse();
+  const original = [...orbits];
   assert.deepEqual(orbitTracks(orbits), orbitTracks([...orbits].reverse()));
+  assert.deepEqual(orbits, original);
 });
-test("eighteen Sprites share two resonant lanes with stable separation", () => {
-  const tracks = orbitTracks(roster(18));
-  assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD).length, 6);
-  assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD * 2).length, 12);
-  for (const elapsed of [0, 30000, 60000, 120000, 500000]) {
-    const points = tracks.map(t => orbitPosition(t, elapsed, 840, 440));
-    for (let i = 0; i < points.length; i++) {
-      for (let j = 0; j < i; j++) {
-        assert.ok(Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) > 44, `collision at ${elapsed}: ${i}, ${j}`);
-      }
-    }
+test("every Sprite owns a distinct concentric path", () => {
+  for (const count of [1, 3, 6, 18, 40, 64]) {
+    const tracks = orbitTracks(roster(count));
+    assert.equal(tracks.length, count);
+    assert.equal(new Set(tracks.map(track => track.x)).size, count);
+    assert.ok(tracks.every(track => track.x === track.y));
+    assert.ok(tracks.every(track => track.x >= .22 && track.x <= .42 + 1e-12));
+    for (let index = 1; index < count; index++) assert.ok(tracks[index].x > tracks[index - 1].x);
   }
 });
-test("the whole system returns to its starting phase every outer orbit", () => {
-  for (const track of orbitTracks(roster(18))) {
+test("a complete 1:1 resonance returns all Sprites to their starting positions", () => {
+  for (const track of orbitTracks(roster(40))) {
+    assert.equal(track.period, ORBIT_PERIOD);
     const first = orbitPosition(track, 0, 700, 440);
-    const repeated = orbitPosition(track, ORBIT_PERIOD * 2, 700, 440);
+    const repeated = orbitPosition(track, ORBIT_PERIOD, 700, 440);
     assert.ok(Math.abs(first.x - repeated.x) < 1e-9);
     assert.ok(Math.abs(first.y - repeated.y) < 1e-9);
   }
 });
-test("positions remain bounded after resize", () => {
-  for (const count of [1, 3, 18, 36]) {
+test("distinct paths stay inside the stage after resize throughout a full orbit", () => {
+  for (const count of [1, 3, 6, 18, 40]) {
     for (const track of orbitTracks(roster(count))) {
-      for (const elapsed of [0, 12000, 45321, 250000]) {
+      for (let elapsed = 0; elapsed <= ORBIT_PERIOD; elapsed += 1000) {
         const { x, y } = orbitPosition(track, elapsed, 440, 320);
-        assert.ok(Math.abs(x) <= 440 * .44);
-        assert.ok(Math.abs(y) <= 320 * .44);
+        assert.ok(Math.abs(x) <= 440 * .42 + 1e-9);
+        assert.ok(Math.abs(y) <= 320 * .42 + 1e-9);
       }
     }
   }
 });
-
-test("twenty and forty Sprites use distinct, proportionate lanes with room for their smaller characters", () => {
-  for (const count of [20, 40]) {
+test("hover-enlarged characters remain separated in compact and wide scenes", () => {
+  for (const count of [3, 6, 18, 20, 36, 40]) {
     const tracks = orbitTracks(roster(count));
-    const minimum = count > 36 ? 32 : 36;
-    const lanes = [...new Set(tracks.map(track => track.x))];
-    assert.equal(lanes.length, count > 36 ? 4 : 3);
-    assert.ok(lanes[lanes.length - 1] <= .4);
+    // The pixel body occupies 75% of its SVG; leave room for 10% hover growth.
+    const artworkSize = count > 36 ? 32 : count > 18 ? 36 : count > 8 ? 42 : 58;
+    const minimum = artworkSize * .75 * 1.1 + 2;
     for (const [width, height] of [[840, 440], [718, 320]]) {
-    for (let elapsed = 0; elapsed < 480000; elapsed += 1000) {
-      const points = tracks.map(track => orbitPosition(track, elapsed, width, height));
-      for (let index = 0; index < points.length; index++) {
-        assert.ok(Math.abs(points[index].x) <= width * .4);
-        assert.ok(Math.abs(points[index].y) <= height * .4);
-        for (let other = 0; other < index; other++) {
-          assert.ok(Math.hypot(points[index].x - points[other].x, points[index].y - points[other].y) >= minimum - 1e-9);
+      for (let elapsed = 0; elapsed <= ORBIT_PERIOD; elapsed += 1000) {
+        const points = tracks.map(track => orbitPosition(track, elapsed, width, height));
+        for (let index = 0; index < points.length; index++) {
+          for (let other = 0; other < index; other++) {
+            assert.ok(Math.hypot(points[index].x - points[other].x, points[index].y - points[other].y) >= minimum,
+              `collision for ${count} Sprites at ${elapsed}: ${index}, ${other}`);
+          }
         }
       }
-    }
     }
   }
 });

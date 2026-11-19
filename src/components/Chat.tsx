@@ -217,7 +217,7 @@ export function Chat({
             <Planet
               key={item.id}
               name={item.name}
-              identity={item.id}
+              identity={item.avatarSeed || item.id}
               color={item.color}
               size={42}
             />
@@ -298,7 +298,7 @@ export function Chat({
               <Planet
                 color={orbit?.color}
                 name={orbit?.name}
-                identity={orbit?.id}
+                identity={orbit?.avatarSeed || orbit?.id}
                 size={compact ? 90 : 128}
               />
             </div>
@@ -353,7 +353,7 @@ export function Chat({
             >
               <div className="message-avatar">
                 {message.role === "assistant" ? (
-                  <Planet color={author?.color} name={author?.name} identity={author?.id} size={34} />
+                  <Planet color={author?.color} name={author?.name} identity={author?.avatarSeed || author?.id} size={34} />
                 ) : (
                   <span>You</span>
                 )}

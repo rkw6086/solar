@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateOrbitName, generateOrbitPersonality, orbitAppearance } from "./orbitIdentity.ts";
+import { generateOrbitAvatarSeed, generateOrbitName, generateOrbitPersonality, orbitAppearance } from "./orbitIdentity.ts";
 
 test("name suggestions avoid current names regardless of case and whitespace", () => {
   assert.notEqual(generateOrbitName([" nova "], () => 0).toLowerCase(), "nova");
@@ -27,4 +27,23 @@ test("faces stay stable and an eighteen-Sprite team has varied eyes and smiles",
   assert(new Set(looks.map((look) => look.eyes)).size >= 4);
   assert(new Set(looks.map((look) => look.smile)).size >= 4);
   assert(new Set(looks.map((look) => JSON.stringify(look))).size >= 12);
+});
+
+test("regenerating an avatar changes its face and remains stable afterwards", () => {
+  const identity = "sprite-123";
+  const color = "#83b6ab";
+  const first = generateOrbitAvatarSeed(identity, color, () => "new-avatar");
+  assert.notEqual(first, identity);
+  assert.notDeepEqual(orbitAppearance(first, color), orbitAppearance(identity, color));
+  assert.deepEqual(orbitAppearance(first, color), orbitAppearance(first, color));
+  const second = generateOrbitAvatarSeed(first, color, () => "new-avatar");
+  assert.notEqual(second, first);
+  assert.notDeepEqual(orbitAppearance(second, color), orbitAppearance(first, color));
+});
+
+test("avatar regeneration retries a seed that would repeat the same face", () => {
+  const identity = "same-seed";
+  const generated = generateOrbitAvatarSeed(identity, "#83b6ab", () => identity);
+  assert.notEqual(generated, identity);
+  assert.notDeepEqual(orbitAppearance(generated, "#83b6ab"), orbitAppearance(identity, "#83b6ab"));
 });

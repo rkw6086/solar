@@ -221,6 +221,10 @@ fn validate_master(master: &MasterConfig) -> Result<(), String> {
 
 fn validate_orbit(orbit: &Orbit) -> Result<(), String> {
     if !valid_id(&orbit.id)
+        || orbit
+            .avatar_seed
+            .as_ref()
+            .is_some_and(|seed| !valid_id(seed))
         || orbit.name.trim().is_empty()
         || orbit.name.len() > 100
         || orbit.role.trim().is_empty()

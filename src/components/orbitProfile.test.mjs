@@ -9,7 +9,7 @@ const original = {
 
 test("only user profile text requests a new generation", () => {
   assert(orbitProfileNeedsGeneration(original));
-  assert(!orbitProfileNeedsGeneration({ ...original, model: "two", providerId: "b", autonomy: "trusted", projectIds: ["new"], instructions: "ignored" }, original));
+  assert(!orbitProfileNeedsGeneration({ ...original, model: "two", providerId: "b", autonomy: "trusted", avatarSeed: "new-face", projectIds: ["new"], instructions: "ignored" }, original));
   for (const key of ["name", "role", "personality", "tasks"]) {
     assert(orbitProfileNeedsGeneration({ ...original, [key]: original[key] + " changed" }, original), key);
     assert(!orbitProfileNeedsGeneration({ ...original, [key]: ` ${original[key]} ` }, original), `${key} whitespace`);

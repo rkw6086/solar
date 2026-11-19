@@ -53,6 +53,10 @@ export function DesktopWidget({
 }) {
   const { data, loading, error } = useSolar();
   const [expanded, setExpanded] = useState(false);
+  const expandedIntent = useRef(false);
+  const confirmedExpanded = useRef(false);
+  const pendingToggles = useRef(0);
+  const toggleQueue = useRef(Promise.resolve());
   const [failure, setFailure] = useState("");
   const [sunMood, setSunMood] = useState<"smile" | "yawn" | "neutral">("neutral");
   const [sunAntic, setSunAntic] = useState("");
@@ -69,12 +73,12 @@ export function DesktopWidget({
   const visibleCount = data.orbits.filter(item => item.enabled).length;
   const planetSize = visibleCount > 36 ? 56 : visibleCount > 18 ? 72 : 88;
 
-  function interaction(hovered?: boolean) {
+  function interaction(hovered?: boolean, focused?: boolean) {
     if (!native) return;
     const now = Date.now();
-    if (hovered === undefined && now - lastInteraction.current < 1000) return;
+    if (hovered === undefined && focused === undefined && now - lastInteraction.current < 1000) return;
     lastInteraction.current = now;
-    void api("desktop_interaction", hovered === undefined ? {} : { hovered }).catch(() => {});
+    void api("desktop_interaction", { hovered, focused }).catch(() => {});
   }
 
   useEffect(() => {
@@ -123,8 +127,12 @@ export function DesktopWidget({
   }, [loading, error, type, orbit?.id]);
 
   useEffect(() => {
-    if (typeof data.desktopExpanded === "boolean")
+    // A refresh from the previous click must not undo the next click's intent.
+    if (typeof data.desktopExpanded === "boolean" && pendingToggles.current === 0) {
+      expandedIntent.current = data.desktopExpanded;
+      confirmedExpanded.current = data.desktopExpanded;
       setExpanded(data.desktopExpanded);
+    }
   }, [data.desktopExpanded]);
 
   useEffect(() => {
@@ -160,21 +168,47 @@ export function DesktopWidget({
     };
   }, [type, orbitId, loading, orbit?.name, data.conversations]);
 
-  async function toggle(keyboard = false) {
+  function toggle(keyboard = false) {
     if (!keyboard && !drag.wasClick()) return;
-    try {
-      await api("set_desktop_expanded", { expanded: !expanded });
-      setExpanded(!expanded);
-    } catch (reason) {
-      setFailure(errorText(reason));
-    }
+    const next = !expandedIntent.current;
+    expandedIntent.current = next;
+    setExpanded(next);
+    setFailure("");
+    pendingToggles.current += 1;
+    // Keep fast clicks in order without delaying visual feedback or disabling
+    // the sun while the native expansion is still animating.
+    toggleQueue.current = toggleQueue.current.then(async () => {
+      try {
+        await api("set_desktop_expanded", { expanded: next });
+        confirmedExpanded.current = next;
+        setFailure("");
+      } catch (reason) {
+        setFailure(errorText(reason));
+        // Native setup failures safely collapse the formation. Read that state
+        // back before settling the label, including when contraction failed.
+        try {
+          const current = await api<{ desktopExpanded?: boolean }>("get_bootstrap");
+          if (typeof current.desktopExpanded === "boolean") {
+            confirmedExpanded.current = current.desktopExpanded;
+          }
+        } catch {
+          // Keep the last confirmed state if the app is shutting down.
+        }
+      } finally {
+        pendingToggles.current -= 1;
+        if (pendingToggles.current === 0) {
+          expandedIntent.current = confirmedExpanded.current;
+          setExpanded(confirmedExpanded.current);
+        }
+      }
+    });
   }
 
   if (type === "chat")
     return (
       <div className={`floating-chat-shell popup-${popupPhase}`} style={{ "--popup-x": `${popupOrigin.x}px`, "--popup-y": `${popupOrigin.y}px` } as CSSProperties}
         onPointerDown={() => interaction()} onKeyDown={() => interaction()}>
-      <div className="popup-planet" aria-hidden="true"><Planet color={orbit?.color} name={orbit?.name} identity={orbit?.id} size={planetSize} /></div>
+      <div className="popup-planet" aria-hidden="true"><Planet color={orbit?.color} name={orbit?.name} identity={orbit?.avatarSeed || orbit?.id} size={planetSize} /></div>
       <div className="floating-chat">
         {conversation ? (
           <Chat
@@ -203,11 +237,10 @@ export function DesktopWidget({
     return (
       <div className={`sun-widget ${sunAntic}`} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
         <div className="pixel-rocket-track" aria-hidden="true"><svg className="pixel-rocket" viewBox="0 0 16 20" shapeRendering="crispEdges"><path fill="#d4dfdf" d="M6 1h4v2h2v9H4V3h2z"/><path fill="#7cc3d2" d="M6 5h4v4H6z"/><path fill="#d68777" d="M2 10h3v6H1v-3h1zm9 0h3v3h1v3h-4z"/><path fill="#efbb69" d="M5 13h6v3H5zm2 3h2v3H7z"/></svg></div>
-        <div className="widget-orbit-path widget-orbit-one" />
-        <div className="widget-orbit-path widget-orbit-two" />
         <button
           className="character-button sun-character"
           aria-label={expanded ? "Gather Sprites" : "Expand Sprites"}
+          aria-expanded={expanded}
           onPointerDown={drag.onPointerDown}
           onPointerMove={drag.onPointerMove}
           onClick={(event) => void toggle(event.detail === 0)}
@@ -254,6 +287,8 @@ export function DesktopWidget({
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
+        onFocus={() => interaction(undefined, true)}
+        onBlur={() => interaction(undefined, false)}
         onClick={() => {
           void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
             setFailure(errorText(reason)),
@@ -265,7 +300,7 @@ export function DesktopWidget({
         }}
         title={`${orbit.name} · right-click for settings`}
       >
-        <Planet color={orbit.color} size={planetSize} name={orbit.name} identity={orbit.id} busy={busy} />
+        <Planet color={orbit.color} size={planetSize} name={orbit.name} identity={orbit.avatarSeed || orbit.id} busy={busy} />
         <span className="orbit-widget-name">
           {orbit.name}
           {needsAttention ? (

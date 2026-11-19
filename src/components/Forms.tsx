@@ -28,7 +28,7 @@ import { Planet } from "./Planet";
 import { ModelPicker } from "./ModelPicker";
 import { OrbitProgress } from "./OrbitProgress";
 import { orbitProfileNeedsGeneration } from "./orbitProfile";
-import { generateOrbitName, generateOrbitPersonality } from "./orbitIdentity";
+import { generateOrbitAvatarSeed, generateOrbitName, generateOrbitPersonality } from "./orbitIdentity";
 import type { ProjectLocation } from "../projectLocation";
 import "./simpleOrbit.css";
 import "./projectForm.css";
@@ -175,8 +175,13 @@ export function OrbitForm({
       onClose={close} wide dismissible={!busy}>
       <form onSubmit={(event) => void submit(event)} className="simple-orbit-form" inert={busy}>
         <div className="simple-orbit-heading">
-          <Planet identity={orbit.id} name={orbit.name || "Your Sprite"} color={orbit.color} size={64} />
-          <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p></div>
+          <Planet identity={orbit.avatarSeed || orbit.id} name={orbit.name || "Your Sprite"} color={orbit.color} size={64} />
+          <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p>
+            <button type="button" className="orbit-suggest-button orbit-avatar-regenerate" disabled={busy}
+              onClick={() => update("avatarSeed", generateOrbitAvatarSeed(orbit.avatarSeed || orbit.id, orbit.color))}>
+              <Shuffle size={13} />Regenerate avatar
+            </button>
+          </div>
         </div>
         <div className="form-body">
           <div className="field orbit-generated-field">
@@ -220,7 +225,7 @@ export function OrbitForm({
         </div>
         <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Sprite" : "Create Sprite"} />
       </form>
-    </Modal>{busy && needsGeneration && <OrbitProgress identity={orbit.id} name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
+    </Modal>{busy && needsGeneration && <OrbitProgress identity={orbit.avatarSeed || orbit.id} name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
   );
 }
 
@@ -477,7 +482,7 @@ export function GroupForm({
                       if (!next.includes(lead)) setLead(next[0] ?? "");
                     }}
                   />
-                  <Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={45} />
+                  <Planet identity={orbit.avatarSeed || orbit.id} color={orbit.color} name={orbit.name} size={45} />
                   <span>
                     <strong>{orbit.name}</strong>
                     <small>{orbit.role}</small>

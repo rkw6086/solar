@@ -465,7 +465,7 @@ export function App() {
               key={orbit.id}
               onClick={() => void startChat(orbit)}
             >
-              <Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={32} />
+              <Planet identity={orbit.avatarSeed || orbit.id} color={orbit.color} name={orbit.name} size={32} />
               <span>{orbit.name}</span>
               <span
                 className={`tiny-dot ${running.some((task) => task.orbitId === orbit.id) ? "working" : ""}`}
@@ -639,7 +639,7 @@ export function App() {
                         key={orbit.id}
                       >
                         <Planet
-                          identity={orbit.id}
+                          identity={orbit.avatarSeed || orbit.id}
                           color={orbit.color}
                           size={index === 1 ? 69 : 55}
                         />
@@ -783,7 +783,7 @@ export function App() {
                         </div>
                         <div className="card-planet">
                           <Planet
-                            identity={orbit.id}
+                            identity={orbit.avatarSeed || orbit.id}
                             color={orbit.color}
                             name={orbit.name}
                             size={103}
@@ -882,7 +882,7 @@ export function App() {
                               .slice(0, 3)
                               .map((orbitId) => (
                                 <Planet
-                                  identity={orbitId}
+                                  identity={data.orbits.find((orbit) => orbit.id === orbitId)?.avatarSeed || orbitId}
                                   key={orbitId}
                                   color={
                                     data.orbits.find(
@@ -1241,7 +1241,7 @@ export function App() {
                 <PageHeading title="Routines" description="Ask a Sprite in chat to set up a routine. Manage its schedule here." />
                 <div className="notice page-notice"><Clock3 size={18} /><p>Routines run while Solar is open and your computer is awake, within the Sprite’s existing permissions. Schedules use this computer’s local time.</p></div>
                 {data.routines.length ? <div className="routine-list">{data.routines.map(routine => <article className="surface-card routine-card" key={routine.id}>
-                  <Planet identity={routine.orbitId} color={data.orbits.find(orbit => orbit.id === routine.orbitId)?.color} size={52} />
+                  <Planet identity={data.orbits.find(orbit => orbit.id === routine.orbitId)?.avatarSeed || routine.orbitId} color={data.orbits.find(orbit => orbit.id === routine.orbitId)?.color} size={52} />
                   <details className="routine-details"><summary><strong>{routine.title || routine.prompt.split("\n")[0]}</strong><span className="subtle-label">{orbitName(routine.orbitId)} · {routine.trigger === "cron" ? "Scheduled" : routine.trigger === "folder" ? "When project files change" : routine.trigger === "completion" ? "After task completion" : `Every ${routine.intervalMinutes} minutes`}</span></summary>
                     <div className="routine-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{routine.prompt}</ReactMarkdown></div>
                     {routine.projectId && <p className="subtle-label">Project: {data.projects.find(project => project.id === routine.projectId)?.name ?? "Unavailable"}</p>}

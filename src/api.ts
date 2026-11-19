@@ -150,6 +150,17 @@ async function previewCommand(
       savePreview();
       return orbit;
     }
+    case "set_orbit_avatar": {
+      const orbitId = requiredString(args, "orbitId");
+      const avatarSeed = requiredString(args, "avatarSeed");
+      const existing = preview.orbits.find((item) => item.id === orbitId);
+      if (!existing) throw new Error("This Sprite no longer exists.");
+      if (!/^[a-zA-Z0-9_-]{1,80}$/.test(avatarSeed)) throw new Error("Invalid avatar seed");
+      const orbit = { ...existing, avatarSeed };
+      preview.orbits = replaceById(preview.orbits, orbit);
+      savePreview();
+      return orbit;
+    }
     case "cancel_orbit_prompt_analysis":
       return;
     case "get_bootstrap":

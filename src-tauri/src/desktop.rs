@@ -45,7 +45,11 @@ fn widget_ready(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn desktop_interaction(window: tauri::WebviewWindow, hovered: Option<bool>) -> Result<(), String> {
+fn desktop_interaction(
+    window: tauri::WebviewWindow,
+    hovered: Option<bool>,
+    focused: Option<bool>,
+) -> Result<(), String> {
     let label = window.label();
     if label != "sun" && !label.starts_with("orbit-") && !label.starts_with("chat-") {
         return Err("This window is not a desktop companion".into());
@@ -53,25 +57,49 @@ fn desktop_interaction(window: tauri::WebviewWindow, hovered: Option<bool>) -> R
     let mut motion = ORBIT_MOTION
         .lock()
         .map_err(|_| "Desktop motion is unavailable")?;
+    let now = std::time::Instant::now();
     if let Some(hovered) = hovered {
-        motion.hover(label, hovered, std::time::Instant::now());
-    } else {
-        motion.activity(std::time::Instant::now());
+        motion.hover(label, hovered, now);
+    }
+    if let Some(focused) = focused {
+        motion.hover(&format!("focus:{label}"), focused, now);
+    }
+    if hovered.is_none() && focused.is_none() {
+        motion.activity(now);
     }
     Ok(())
 }
 
+/// Await each submitted frame so slow native window servers never accumulate
+/// stale movement callbacks. Both transitions and orbiting use this boundary.
+async fn desktop_frame(app: &tauri::AppHandle, render: impl FnOnce() + Send + 'static) -> bool {
+    let (complete, rendered) = tokio::sync::oneshot::channel();
+    if app
+        .run_on_main_thread(move || {
+            render();
+            let _ = complete.send(());
+        })
+        .is_err()
+    {
+        return false;
+    }
+    rendered.await.is_ok()
+}
+
 fn start_orbital_clock(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let mut clock = tokio::time::interval(Duration::from_millis(80));
+        let mut clock = tokio::time::interval(crate::desktop_motion::FRAME_INTERVAL);
         clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             clock.tick().await;
             if QUITTING.load(Ordering::SeqCst) {
                 return;
             }
+            if !EXPANDED.load(Ordering::SeqCst) || ANIMATING.load(Ordering::SeqCst) {
+                continue;
+            }
             let tick_app = app.clone();
-            let _ = app.run_on_main_thread(move || {
+            if !desktop_frame(&app, move || {
                 let expanded = EXPANDED.load(Ordering::SeqCst)
                     && !ANIMATING.load(Ordering::SeqCst)
                     && !launcher_open(&tick_app);
@@ -81,18 +109,25 @@ fn start_orbital_clock(app: tauri::AppHandle) {
                     .any(|label| label.starts_with("chat-"));
                 let engine = tick_app.state::<Arc<Engine>>();
                 let reduced = engine.settings().map(|s| s.reduced_motion).unwrap_or(true);
-                let collapse = ORBIT_MOTION
+                let (collapse, moved) = ORBIT_MOTION
                     .lock()
                     .map(|mut motion| {
-                        motion.tick(std::time::Instant::now(), expanded, chat_open, reduced)
+                        let previous = motion.elapsed;
+                        let collapse =
+                            motion.tick(std::time::Instant::now(), expanded, chat_open, reduced);
+                        (collapse, motion.elapsed != previous)
                     })
-                    .unwrap_or(false);
+                    .unwrap_or((false, false));
                 if collapse {
                     let _ = set_desktop_expanded(tick_app.clone(), engine, false);
-                } else if expanded && !chat_open && !reduced {
+                } else if moved {
                     let _ = align_companions(&tick_app);
                 }
-            });
+            })
+            .await
+            {
+                return;
+            }
         }
     });
 }
@@ -419,191 +454,272 @@ fn set_desktop_expanded(
         }
     }
     ensure_sun(&app)?;
+    // Duplicate state updates must not restart an in-flight transition.
+    if EXPANDED.load(Ordering::SeqCst) == expanded {
+        return Ok(());
+    }
     EXPANDED.store(expanded, Ordering::SeqCst);
     engine.desktop_expanded.store(expanded, Ordering::SeqCst);
     let epoch = ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
     ANIMATING.store(true, Ordering::SeqCst);
-    let sun = app
-        .get_webview_window("sun")
-        .ok_or("Desktop sun is unavailable")?;
-    let (bounds, formation_scale) = desktop_screen(&app, &sun);
-    let sun_position = sun
-        .outer_position()
-        .map_err(|e| e.to_string())?
-        .to_logical::<f64>(formation_scale);
-    let mut orbits: Vec<_> = engine
-        .bootstrap()?
-        .orbits
-        .into_iter()
-        .filter(|o| o.enabled)
-        .collect();
-    orbits.sort_by(|a, b| a.id.cmp(&b.id));
-    if let Ok(mut motion) = ORBIT_MOTION.lock() {
-        motion.reset(
-            orbits.iter().map(|o| o.id.clone()).collect(),
-            std::time::Instant::now(),
+    let result = (|| -> Result<(), String> {
+        let sun = app
+            .get_webview_window("sun")
+            .ok_or("Desktop sun is unavailable")?;
+        let (bounds, formation_scale) = desktop_screen(&app, &sun);
+        let sun_position = sun
+            .outer_position()
+            .map_err(|e| e.to_string())?
+            .to_logical::<f64>(formation_scale);
+        let mut orbits: Vec<_> = engine
+            .bootstrap()?
+            .orbits
+            .into_iter()
+            .filter(|o| o.enabled)
+            .collect();
+        orbits.sort_by(|a, b| a.id.cmp(&b.id));
+        if let Ok(mut motion) = ORBIT_MOTION.lock() {
+            motion.reset(
+                orbits.iter().map(|o| o.id.clone()).collect(),
+                std::time::Instant::now(),
+            );
+        }
+        let layout = crate::desktop_layout::orbit_layout(
+            bounds,
+            (sun_position.x, sun_position.y),
+            if expanded { orbits.len() } else { 0 },
         );
-    }
-    let layout = crate::desktop_layout::orbit_layout(
-        bounds,
-        (sun_position.x, sun_position.y),
-        if expanded { orbits.len() } else { 0 },
-    );
-    position_window(&sun, layout.sun, formation_scale)?;
-    let origin = (layout.sun.0 + 40.0, layout.sun.1 + 40.0);
-    let mut movements = Vec::new();
-    if expanded {
-        for (orbit, target) in orbits.iter().zip(layout.planets) {
-            let label = format!("orbit-{}", orbit.id);
-            if app.get_webview_window(&label).is_none() {
-                create_companion(
-                    &app,
-                    &label,
-                    &format!("orbit/{}", orbit.id),
-                    origin.0,
-                    origin.1,
-                )?;
-            }
-            if let Some(window) = app.get_webview_window(&label) {
-                position_window(&window, origin, formation_scale)?;
-                movements.push((window, origin, target));
-            }
-        }
-    } else {
-        for (label, window) in app.webview_windows() {
-            if label.starts_with("orbit-") {
-                let start = window
-                    .outer_position()
-                    .map_err(|e| e.to_string())?
-                    .to_logical::<f64>(formation_scale);
-                movements.push((window, (start.x, start.y), origin));
-            }
-        }
-    }
-    let reduced_motion = engine.settings()?.reduced_motion;
-    let animation_app = app.clone();
-    tauri::async_runtime::spawn(async move {
+        let sun_start = (sun_position.x, sun_position.y);
+        let sun_target = layout.sun;
+        let origin = if expanded {
+            (sun_start.0 + 40.0, sun_start.1 + 40.0)
+        } else {
+            (sun_target.0 + 40.0, sun_target.1 + 40.0)
+        };
+        let mut movements = Vec::new();
         if expanded {
-            let deadline = std::time::Instant::now() + Duration::from_secs(8);
-            loop {
+            for (orbit, target) in orbits.iter().zip(layout.planets) {
+                let label = format!("orbit-{}", orbit.id);
+                if app.get_webview_window(&label).is_none() {
+                    create_companion(
+                        &app,
+                        &label,
+                        &format!("orbit/{}", orbit.id),
+                        origin.0,
+                        origin.1,
+                    )?;
+                }
+                if let Some(window) = app.get_webview_window(&label) {
+                    // A reversed collapse starts from the current on-screen point,
+                    // not from the sun, so a rapid second click never teleports it.
+                    let start = if window.is_visible().unwrap_or(false) {
+                        let point = window
+                            .outer_position()
+                            .map_err(|e| e.to_string())?
+                            .to_logical::<f64>(formation_scale);
+                        (point.x, point.y)
+                    } else {
+                        position_window(&window, origin, formation_scale)?;
+                        origin
+                    };
+                    movements.push((window, start, target));
+                }
+            }
+        } else {
+            for (label, window) in app.webview_windows() {
+                if label.starts_with("orbit-") {
+                    let start = window
+                        .outer_position()
+                        .map_err(|e| e.to_string())?
+                        .to_logical::<f64>(formation_scale);
+                    movements.push((window, (start.x, start.y), origin));
+                }
+            }
+        }
+        let reduced_motion = engine.settings()?.reduced_motion;
+        let animation_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if expanded {
+                let deadline = std::time::Instant::now() + Duration::from_secs(8);
+                loop {
+                    if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
+                        return;
+                    }
+                    let ready = READY_WIDGETS
+                        .lock()
+                        .map(|widgets| {
+                            movements
+                                .iter()
+                                .all(|(window, _, _)| widgets.contains(window.label()))
+                        })
+                        .unwrap_or(false);
+                    if ready || std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
                 if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
                     return;
                 }
-                let ready = READY_WIDGETS
-                    .lock()
-                    .map(|widgets| {
-                        movements
-                            .iter()
-                            .all(|(window, _, _)| widgets.contains(window.label()))
-                    })
-                    .unwrap_or(false);
-                if ready || std::time::Instant::now() >= deadline {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
-                return;
-            }
-            // A failed webview must stay hidden rather than exposing a blank window.
-            movements.retain(|(window, _, _)| {
-                let ready = READY_WIDGETS
-                    .lock()
-                    .map(|widgets| widgets.contains(window.label()))
-                    .unwrap_or(false);
-                if !ready {
-                    eprintln!("Desktop widget did not become ready: {}", window.label());
-                    crate::remote_logging::event(
-                        "warn",
-                        "widget_ready_timeout",
-                        "A desktop widget did not become ready",
-                        serde_json::json!({"window": window.label()}),
-                    );
-                }
-                ready
-            });
-            let windows = movements
-                .iter()
-                .map(|(window, _, _)| window.clone())
-                .collect::<Vec<_>>();
-            let show_app = animation_app.clone();
-            let _ = animation_app.run_on_main_thread(move || {
-                if ANIMATION_EPOCH.load(Ordering::SeqCst) == epoch && !launcher_open(&show_app) {
-                    for window in windows {
-                        let _ = window.show();
+                // A failed webview must stay hidden rather than exposing a blank window.
+                movements.retain(|(window, _, _)| {
+                    let ready = READY_WIDGETS
+                        .lock()
+                        .map(|widgets| widgets.contains(window.label()))
+                        .unwrap_or(false);
+                    if !ready {
+                        eprintln!("Desktop widget did not become ready: {}", window.label());
+                        crate::remote_logging::event(
+                            "warn",
+                            "widget_ready_timeout",
+                            "A desktop widget did not become ready",
+                            serde_json::json!({"window": window.label()}),
+                        );
                     }
-                }
-            });
-            // Give newly visible surfaces a presentation cycle before moving them.
-            tokio::time::sleep(Duration::from_millis(32)).await;
-        }
-        let steps = if reduced_motion { 1 } else { 18 };
-        for step in 1..=steps {
-            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
-                return;
-            }
-            let progress = step as f64 / steps as f64;
-            let eased = 1.0 - (1.0 - progress).powi(3);
-            let positions = movements
-                .iter()
-                .map(|(window, from, to)| {
-                    (
-                        window.clone(),
-                        (
-                            from.0 + (to.0 - from.0) * eased,
-                            from.1 + (to.1 - from.1) * eased,
-                        ),
-                    )
+                    ready
+                });
+                let windows = movements
+                    .iter()
+                    .map(|(window, _, _)| window.clone())
+                    .collect::<Vec<_>>();
+                let show_app = animation_app.clone();
+                if !desktop_frame(&animation_app, move || {
+                    if ANIMATION_EPOCH.load(Ordering::SeqCst) == epoch && !launcher_open(&show_app)
+                    {
+                        for window in windows {
+                            if !show_app
+                                .webview_windows()
+                                .contains_key(&window.label().replacen("orbit-", "chat-", 1))
+                            {
+                                let _ = window.show();
+                            }
+                        }
+                    }
                 })
-                .collect::<Vec<_>>();
-            let move_app = animation_app.clone();
-            let initial_sun = layout.sun;
-            let _ = animation_app.run_on_main_thread(move || {
-                if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&move_app) {
+                .await
+                {
                     return;
                 }
-                let shift = move_app
-                    .get_webview_window("sun")
-                    .and_then(|sun| sun.outer_position().ok())
-                    .map(|p| {
+            }
+            let started = std::time::Instant::now();
+            let mut previous_sun_frame = sun_start;
+            let mut clock = tokio::time::interval(crate::desktop_motion::FRAME_INTERVAL);
+            clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                clock.tick().await;
+                if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
+                    return;
+                }
+                let eased =
+                    crate::desktop_motion::transition_progress(started.elapsed(), reduced_motion);
+                let positions = movements
+                    .iter()
+                    .map(|(window, from, to)| {
                         (
-                            f64::from(p.x) / formation_scale - initial_sun.0,
-                            f64::from(p.y) / formation_scale - initial_sun.1,
+                            window.clone(),
+                            (
+                                from.0 + (to.0 - from.0) * eased,
+                                from.1 + (to.1 - from.1) * eased,
+                            ),
                         )
                     })
-                    .unwrap_or((0.0, 0.0));
-                for (window, position) in positions {
-                    let _ = position_window(
-                        &window,
-                        (position.0 + shift.0, position.1 + shift.1),
-                        formation_scale,
-                    );
+                    .collect::<Vec<_>>();
+                let move_app = animation_app.clone();
+                let sun_frame = (
+                    sun_start.0 + (sun_target.0 - sun_start.0) * eased,
+                    sun_start.1 + (sun_target.1 - sun_start.1) * eased,
+                );
+                let sun_step = (
+                    ((sun_frame.0 * formation_scale).round()
+                        - (previous_sun_frame.0 * formation_scale).round())
+                        / formation_scale,
+                    ((sun_frame.1 * formation_scale).round()
+                        - (previous_sun_frame.1 * formation_scale).round())
+                        / formation_scale,
+                );
+                if !desktop_frame(&animation_app, move || {
+                    if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&move_app) {
+                        return;
+                    }
+                    let shift = move_app
+                        .get_webview_window("sun")
+                        .and_then(|sun| {
+                            let p = sun.outer_position().ok()?;
+                            let actual = (
+                                f64::from(p.x) / formation_scale + sun_step.0,
+                                f64::from(p.y) / formation_scale + sun_step.1,
+                            );
+                            // Move the sun inward gradually when its full system would
+                            // reach a screen edge. Incremental, pixel-aligned movement
+                            // preserves any user drag made during this transition.
+                            let _ = position_window(&sun, actual, formation_scale);
+                            Some((actual.0 - sun_frame.0, actual.1 - sun_frame.1))
+                        })
+                        .unwrap_or((0.0, 0.0));
+                    for (window, position) in positions {
+                        let _ = position_window(
+                            &window,
+                            (position.0 + shift.0, position.1 + shift.1),
+                            formation_scale,
+                        );
+                    }
+                })
+                .await
+                {
+                    return;
                 }
-            });
-            if !reduced_motion {
-                tokio::time::sleep(Duration::from_millis(16)).await;
+                previous_sun_frame = sun_frame;
+                if eased >= 1.0 {
+                    break;
+                }
             }
-        }
-        if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
-            return;
-        }
-        let finish_app = animation_app.clone();
-        let _ = animation_app.run_on_main_thread(move || {
-            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&finish_app) {
+            if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch {
                 return;
             }
-            if !expanded {
-                for (window, _, _) in movements {
-                    let _ = window.hide();
+            let finish_app = animation_app.clone();
+            let _ = desktop_frame(&animation_app, move || {
+                if ANIMATION_EPOCH.load(Ordering::SeqCst) != epoch || launcher_open(&finish_app) {
+                    return;
                 }
-            }
-            ANIMATING.store(false, Ordering::SeqCst);
-            let _ = align_companions(&finish_app);
+                if !expanded {
+                    for (window, _, _) in movements {
+                        let _ = window.hide();
+                    }
+                }
+                if let Ok(mut motion) = ORBIT_MOTION.lock() {
+                    motion.resume(std::time::Instant::now());
+                }
+                ANIMATING.store(false, Ordering::SeqCst);
+                let _ = align_companions(&finish_app);
+            })
+            .await;
         });
-    });
-    let _ = app.emit("solar://desktop", expanded);
-    engine.changed();
-    Ok(())
+        let _ = app.emit("solar://desktop", expanded);
+        engine.changed();
+        Ok(())
+    })();
+    if result.is_err()
+        && ANIMATION_EPOCH
+            .compare_exchange(epoch, epoch + 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        // A failed webview or position lookup must leave the sun ready for a
+        // fresh click, never stranded in an expanded/animating state.
+        EXPANDED.store(false, Ordering::SeqCst);
+        ANIMATING.store(false, Ordering::SeqCst);
+        engine.desktop_expanded.store(false, Ordering::SeqCst);
+        if let Ok(mut motion) = ORBIT_MOTION.lock() {
+            motion.reset(Vec::new(), std::time::Instant::now());
+        }
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("orbit-") {
+                let _ = window.hide();
+            }
+        }
+        let _ = app.emit("solar://desktop", false);
+        engine.changed();
+    }
+    result
 }
 
 #[tauri::command]
@@ -699,6 +815,9 @@ fn hide_companions(app: &tauri::AppHandle) {
     EXPANDED.store(false, Ordering::SeqCst);
     ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst);
     ANIMATING.store(false, Ordering::SeqCst);
+    if let Ok(mut motion) = ORBIT_MOTION.lock() {
+        motion.reset(Vec::new(), std::time::Instant::now());
+    }
     if let Some(engine) = app.try_state::<Arc<Engine>>() {
         engine.desktop_expanded.store(false, Ordering::SeqCst);
         engine.changed();
@@ -885,6 +1004,7 @@ fn create_companion(
     .always_on_top(true)
     .skip_taskbar(true)
     .focused(false)
+    .accept_first_mouse(true)
     .build()
     .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
@@ -906,6 +1026,13 @@ fn create_companion(
             && let Ok(mut widgets) = READY_WIDGETS.lock()
         {
             widgets.remove(&owned_label);
+        }
+        if matches!(event, WindowEvent::Destroyed)
+            && let Ok(mut motion) = ORBIT_MOTION.lock()
+        {
+            let now = std::time::Instant::now();
+            motion.hover(&owned_label, false, now);
+            motion.hover(&format!("focus:{owned_label}"), false, now);
         }
         if (owned_label == "sun" && matches!(event, WindowEvent::Moved(_)))
             || matches!(event, WindowEvent::ScaleFactorChanged { .. })
@@ -1103,6 +1230,11 @@ pub fn run() {
                             continue;
                         }
                         if !window.is_visible().unwrap_or(false) {
+                            if let Ok(mut motion) = ORBIT_MOTION.lock() {
+                                let now = std::time::Instant::now();
+                                motion.hover(&label, false, now);
+                                motion.hover(&format!("focus:{label}"), false, now);
+                            }
                             continue;
                         }
                         if let (Ok(cursor), Ok(position), Ok(size)) = (
@@ -1116,18 +1248,33 @@ pub fn run() {
                             let radius = if label == "sun" {
                                 60.0 * scale
                             } else {
-                                let count = ORBIT_MOTION
+                                let (count, hovered) = ORBIT_MOTION
                                     .lock()
-                                    .map(|motion| motion.roster.len())
-                                    .unwrap_or(0);
-                                crate::desktop_layout::planet_art_size(count) * 0.46 * scale
+                                    .map(|motion| (motion.roster.len(), motion.is_hovered(&label)))
+                                    .unwrap_or((0, false));
+                                // Keep the enlarged hover target clickable without
+                                // oscillating between its normal and enlarged edge.
+                                let enlargement = if hovered { 1.12 } else { 1.0 };
+                                crate::desktop_layout::planet_art_size(count)
+                                    * 0.46
+                                    * scale
+                                    * enlargement
                             };
                             let launcher = label == "sun"
-                                && cursor.x - position.x as f64 > size.width as f64 - 40.0 * scale
-                                && cursor.y - position.y as f64 > size.height as f64 - 40.0 * scale;
-                            let _ = window.set_ignore_cursor_events(
-                                dx * dx + dy * dy > radius * radius && !launcher,
-                            );
+                                && crate::desktop_motion::launcher_hit(
+                                    cursor.x - position.x as f64,
+                                    cursor.y - position.y as f64,
+                                    size.width as f64,
+                                    size.height as f64,
+                                    scale,
+                                );
+                            let inside = dx * dx + dy * dy <= radius * radius || launcher;
+                            if let Ok(mut motion) = ORBIT_MOTION.lock() {
+                                // Native hit-testing remains authoritative if a
+                                // click-through webview never gets pointerleave.
+                                motion.hover(&label, inside, std::time::Instant::now());
+                            }
+                            let _ = window.set_ignore_cursor_events(!inside);
                         }
                     }
                     attention_ticks += 1;
@@ -1212,6 +1359,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             crate::orbit_prompt::create_orbit,
             crate::orbit_prompt::update_orbit_profile,
+            crate::orbit_prompt::set_orbit_avatar,
             crate::orbit_prompt::cancel_orbit_prompt_analysis,
             crate::orbit_reset::reset_orbit,
             crate::desktop_chat::set_active_chat,

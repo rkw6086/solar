@@ -13,3 +13,5 @@
 .orbit-suggest-button:hover { background: rgba(255,255,255,.05); }
 .orbit-suggest-button:disabled { opacity: .5; cursor: default; }
 .orbit-field-hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+.orbit-avatar-regenerate { margin-top: 8px; }

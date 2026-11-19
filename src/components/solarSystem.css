@@ -57,7 +57,7 @@
   position: absolute;
   left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  border: 1px solid color-mix(in srgb, var(--track-color) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--track-color) 14%, transparent);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -103,6 +103,8 @@
   transition: color 160ms ease;
 }
 .solar-system-orbit:hover, .solar-system-orbit:focus-visible { z-index: 3; }
+.solar-system-orbit:focus-visible { outline: none; }
+.solar-system-orbit:focus-visible .planet-art { filter: drop-shadow(0 0 6px #bcdde7b3); }
 .solar-system-orbit:hover .planet-art, .solar-system-orbit:focus-visible .planet-art { scale: 1.1; }
 .solar-system-orbit:hover .solar-system-orbit-name, .solar-system-orbit:focus-visible .solar-system-orbit-name { color: #f2e9da; max-width: 180px; overflow: visible; }
 .solar-system-footer { display: flex; flex-direction: column; align-items: center; gap: 15px; z-index: 1; text-align: center; }

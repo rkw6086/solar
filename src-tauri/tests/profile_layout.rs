@@ -16,6 +16,7 @@ fn configured_orbit() -> Orbit {
         personality: "Thoughtful".into(),
         instructions: String::new(),
         color: "#ffffff".into(),
+        avatar_seed: None,
         model: String::new(),
         provider_id: String::new(),
         autonomy: "ask".into(),
@@ -155,4 +156,35 @@ fn fresh_profile_stays_empty_until_an_orbit_is_created() {
     let engine = Engine::open(temporary.path().into()).unwrap();
     assert!(engine.bootstrap().unwrap().orbits.is_empty());
     assert!(engine.bootstrap().unwrap().conversations.is_empty());
+}
+
+#[test]
+fn regenerated_avatar_round_trips_through_toml_and_profile_export() {
+    let temporary = tempfile::tempdir().unwrap();
+    let engine = Engine::open(temporary.path().into()).unwrap();
+    common::add_assistant(&engine);
+    engine
+        .set_orbit_avatar("assistant", "my-fresh-avatar".into())
+        .unwrap();
+    let path = temporary.path().join("orbits/sol/config.toml");
+    let profile: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        profile["orbit"]["avatarSeed"].as_str(),
+        Some("my-fresh-avatar")
+    );
+    let export = engine.export_orbit("assistant").unwrap();
+    let imported = engine.import_orbit(&export).unwrap();
+    assert_ne!(imported.id, "assistant");
+    assert_eq!(imported.avatar_seed.as_deref(), Some("my-fresh-avatar"));
+    drop(engine);
+
+    let reopened = Engine::open(temporary.path().into()).unwrap();
+    assert_eq!(
+        reopened.orbit("assistant").unwrap().avatar_seed.as_deref(),
+        Some("my-fresh-avatar")
+    );
+    assert_eq!(
+        reopened.orbit(&imported.id).unwrap().avatar_seed.as_deref(),
+        Some("my-fresh-avatar")
+    );
 }

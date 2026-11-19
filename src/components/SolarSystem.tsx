@@ -117,7 +117,7 @@ export function SolarSystem({
       >
         <div className="solar-system-dust" aria-hidden="true" />
         <div className="solar-system-halo" aria-hidden="true" />
-        {tracks.filter((track, index) => index === 0 || track.period !== tracks[index - 1].period).map(({ orbit, x, y }) => (
+        {tracks.map(({ orbit, x, y }) => (
           <div
             key={orbit.id}
             className="solar-system-track"
@@ -144,7 +144,7 @@ export function SolarSystem({
             aria-label={`Chat with ${orbit.name}, ${orbit.role}`}
             title={`${orbit.name} · ${orbit.role}`}
           >
-            <Planet color={orbit.color} name={orbit.name} identity={orbit.id} size={planetSize} />
+            <Planet color={orbit.color} name={orbit.name} identity={orbit.avatarSeed || orbit.id} size={planetSize} />
             <span className="solar-system-orbit-name">{orbit.name}</span>
           </button>
         ))}
@@ -154,7 +154,7 @@ export function SolarSystem({
         <button type="button" className="button button-primary" onClick={onCreateOrbit}>
           <Plus size={16} />{empty ? "Create your first Sprite" : "Create a Sprite"}
         </button>
-        <span>{empty ? "You choose who joins your team." : "In resonance · a shared rhythm, at different speeds"}</span>
+        <span>{empty ? "You choose who joins your team." : "Moving together · each Sprite on its own path"}</span>
       </footer>
     </section>
   );

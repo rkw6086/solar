@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, LoaderCircle, RotateCcw, Settings2, Terminal, Trash2 } from "lucide-react";
+import { Check, Copy, LoaderCircle, RotateCcw, Settings2, Shuffle, Terminal, Trash2 } from "lucide-react";
 import { api, native } from "../api";
 import { errorText } from "../types";
 import type { Bootstrap, Orbit } from "../types";
 import { Modal } from "./Modal";
 import { Planet } from "./Planet";
+import { generateOrbitAvatarSeed } from "./orbitIdentity";
 import { OrbitForm } from "./Forms";
 import "./orbitSettings.css";
 
@@ -22,6 +23,31 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
   onChanged: (change: "edit" | "reset" | "delete") => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [avatarSeed, setAvatarSeed] = useState(orbit.avatarSeed);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const [avatarUpdated, setAvatarUpdated] = useState(false);
+  const avatarRequest = useRef(false);
+  useEffect(() => setAvatarSeed(orbit.avatarSeed), [orbit.avatarSeed]);
+  async function regenerateAvatar() {
+    if (avatarRequest.current) return;
+    avatarRequest.current = true;
+    setAvatarBusy(true);
+    setAvatarError("");
+    setAvatarUpdated(false);
+    try {
+      const nextSeed = generateOrbitAvatarSeed(avatarSeed || orbit.id, orbit.color);
+      const updated = await api<Orbit>("set_orbit_avatar", { orbitId: orbit.id, avatarSeed: nextSeed });
+      setAvatarSeed(updated.avatarSeed);
+      setAvatarUpdated(true);
+      onChanged("edit");
+    } catch (reason) {
+      setAvatarError(errorText(reason));
+    } finally {
+      avatarRequest.current = false;
+      setAvatarBusy(false);
+    }
+  }
   const [confirm, setConfirm] = useState<"reset" | "delete" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -154,13 +180,19 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
   </Modal>;
   return <Modal title={`${orbit.name} settings`} subtitle="Manage this Sprite’s character, model, and saved data." onClose={onClose}>
     <div className="form-body orbit-settings-body">
-      <div className="orbit-settings-identity"><Planet identity={orbit.id} name={orbit.name} color={orbit.color} size={76} /><div><h3>{orbit.name}</h3><p>{orbit.role}</p></div></div>
+      <div className="orbit-settings-identity"><Planet identity={avatarSeed || orbit.id} name={orbit.name} color={orbit.color} size={76} /><div><h3>{orbit.name}</h3><p>{orbit.role}</p>
+        <button type="button" className="button button-quiet orbit-settings-avatar" disabled={avatarBusy} onClick={() => void regenerateAvatar()}>
+          {avatarBusy ? <LoaderCircle size={14} className="spin" /> : <Shuffle size={14} />}{avatarBusy ? "Updating avatar…" : "Regenerate avatar"}
+        </button>
+        {avatarUpdated && <span className="orbit-avatar-status" role="status">Avatar updated.</span>}
+      </div></div>
+      {avatarError && <p className="form-error" role="alert">{avatarError}</p>}
       <dl className="orbit-settings-summary">
         <div><dt>Model</dt><dd>{orbit.model ? `${orbit.model} (${provider?.name ?? "Unknown provider"})` : "No model selected"}</dd></div>
         <div><dt>Personality</dt><dd>{orbit.personality || "Not set"}</dd></div>
         <div><dt>Tasks</dt><dd>{orbit.tasks || "Not set"}</dd></div>
       </dl>
-      <button type="button" className="button button-primary" onClick={() => setEditing(true)}><Settings2 size={16} />Edit Sprite</button>
+      <button type="button" className="button button-primary" disabled={avatarBusy} onClick={() => setEditing(true)}><Settings2 size={16} />Edit Sprite</button>
       <div className="orbit-settings-data">
         <h3>CLI sign-ins</h3>
         <p>Give this Sprite its own sign-ins for command-line tools such as GitLab.</p>
@@ -169,8 +201,8 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
       <div className="orbit-settings-data">
         <h3>Saved data</h3>
         <p>Clear learned context without changing this Sprite’s setup.</p>
-        <button type="button" className="button button-secondary" onClick={() => setConfirm("reset")}><RotateCcw size={15} />Reset Sprite</button>
-        <button type="button" className="button button-quiet orbit-settings-delete" onClick={() => setConfirm("delete")}><Trash2 size={15} />Delete Sprite</button>
+        <button type="button" className="button button-secondary" disabled={avatarBusy} onClick={() => setConfirm("reset")}><RotateCcw size={15} />Reset Sprite</button>
+        <button type="button" className="button button-quiet orbit-settings-delete" disabled={avatarBusy} onClick={() => setConfirm("delete")}><Trash2 size={15} />Delete Sprite</button>
       </div>
     </div>
   </Modal>;
