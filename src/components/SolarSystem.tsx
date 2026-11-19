@@ -99,10 +99,10 @@ export function SolarSystem({
     <section className={`solar-system ${empty ? "solar-system-empty" : ""} ${compact ? "solar-system-compact" : ""}`} aria-labelledby="solar-system-title">
       <header className="solar-system-heading">
         <span className="solar-system-eyebrow"><Sparkles size={13} /> YOUR SOLAR SYSTEM</span>
-        <h1 id="solar-system-title">{empty ? "It starts with one Orbit." : "A little universe of your own."}</h1>
+        <h1 id="solar-system-title">{empty ? "It starts with one Sprite." : "A little universe of your own."}</h1>
         <p>{empty
-          ? "Give your first Orbit a name, a specialty, and a personality. Build your team from there."
-          : "Your Orbits, moving together around Solar. Choose one to start a conversation."}</p>
+          ? "Give your first Sprite a name, a specialty, and a personality. Build your team from there."
+          : "Your Sprites, moving together around Solar. Choose one to start a conversation."}</p>
       </header>
 
       <div
@@ -113,7 +113,7 @@ export function SolarSystem({
         onBlurCapture={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
         }}
-        aria-label={empty ? "Solar is ready for your first Orbit" : "Your Orbits around Solar"}
+        aria-label={empty ? "Solar is ready for your first Sprite" : "Your Sprites around Solar"}
       >
         <div className="solar-system-dust" aria-hidden="true" />
         <div className="solar-system-halo" aria-hidden="true" />
@@ -152,7 +152,7 @@ export function SolarSystem({
 
       <footer className="solar-system-footer">
         <button type="button" className="button button-primary" onClick={onCreateOrbit}>
-          <Plus size={16} />{empty ? "Create your first Orbit" : "Create an Orbit"}
+          <Plus size={16} />{empty ? "Create your first Sprite" : "Create a Sprite"}
         </button>
         <span>{empty ? "You choose who joins your team." : "In resonance · a shared rhythm, at different speeds"}</span>
       </footer>

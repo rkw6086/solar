@@ -391,16 +391,16 @@ impl Engine {
         if self
             .resetting_orbits
             .lock()
-            .map_err(|_| "Orbit reset state unavailable")?
+            .map_err(|_| "Sprite reset state unavailable")?
             .contains(&orbit.id)
         {
             return Err(
-                "This Orbit is clearing its conversations and memory. Try again in a moment."
+                "This Sprite is clearing its conversations and memory. Try again in a moment."
                     .into(),
             );
         }
         if !orbit.enabled {
-            return Err("This Orbit is disabled".into());
+            return Err("This Sprite is disabled".into());
         }
         let user_message = self.message(conversation_id, None, "user", content)?;
         let task = Task {
@@ -584,15 +584,15 @@ impl Engine {
                 token: ctx.token.clone(),
             };
             let result = async {
-                let lock = self.orbit_locks.lock().map_err(|_| "Orbit lock unavailable")?.entry(ctx.task.orbit_id.clone())
+                let lock = self.orbit_locks.lock().map_err(|_| "Sprite lock unavailable")?.entry(ctx.task.orbit_id.clone())
                     .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
                 let _guard = if ctx.ancestry.len() > 1 {
-                    lock.try_lock_owned().map_err(|_| "That Orbit is busy. Try a different specialist or continue without it.".to_owned())?
+                    lock.try_lock_owned().map_err(|_| "That Sprite is busy. Try a different specialist or continue without it.".to_owned())?
                 } else {
                     tokio::select! { _ = ctx.token.cancelled() => return Err("Cancelled".into()), guard = lock.lock_owned() => guard }
                 };
-                if self.resetting_orbits.lock().map_err(|_| "Orbit reset state unavailable")?.contains(&ctx.task.orbit_id) {
-                    return Err("This Orbit is clearing its conversations and memory. Try again in a moment.".into());
+                if self.resetting_orbits.lock().map_err(|_| "Sprite reset state unavailable")?.contains(&ctx.task.orbit_id) {
+                    return Err("This Sprite is clearing its conversations and memory. Try again in a moment.".into());
                 }
                 ctx.task.status = "running".into();
                 if let Some(user_id) = &ctx.user_message_id { ctx.history = self.history_for(&ctx.conversation, &ctx.task.orbit_id, user_id)?; }
@@ -690,7 +690,7 @@ impl Engine {
             model: orbit.model.clone(),
         });
         if orbit.model.trim().is_empty() {
-            return Err("Choose a model for this Orbit in its settings".into());
+            return Err("Choose a model for this Sprite in its settings".into());
         }
         let mut run = RigOrbitRun::new(
             ctx.task.id.clone(),
@@ -1214,12 +1214,12 @@ impl Engine {
             ),
             (
                 "orbit_list",
-                "List the available Orbit teammates and their specialties.",
+                "List the available Sprite teammates and their specialties.",
                 json!({"type":"object","properties":{},"additionalProperties":false}),
             ),
             (
                 "orbit_delegate",
-                "Ask another Orbit to complete a focused task. Its work and answer appear in this conversation. Delegation inherits this task's permissions.",
+                "Ask another Sprite to complete a focused task. Its work and answer appear in this conversation. Delegation inherits this task's permissions.",
                 json!({"type":"object","properties":{"orbitId":{"type":"string"},"task":{"type":"string"}},"required":["orbitId","task"],"additionalProperties":false}),
             ),
             (
@@ -1229,7 +1229,7 @@ impl Engine {
             ),
             (
                 "memory_save",
-                "Create or update a memory. Set memoryId to update an existing fact without duplicating it. Scope system is visible and editable by every Orbit; orbit shares with the listed orbitIds (include yourself); project shares with projectIds available to this task. Default is private to you. Omit scope and IDs on update to preserve sharing.",
+                "Create or update a memory. Set memoryId to update an existing fact without duplicating it. Scope system is visible and editable by every Sprite; orbit shares with the listed orbitIds (include yourself); project shares with projectIds available to this task. Default is private to you. Omit scope and IDs on update to preserve sharing.",
                 json!({"type":"object","properties":{"content":{"type":"string"},"memoryId":{"type":"string"},"scope":{"type":"string","enum":["system","orbit","project"]},"orbitIds":{"type":"array","items":{"type":"string"}},"projectIds":{"type":"array","items":{"type":"string"}},"shared":{"type":"boolean"}},"required":["content"],"additionalProperties":false}),
             ),
         ] {
@@ -1376,7 +1376,7 @@ impl Engine {
         // Delegation cannot inherit personal files. Any root run (including a
         // routine) must still obtain a fresh file-list approval from the user.
         if ctx.ancestry.len() != 1 {
-            return Err("Ask the user from a direct Orbit chat to import home files".into());
+            return Err("Ask the user from a direct Sprite chat to import home files".into());
         }
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
@@ -1558,19 +1558,19 @@ impl Engine {
                 let prompt = argument(&call.arguments, "task")?;
                 validate_text(prompt, "Delegated task", 16_000)?;
                 if !ctx.conversation.orbit_ids.iter().any(|id| id == target) {
-                    return Err("Add that Orbit to this group before delegating to it".into());
+                    return Err("Add that Sprite to this group before delegating to it".into());
                 }
                 if ctx.ancestry.len() >= 3 || ctx.ancestry.iter().any(|id| id == target) {
                     return Err("Delegation would create a cycle or exceed the depth limit".into());
                 }
                 let child = self.orbit(target)?;
                 if !child.enabled {
-                    return Err("That Orbit is disabled".into());
+                    return Err("That Sprite is disabled".into());
                 }
                 if let Some(project) = &ctx.conversation.project_id
                     && !child.project_ids.contains(project)
                 {
-                    return Err("That Orbit has not been granted access to this project".into());
+                    return Err("That Sprite has not been granted access to this project".into());
                 }
                 let task = Task {
                     id: id(),

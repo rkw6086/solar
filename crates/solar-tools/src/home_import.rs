@@ -17,7 +17,7 @@ const MAX_TOTAL: usize = 20 * 1024 * 1024;
 pub(crate) fn definition() -> ToolDefinition {
     tool_definition(
         "pull_from_user_home",
-        "Request files or folders from the user's home, copied into this Orbit's private home/configuration. Always requires a separate user approval showing every file and replacement, even for trusted Orbits. Discovers literal shell source dependencies and home-contained symlinks without running code; rewrites home paths to the private copies. Profile files can contain credentials and executable startup code. Use only files needed for the user's task; never request the whole home. Dynamic includes may need a follow-up request.",
+        "Request files or folders from the user's home, copied into this Sprite's private home/configuration. Always requires a separate user approval showing every file and replacement, even for trusted Sprites. Discovers literal shell source dependencies and home-contained symlinks without running code; rewrites home paths to the private copies. Profile files can contain credentials and executable startup code. Use only files needed for the user's task; never request the whole home. Dynamic includes may need a follow-up request.",
         json!({"paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},"includeDependencies":{"type":"boolean","default":true}}),
         &["paths"],
     )
@@ -64,10 +64,10 @@ impl HomeImportPlan {
                 .map_err(|_| "The user's home is unavailable")?,
             workspace: workspace
                 .canonicalize()
-                .map_err(|_| "The Orbit's private home is unavailable")?,
+                .map_err(|_| "The Sprite's private home is unavailable")?,
             storage: storage
                 .canonicalize()
-                .map_err(|_| "The Orbit's storage is unavailable")?,
+                .map_err(|_| "The Sprite's storage is unavailable")?,
             files: Vec::new(),
             warnings: BTreeSet::new(),
             total: 0,
@@ -82,7 +82,7 @@ impl HomeImportPlan {
                 .unwrap_or(true),
         };
         if !plan.workspace.starts_with(&plan.storage) {
-            return Err("Orbit home must be inside its private storage".into());
+            return Err("Sprite home must be inside its private storage".into());
         }
         for path in paths {
             let requested = path.as_str().ok_or("Every home path must be text")?;
@@ -117,7 +117,7 @@ impl HomeImportPlan {
     }
 
     pub fn review(&self) -> Value {
-        json!({"files":self.files.iter().map(|file|json!({"source":file.source,"destination":file.target.to_string_lossy(),"bytes":file.data.len(),"replace":file.previous.is_some(),"dependency":file.dependency})).collect::<Vec<_>>(),"warnings":self.warnings,"totalBytes":self.total,"notice":"These files may contain credentials or executable startup instructions. Approve only files you intend this Orbit to use. Copies remain private to this Orbit; source files are not changed."})
+        json!({"files":self.files.iter().map(|file|json!({"source":file.source,"destination":file.target.to_string_lossy(),"bytes":file.data.len(),"replace":file.previous.is_some(),"dependency":file.dependency})).collect::<Vec<_>>(),"warnings":self.warnings,"totalBytes":self.total,"notice":"These files may contain credentials or executable startup instructions. Approve only files you intend this Sprite to use. Copies remain private to this Sprite; source files are not changed."})
     }
 
     fn expand(&self, input: &str, base: &Path) -> Result<PathBuf, String> {
@@ -143,7 +143,7 @@ impl HomeImportPlan {
         }
         if normalized.starts_with(self.home.join(".solar")) || normalized.starts_with(&self.storage)
         {
-            return Err("Solar's private storage cannot be imported into another Orbit".into());
+            return Err("Solar's private storage cannot be imported into another Sprite".into());
         }
         Ok(normalized)
     }
@@ -193,7 +193,7 @@ impl HomeImportPlan {
             &self.home,
         )?;
         if self.denied.iter().any(|root| actual.starts_with(root)) {
-            return Err("A requested file is in a project this Orbit cannot access".into());
+            return Err("A requested file is in a project this Sprite cannot access".into());
         }
         if !visiting.insert(actual.clone()) {
             self.warnings.insert(format!(
@@ -419,7 +419,7 @@ impl HomeImportPlan {
 
     pub fn apply(self, cancellation: &CancellationToken) -> Result<Value, String> {
         let root = Dir::open_ambient_dir(&self.storage, cap_std::ambient_authority())
-            .map_err(|_| "Orbit storage is unavailable")?;
+            .map_err(|_| "Sprite storage is unavailable")?;
         // Validate every replacement before changing any file.
         for file in &self.files {
             if cancellation.is_cancelled() {
@@ -427,7 +427,7 @@ impl HomeImportPlan {
             }
             if read_target(&self.storage, &file.target)? != file.previous {
                 return Err(
-                    "An Orbit file changed while approval was open. Request the import again."
+                    "A Sprite file changed while approval was open. Request the import again."
                         .into(),
                 );
             }
@@ -436,18 +436,18 @@ impl HomeImportPlan {
         for file in self.files {
             if cancellation.is_cancelled() {
                 return Err(
-                    "Import cancelled; earlier completed copies remain in the Orbit".into(),
+                    "Import cancelled; earlier completed copies remain in the Sprite".into(),
                 );
             }
             let relative = file
                 .target
                 .strip_prefix(&self.storage)
-                .map_err(|_| "Invalid Orbit destination")?;
-            let parent = relative.parent().ok_or("Invalid Orbit destination")?;
+                .map_err(|_| "Invalid Sprite destination")?;
+            let parent = relative.parent().ok_or("Invalid Sprite destination")?;
             ensure_parents(&root, parent)?;
             let directory = root
                 .open_dir(parent)
-                .map_err(|_| "Cannot open Orbit destination")?;
+                .map_err(|_| "Cannot open Sprite destination")?;
             let temporary = format!(".solar-import-{}", uuid::Uuid::new_v4());
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
@@ -474,7 +474,7 @@ impl HomeImportPlan {
                     }
                     if read_target(&self.storage, &file.target)? != file.previous {
                         return Err(
-                            "An Orbit file changed during import. Request the import again.".into(),
+                            "A Sprite file changed during import. Request the import again.".into(),
                         );
                     }
                     directory
@@ -493,7 +493,7 @@ impl HomeImportPlan {
             copied.push(json!({"source":file.source,"destination":file.target.to_string_lossy()}));
         }
         Ok(
-            json!({"copied":copied,"warnings":self.warnings,"message":"Approved files copied into this Orbit. No source files changed. Startup files take effect on the next shell command. Imported startup code is now executable by the Orbit."}),
+            json!({"copied":copied,"warnings":self.warnings,"message":"Approved files copied into this Sprite. No source files changed. Startup files take effect on the next shell command. Imported startup code is now executable by the Sprite."}),
         )
     }
 }
@@ -542,10 +542,10 @@ fn ensure_parents(root: &Dir, path: &Path) -> Result<(), String> {
 
 fn read_target(storage: &Path, target: &Path) -> Result<Option<Vec<u8>>, String> {
     let root = Dir::open_ambient_dir(storage, cap_std::ambient_authority())
-        .map_err(|_| "Cannot open Orbit storage")?;
+        .map_err(|_| "Cannot open Sprite storage")?;
     let relative = target
         .strip_prefix(storage)
-        .map_err(|_| "Destination is outside Orbit storage")?;
+        .map_err(|_| "Destination is outside Sprite storage")?;
     let mut current = PathBuf::new();
     for component in relative.components() {
         if !matches!(component, Component::Normal(_)) {
@@ -558,25 +558,25 @@ fn read_target(storage: &Path, target: &Path) -> Result<Option<Vec<u8>>, String>
             }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err("Cannot inspect Orbit destination".into()),
+            Err(_) => return Err("Cannot inspect Sprite destination".into()),
         }
     }
     let mut data = Vec::new();
     let file = root
         .open(relative)
-        .map_err(|_| "Cannot read existing Orbit file")?;
+        .map_err(|_| "Cannot read existing Sprite file")?;
     if !file
         .metadata()
-        .map_err(|_| "Cannot inspect existing Orbit file")?
+        .map_err(|_| "Cannot inspect existing Sprite file")?
         .is_file()
     {
         return Err("Import would replace a folder".into());
     }
     file.take((MAX_FILE + 1) as u64)
         .read_to_end(&mut data)
-        .map_err(|_| "Cannot read existing Orbit file")?;
+        .map_err(|_| "Cannot read existing Sprite file")?;
     if data.len() > MAX_FILE {
-        return Err("Existing Orbit file is too large to replace safely".into());
+        return Err("Existing Sprite file is too large to replace safely".into());
     }
     Ok(Some(data))
 }
@@ -804,7 +804,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rewritten_paths_keep_spaces_quotes_and_dollars_literal() {
-        let target = "/tmp/Orbit's home/$cache";
+        let target = "/tmp/Sprite's home/$cache";
         let prefixes = vec![("/home/user".into(), target.into())];
         for argument in [
             "/home/user/file",

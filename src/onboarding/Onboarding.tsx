@@ -19,8 +19,8 @@ const steps = ["birth", "welcome", "team", "desktop", "connection", "orbit", "wo
 type Step = typeof steps[number];
 type Editor = { kind: "provider"; value?: Provider } | { kind: "orbit"; value?: Orbit } | { kind: "project"; value?: Project };
 const labels: Record<Step, string> = {
-  birth: "A star is born", welcome: "Meet your Orbits", team: "How you work together",
-  desktop: "At home on your desktop", connection: "Choose a connection", orbit: "Make an Orbit yours",
+  birth: "A star is born", welcome: "Meet your Sprites", team: "How you work together",
+  desktop: "At home on your desktop", connection: "Choose a connection", orbit: "Make a Sprite yours",
   workspace: "Give your work a home", ready: "Ready when you are",
 };
 
@@ -184,7 +184,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
     setEditor({ kind: "orbit", value: draft });
   }
 
-  const title = step === "orbit" && !data.orbits.length ? "Create your first Orbit" : labels[step];
+  const title = step === "orbit" && !data.orbits.length ? "Create your first Sprite" : labels[step];
   const next = steps[Math.min(index + 1, steps.length - 1)];
   const setupStep = ["connection", "orbit", "workspace"].includes(step);
 
@@ -213,52 +213,52 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           <h1 ref={heading} tabIndex={-1}>{title}</h1>
           {step === "welcome" && <>
             <p className="onboarding-lead">Build a team of thoughtful specialists.<br />Give each a place in your day.</p>
-            <p>Each Orbit has a name, a personality, and one or two things it does especially well. Talk to one on its own, or bring a few together.</p>
+            <p>Each Sprite has a name, a personality, and one or two things it does especially well. Talk to one on its own, or bring a few together.</p>
             <div className="onboarding-note"><Heart size={17} /><span>More than a role. A teammate you make your own.</span></div>
-            <Later>Rename and shape them any time in <strong>Your Orbits</strong>.</Later>
+            <Later>Rename and shape them any time in <strong>Your Sprites</strong>.</Later>
           </>}
           {step === "team" && <>
             <p className="onboarding-lead">Different perspectives.<br />One shared direction.</p>
-            <p>Choose a lead for a group conversation. It can ask the other Orbits for help and bring their work back to you.</p>
+            <p>Choose a lead for a group conversation. It can ask the other Sprites for help and bring their work back to you.</p>
             <ul className="onboarding-feature-list">
-              <li><LockKeyhole size={17} /><span><strong>Private by default.</strong> Each Orbit has its own workspace and memory.</span></li>
-              <li><Folder size={17} /><span><strong>Shared when you choose.</strong> Give selected Orbits access to a project.</span></li>
+              <li><LockKeyhole size={17} /><span><strong>Private by default.</strong> Each Sprite has its own workspace and memory.</span></li>
+              <li><Folder size={17} /><span><strong>Shared when you choose.</strong> Give selected Sprites access to a project.</span></li>
               <li><ShieldCheck size={17} /><span><strong>You choose when they ask.</strong> All tools are available; approvals and project access stay in your control.</span></li>
             </ul>
-            <Later>Groups live in <strong>Conversations</strong>. Permissions live in each Orbit’s profile.</Later>
+            <Later>Groups live in <strong>Conversations</strong>. Permissions live in each Sprite’s profile.</Later>
           </>}
           {step === "desktop" && <>
             <p className="onboarding-lead">Close the launcher.<br />Keep your team nearby.</p>
-            <p>The sun stays on your desktop while Solar runs. Click it to let your Orbits out, drag the sun to move the whole team, and click an Orbit for a quick chat.</p>
+            <p>The sun stays on your desktop while Solar runs. Click it to let your Sprites out, drag the sun to move the whole team, and click a Sprite for a quick chat.</p>
             <div className="onboarding-note"><Sparkles size={17} /><span>When they need you, they peek down from the top of your screen with their own little chime.</span></div>
             <Later>Change companions, chimes, and motion in <strong>Settings</strong>. Quit Solar from its menu-bar menu.</Later>
           </>}
           {step === "connection" && <>
             <p className="onboarding-lead">First, a place to think.</p>
-            <p>Connect your model provider or a local endpoint. You can use different connections and models for different Orbits.</p>
+            <p>Connect your model provider or a local endpoint. You can use different connections and models for different Sprites.</p>
             <div className="onboarding-note"><LockKeyhole size={17} /><span>Credentials stay in private files inside ~/.solar. Saving a connection does not start a model request.</span></div>
             <Later>Add, sign in, and discover models later in <strong>Connections</strong>.</Later>
           </>}
           {step === "orbit" && <>
             <p className="onboarding-lead">A familiar face.<br />Your kind of help.</p>
-            <p>Solar starts with no Orbits. Give your first teammate a name, personality, and tasks, then search for a model. Solar uses that model to build their instructions automatically. Nothing is created until you finish the form.</p>
-            <Later>Edit profiles, add teammates, and change approval preferences in <strong>Your Orbits</strong>.</Later>
+            <p>Solar starts with no Sprites. Give your first teammate a name, personality, and tasks, then search for a model. Solar uses that model to build their instructions automatically. Nothing is created until you finish the form.</p>
+            <Later>Edit profiles, add teammates, and change approval preferences in <strong>Your Sprites</strong>.</Later>
           </>}
           {step === "workspace" && <>
             <p className="onboarding-lead">Make room for<br />something meaningful.</p>
-            <p>A project connects a folder with useful context. Only Orbits you explicitly give access can use its files and shared knowledge.</p>
-            <div className="onboarding-note"><ShieldCheck size={17} /><span>Creating a project does not grant every Orbit access. Choose members in their profiles.</span></div>
-            <Later>Manage folders and context in <strong>Projects</strong>, and access in <strong>Your Orbits</strong>.</Later>
+            <p>A project connects a folder with useful context. Only Sprites you explicitly give access can use its files and shared knowledge.</p>
+            <div className="onboarding-note"><ShieldCheck size={17} /><span>Creating a project does not grant every Sprite access. Choose members in their profiles.</span></div>
+            <Later>Manage folders and context in <strong>Projects</strong>, and access in <strong>Your Sprites</strong>.</Later>
           </>}
           {step === "ready" && <>
             <p className="onboarding-lead">Start small.<br />Let good things grow.</p>
-            <p>{data.orbits.length ? "Try a question, make a plan, or ask an Orbit to help with a project." : "Your star is waiting. Create your first Orbit from the Solar system home when you’re ready."} You can return to this welcome from Settings whenever you like.</p>
+            <p>{data.orbits.length ? "Try a question, make a plan, or ask a Sprite to help with a project." : "Your star is waiting. Create your first Sprite from the Solar system home when you’re ready."} You can return to this welcome from Settings whenever you like.</p>
             <div className="onboarding-summary">
-              <span>{enabledOrbits.length ? <Check size={14} /> : <Plus size={14} />}{enabledOrbits.length ? `${enabledOrbits.length} ${enabledOrbits.length === 1 ? "Orbit" : "Orbits"} ready to meet` : "Create your first Orbit whenever you’re ready"}</span>
+              <span>{enabledOrbits.length ? <Check size={14} /> : <Plus size={14} />}{enabledOrbits.length ? `${enabledOrbits.length} ${enabledOrbits.length === 1 ? "Sprite" : "Sprites"} ready to meet` : "Create your first Sprite whenever you’re ready"}</span>
               <span><Globe2 size={14} />{data.providers.length ? `${data.providers.length} ${data.providers.length === 1 ? "connection" : "connections"} saved` : "Model connection can be added later"}</span>
               <span><Folder size={14} />{data.projects.length ? `${data.projects.length} ${data.projects.length === 1 ? "project" : "projects"} saved` : "Projects are optional"}</span>
             </div>
-            <Later>Nothing is final. Your Orbits, connections, and preferences are always yours to change.</Later>
+            <Later>Nothing is final. Your Sprites, connections, and preferences are always yours to change.</Later>
           </>}
         </div>
 
@@ -266,7 +266,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           {step === "welcome" && <div className="onboarding-empty-system">
             <Planet sun color="#edb56d" name="Solar" size={150} />
             <strong>Your Solar system starts empty.</strong>
-            <p>Create exactly the Orbits you want. You can build your first one during setup or do it later.</p>
+            <p>Create exactly the Sprites you want. You can build your first one during setup or do it later.</p>
           </div>}
           {step === "team" && <div className="onboarding-team-demo">
             <div className="onboarding-demo-question"><MessageCircle size={16} />“Help me make this launch a good one.”</div>
@@ -279,9 +279,9 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           {step === "desktop" && <div className={`onboarding-desktop-demo ${desktopDemoExpanded ? "expanded" : ""}`}>
             <div className="onboarding-desktop-menu"><span /><span /><span /><i>YOUR DESKTOP</i></div>
             {data.orbits[0] && <div className="onboarding-peek-demo"><Planet identity={data.orbits[0].id} color={data.orbits[0].color} name={data.orbits[0].name} size={38} /><span>A little help?</span></div>}
-            <button type="button" className="onboarding-sun-demo" aria-label={desktopDemoExpanded ? "Gather the example Orbits" : "Expand the example Orbits"} aria-expanded={desktopDemoExpanded} onClick={() => setDesktopDemoExpanded((current) => !current)}><Planet sun color="#edb56d" name="Solar" size={87} /></button>
+            <button type="button" className="onboarding-sun-demo" aria-label={desktopDemoExpanded ? "Gather the example Sprites" : "Expand the example Sprites"} aria-expanded={desktopDemoExpanded} onClick={() => setDesktopDemoExpanded((current) => !current)}><Planet sun color="#edb56d" name="Solar" size={87} /></button>
             {data.orbits.slice(0, 3).map((orbit, position) => <span className={`onboarding-desktop-orbit demo-orbit-${position}`} key={orbit.id}><Planet identity={orbit.id} color={orbit.color} name={orbit.name} size={53} /></span>)}
-            <span className="onboarding-desktop-hint">Your own Orbits appear here after you create them.</span>
+            <span className="onboarding-desktop-hint">Your own Sprites appear here after you create them.</span>
           </div>}
           {step === "connection" && <div className="onboarding-setup-card">
             <div className="onboarding-card-heading"><Globe2 size={19} /><h2>Model connections</h2></div>
@@ -301,21 +301,21 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
             {selectedOrbit ? <>
               <div className="onboarding-orbit-showcase" style={{ "--onboarding-orbit-color": selectedOrbit.color } as CSSProperties}><Planet identity={selectedOrbit.id} color={selectedOrbit.color} name={selectedOrbit.name} size={114} /></div>
               <h2>{selectedOrbit.name}</h2><p>{selectedOrbit.role}</p>
-              <label className="field"><span>Your Orbits</span><select aria-label="Choose an Orbit to edit" value={selectedOrbit.id} onChange={(event) => setSelectedOrbitId(event.target.value)}>{enabledOrbits.map((orbit) => <option value={orbit.id} key={orbit.id}>{orbit.name} · {orbit.role}</option>)}</select></label>
-              <button type="button" className="button button-primary" onClick={editFirstOrbit}><Settings2 size={15} />Shape this Orbit</button>
+              <label className="field"><span>Your Sprites</span><select aria-label="Choose a Sprite to edit" value={selectedOrbit.id} onChange={(event) => setSelectedOrbitId(event.target.value)}>{enabledOrbits.map((orbit) => <option value={orbit.id} key={orbit.id}>{orbit.name} · {orbit.role}</option>)}</select></label>
+              <button type="button" className="button button-primary" onClick={editFirstOrbit}><Settings2 size={15} />Shape this Sprite</button>
               <small>{selectedOrbit.providerId && selectedOrbit.model ? `Assigned model: ${selectedOrbit.model}` : "Choose a connection and model in their profile."}</small>
-            </> : <><Planet sun color="#edb56d" name="Solar" size={100} /><h2>A teammate of your own</h2><p>Choose who joins your Solar system. No Orbits are created for you.</p><button type="button" className="button button-primary" onClick={() => setEditor({ kind: "orbit" })}><Plus size={15} />{data.orbits.length ? "Create an Orbit" : "Create your first Orbit"}</button></>}
+            </> : <><Planet sun color="#edb56d" name="Solar" size={100} /><h2>A teammate of your own</h2><p>Choose who joins your Solar system. No Sprites are created for you.</p><button type="button" className="button button-primary" onClick={() => setEditor({ kind: "orbit" })}><Plus size={15} />{data.orbits.length ? "Create a Sprite" : "Create your first Sprite"}</button></>}
           </div>}
           {step === "workspace" && <div className="onboarding-setup-card">
             <div className="onboarding-card-heading"><Folder size={19} /><h2>Your projects</h2></div>
-            {data.projects.length ? <div className="onboarding-project-list">{data.projects.map((project) => <button type="button" key={project.id} onClick={() => setEditor({ kind: "project", value: project })}><Folder size={18} /><span><strong>{project.name}</strong><small>{project.directory}</small></span><ChevronRight size={14} /></button>)}</div> : <div className="onboarding-card-empty"><Folder size={30} /><h3>Pick a folder. Add some context.</h3><p>A project is optional. Every Orbit already has a private workspace.</p></div>}
+            {data.projects.length ? <div className="onboarding-project-list">{data.projects.map((project) => <button type="button" key={project.id} onClick={() => setEditor({ kind: "project", value: project })}><Folder size={18} /><span><strong>{project.name}</strong><small>{project.directory}</small></span><ChevronRight size={14} /></button>)}</div> : <div className="onboarding-card-empty"><Folder size={30} /><h3>Pick a folder. Add some context.</h3><p>A project is optional. Every Sprite already has a private workspace.</p></div>}
             <button type="button" className="button button-primary" onClick={() => setEditor({ kind: "project" })}><Plus size={15} />Add a project</button>
             {selectedOrbit && data.projects.length > 0 && <button type="button" className="button button-secondary" onClick={editFirstOrbit}><Users size={15} />Choose {selectedOrbit.name}’s access</button>}
           </div>}
           {step === "ready" && <div className="onboarding-setup-card onboarding-preferences">
             <div className="onboarding-ready-sun"><Planet sun color="#edb56d" name="Solar" size={104} /></div>
             <SettingSwitch title="Desktop companions" description="Keep the sun nearby while Solar runs." checked={data.settings.desktopEnabled !== false} disabled={busy} onChange={() => void updateSettings({ desktopEnabled: data.settings.desktopEnabled === false })} />
-            <SettingSwitch title="Orbit chimes" description="A short melody when a collapsed Orbit needs you." checked={data.settings.attentionSound !== false} disabled={busy} onChange={() => void updateSettings({ attentionSound: data.settings.attentionSound === false })} />
+            <SettingSwitch title="Sprite chimes" description="A short melody when a collapsed Sprite needs you." checked={data.settings.attentionSound !== false} disabled={busy} onChange={() => void updateSettings({ attentionSound: data.settings.attentionSound === false })} />
             <SettingSwitch title="Reduced motion" description="Use still illustrations and gentle transitions." checked={reducedMotion} disabled={busy} onChange={() => void updateSettings({ reducedMotion: !reducedMotion })} />
             <div className="onboarding-setting"><div><strong>Sound effects volume</strong><p>Quiet feedback for clicks and Solar’s introduction.</p></div><label className="onboarding-volume"><input type="range" min="0" max="0.5" step="0.01" aria-label="Sound effects volume" disabled={busy} value={Number(data.settings.soundEffectsVolume ?? 0.25)} onChange={(event) => void updateSettings({ soundEffectsVolume: Number(event.target.value) })} /><output>{Math.round(Number(data.settings.soundEffectsVolume ?? 0.25) * 200)}%</output></label></div>
             <p className="onboarding-card-footnote">You’ll find all of these again in Settings.</p>

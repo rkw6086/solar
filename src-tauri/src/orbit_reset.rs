@@ -17,7 +17,7 @@ impl Drop for ResetGuard<'_> {
 impl Engine {
     pub async fn reset_orbit_data(&self, orbit_id: &str, confirmed: bool) -> Result<(), String> {
         if !confirmed {
-            return Err("Confirm clearing this Orbit's conversations and memory first.".into());
+            return Err("Confirm clearing this Sprite's conversations and memory first.".into());
         }
         let _reset = self.reset_operations.read().await;
         self.ensure_running()?;
@@ -28,9 +28,9 @@ impl Engine {
             let mut resetting = self
                 .resetting_orbits
                 .lock()
-                .map_err(|_| "Orbit reset state unavailable")?;
+                .map_err(|_| "Sprite reset state unavailable")?;
             if !resetting.insert(orbit_id.to_owned()) {
-                return Err("This Orbit is already clearing its saved data.".into());
+                return Err("This Sprite is already clearing its saved data.".into());
             }
         }
         let _guard = ResetGuard {
@@ -59,17 +59,17 @@ impl Engine {
             }
         })
         .await
-        .map_err(|_| "The Orbit is still stopping. Try again in a moment.")??;
+        .map_err(|_| "The Sprite is still stopping. Try again in a moment.")??;
         let lock = self
             .orbit_locks
             .lock()
-            .map_err(|_| "Orbit lock unavailable")?
+            .map_err(|_| "Sprite lock unavailable")?
             .entry(orbit_id.into())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _orbit = tokio::time::timeout(Duration::from_secs(10), lock.lock_owned())
             .await
-            .map_err(|_| "The Orbit is busy. Stop its work and try again.")?;
+            .map_err(|_| "The Sprite is busy. Stop its work and try again.")?;
         self.ensure_running()?;
         self.orbit(orbit_id)?;
         self.store.reset_orbit_data(orbit_id)?;
@@ -88,7 +88,7 @@ pub(crate) async fn reset_orbit(
     confirmed: bool,
 ) -> Result<(), String> {
     if window.label() != "main" && window.label() != format!("chat-{orbit_id}") {
-        return Err("Open this Orbit's chat or Solar settings to clear its data.".into());
+        return Err("Open this Sprite's chat or Solar settings to clear its data.".into());
     }
     engine.reset_orbit_data(&orbit_id, confirmed).await
 }

@@ -11,7 +11,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         definition(
             "files_list",
-            "List a directory inside this Orbit's workspace or an explicitly granted directory.",
+            "List a directory inside this Sprite's workspace or an explicitly granted directory.",
             json!({"path":{"type":"string"}}),
             &[],
         ),
@@ -227,7 +227,7 @@ fn resolve_scope(input: &str, context: &ToolContext) -> Result<(PathBuf, PathBuf
             return Ok((root, relative));
         }
     }
-    Err("Path is outside this Orbit's approved directories".into())
+    Err("Path is outside this Sprite's approved directories".into())
 }
 
 fn normalize(path: &Path) -> Result<PathBuf, String> {

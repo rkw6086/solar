@@ -20,7 +20,7 @@ test("personality suggestions combine readable temperament, approach, and a quir
   assert(calm.length < 8000);
 });
 
-test("faces stay stable and an eighteen-Orbit team has varied eyes and smiles", () => {
+test("faces stay stable and an eighteen-Sprite team has varied eyes and smiles", () => {
   const names = Array.from({length: 18}, (_, i) => `orbit-${i}`);
   const looks = names.map((name) => orbitAppearance(name, "#abcdef"));
   assert.deepEqual(looks, names.map((name) => orbitAppearance(name, "#abcdef")));

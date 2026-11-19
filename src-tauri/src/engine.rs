@@ -239,7 +239,7 @@ impl Engine {
         let mut writes = self
             .orbit_write
             .lock()
-            .map_err(|_| "Orbit storage unavailable")?;
+            .map_err(|_| "Sprite storage unavailable")?;
         let saved = self.save_orbit_inner(orbit)?;
         *writes.entry(saved.id.clone()).or_default() += 1;
         Ok(saved)
@@ -253,12 +253,12 @@ impl Engine {
         let mut writes = self
             .orbit_write
             .lock()
-            .map_err(|_| "Orbit storage unavailable")?;
+            .map_err(|_| "Sprite storage unavailable")?;
         if token.is_cancelled() {
-            return Err("Orbit creation cancelled".into());
+            return Err("Sprite creation cancelled".into());
         }
         if self.store.get::<Orbit>("orbits", &orbit.id)?.is_some() {
-            return Err("This Orbit already exists. Open its profile to edit it.".into());
+            return Err("This Sprite already exists. Open its profile to edit it.".into());
         }
         let saved = self.save_orbit_inner(orbit)?;
         *writes.entry(saved.id.clone()).or_default() += 1;
@@ -269,7 +269,7 @@ impl Engine {
         let writes = self
             .orbit_write
             .lock()
-            .map_err(|_| "Orbit storage unavailable")?;
+            .map_err(|_| "Sprite storage unavailable")?;
         Ok((self.orbit(orbit_id)?, *writes.get(orbit_id).unwrap_or(&0)))
     }
 
@@ -285,10 +285,10 @@ impl Engine {
         let mut writes = self
             .orbit_write
             .lock()
-            .map_err(|_| "Orbit storage unavailable")?;
+            .map_err(|_| "Sprite storage unavailable")?;
         self.ensure_running()?;
         if token.is_cancelled() {
-            return Err("Orbit setup cancelled".into());
+            return Err("Sprite setup cancelled".into());
         }
         let current = self.orbit(&original.id)?;
         if orbit.id != original.id
@@ -296,7 +296,7 @@ impl Engine {
             || serde_json::to_value(&current).map_err(|e| e.to_string())?
                 != serde_json::to_value(original).map_err(|e| e.to_string())?
         {
-            return Err("This Orbit changed while its instructions were being updated. Reopen its settings and try again.".into());
+            return Err("This Sprite changed while its instructions were being updated. Reopen its settings and try again.".into());
         }
         let saved = self.save_orbit_inner(orbit)?;
         *writes.entry(saved.id.clone()).or_default() += 1;
@@ -312,10 +312,10 @@ impl Engine {
         validate_text(&orbit.name, "Name", 100)?;
         validate_text(&orbit.role, "Role", 300)?;
         if orbit.tasks.len() > 32_000 {
-            return Err("Orbit tasks are too long".into());
+            return Err("Sprite tasks are too long".into());
         }
         if orbit.instructions.len() > 32_000 || orbit.personality.len() > 8_000 {
-            return Err("Orbit instructions are too long".into());
+            return Err("Sprite instructions are too long".into());
         }
         if !["ask", "workspace", "trusted"].contains(&orbit.autonomy.as_str()) {
             return Err("Unknown autonomy setting".into());
@@ -359,7 +359,7 @@ impl Engine {
         let mut writes = self
             .orbit_write
             .lock()
-            .map_err(|_| "Orbit storage unavailable")?;
+            .map_err(|_| "Sprite storage unavailable")?;
         self.orbit(orbit_id)?;
         for task in self.store.list::<Task>("tasks")? {
             if task.orbit_id == orbit_id {
@@ -394,7 +394,7 @@ impl Engine {
     pub fn orbit(&self, orbit_id: &str) -> Result<Orbit, String> {
         self.store
             .get("orbits", orbit_id)?
-            .ok_or_else(|| "Orbit no longer exists".into())
+            .ok_or_else(|| "Sprite no longer exists".into())
     }
     pub fn provider(&self, provider_id: &str) -> Result<ProviderProfile, String> {
         self.store
@@ -537,7 +537,7 @@ impl Engine {
             .map_err(|_| "Conversation lock unavailable")?;
         let project_id = project_id.filter(|s| !s.is_empty());
         if orbit_ids.is_empty() || !orbit_ids.contains(&lead_orbit_id) {
-            return Err("Choose at least one Orbit and a lead from the team".into());
+            return Err("Choose at least one Sprite and a lead from the team".into());
         }
         for orbit_id in &orbit_ids {
             let orbit = self.orbit(orbit_id)?;
@@ -641,7 +641,7 @@ impl Engine {
         memory.orbit_ids = memory.orbit_ids();
         memory.project_ids = memory.project_ids();
         if !memory.orbit_ids.is_empty() && !memory.project_ids.is_empty() {
-            return Err("Choose Orbit sharing or project sharing for a memory".into());
+            return Err("Choose Sprite sharing or project sharing for a memory".into());
         }
         for owner in &memory.orbit_ids {
             self.orbit(owner)?;
@@ -681,12 +681,12 @@ impl Engine {
 
     pub fn import_orbit(&self, profile_json: &str) -> Result<Orbit, String> {
         if profile_json.len() > 64_000 {
-            return Err("Orbit profile is too large".into());
+            return Err("Sprite profile is too large".into());
         }
         let mut export: OrbitExport =
             serde_json::from_str(profile_json).map_err(|e| e.to_string())?;
         if export.schema_version != 1 {
-            return Err("Unsupported Orbit profile version".into());
+            return Err("Unsupported Sprite profile version".into());
         }
         export.orbit.id = id();
         export.orbit.provider_id.clear();
@@ -803,7 +803,7 @@ impl Engine {
                 .project_ids
                 .contains(project_id)
             {
-                return Err("Grant the Orbit access to this project first".into());
+                return Err("Grant the Sprite access to this project first".into());
             }
         }
         // These fields belong to the scheduler, not an editor or agent. Keep

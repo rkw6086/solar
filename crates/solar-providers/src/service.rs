@@ -677,7 +677,7 @@ impl ProviderService {
         model: &str,
     ) -> Result<Arc<dyn AgentRuntime>, String> {
         if model.trim().is_empty() {
-            return Err("Choose a model for this Orbit.".into());
+            return Err("Choose a model for this Sprite.".into());
         }
         match profile.kind {
             ProviderKind::OpenAi | ProviderKind::LiteLlm => {

@@ -218,7 +218,7 @@ export const tools = [
   {
     id: "collaboration",
     name: "Collaboration",
-    description: "Request help from other Orbits",
+    description: "Request help from other Sprites",
   },
 ];
 

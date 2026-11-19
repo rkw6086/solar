@@ -7,15 +7,15 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![definition(
         "shell_run",
-        "Run a command in the user's default shell with this Orbit's own interactive/login startup files and private CLI configuration. User-level credentials and SSH agents are not inherited. When authentication or profile setup is missing, request the specific needed files with pull_from_user_home (requires explicit user approval), or ask the user to use this Orbit's CLI sign-ins settings. Optional workingDirectory must be the Orbit workspace or an assigned project folder. Unassigned registered project folders are excluded from the shell, its startup files, and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
-        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Orbit workspace. Defaults to the Orbit workspace."},"shell":{"type":"string","description":"Optional absolute shell executable path. Omit to use the user's configured default shell; only override when a task specifically requires another shell."},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
+        "Run a command in the user's default shell with this Sprite's own interactive/login startup files and private CLI configuration. User-level credentials and SSH agents are not inherited. When authentication or profile setup is missing, request the specific needed files with pull_from_user_home (requires explicit user approval), or ask the user to use this Sprite's CLI sign-ins settings. Optional workingDirectory must be the Sprite workspace or an assigned project folder. Unassigned registered project folders are excluded from the shell, its startup files, and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
+        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Sprite workspace. Defaults to the Sprite workspace."},"shell":{"type":"string","description":"Optional absolute shell executable path. Omit to use the user's configured default shell; only override when a task specifically requires another shell."},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
         &["command"],
     )]
 }
 
 pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, String> {
     if !context.allow_host_execution {
-        return Err("Shell requires an explicit host-execution grant for this Orbit".into());
+        return Err("Shell requires an explicit host-execution grant for this Sprite".into());
     }
     let explicit = args
         .get("shell")
@@ -39,7 +39,7 @@ async fn execute_with_session(
     session: crate::shell_session::ShellSession,
 ) -> Result<ToolOutput, String> {
     if !context.allow_host_execution {
-        return Err("Shell requires an explicit host-execution grant for this Orbit".into());
+        return Err("Shell requires an explicit host-execution grant for this Sprite".into());
     }
     let command = required_str(args, "command")?;
     let timeout = Duration::from_secs(
@@ -66,7 +66,7 @@ async fn execute_with_session(
             .any(|root| std::fs::canonicalize(root).is_ok_and(|root| candidate.starts_with(root)));
         if !allowed || !candidate.is_dir() {
             return Err(
-                "Shell working directory must be inside the Orbit workspace or an assigned project"
+                "Shell working directory must be inside the Sprite workspace or an assigned project"
                     .into(),
             );
         }
@@ -456,7 +456,7 @@ mod tests {
         let bin = root.path().join("installed-cli");
         std::fs::create_dir(&bin).unwrap();
         let glab = bin.join("glab");
-        std::fs::write(&glab, "#!/bin/sh\n[ -z \"$GITLAB_TOKEN$SSH_AUTH_SOCK\" ] || exit 41\n[ \"$GLAB_USE_KEYRING\" = false ] || exit 42\n[ -f \"$GLAB_CONFIG_DIR/config.yml\" ] || exit 40\n[ \"$(cat \"$GLAB_CONFIG_DIR/config.yml\")\" = orbit-a-login ] || exit 43\nprintf 'Authenticated Orbit A CLI\\n'\n").unwrap();
+        std::fs::write(&glab, "#!/bin/sh\n[ -z \"$GITLAB_TOKEN$SSH_AUTH_SOCK\" ] || exit 41\n[ \"$GLAB_USE_KEYRING\" = false ] || exit 42\n[ -f \"$GLAB_CONFIG_DIR/config.yml\" ] || exit 40\n[ \"$(cat \"$GLAB_CONFIG_DIR/config.yml\")\" = orbit-a-login ] || exit 43\nprintf 'Authenticated Sprite A CLI\\n'\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -531,7 +531,7 @@ mod tests {
         let value: Value = serde_json::from_str(&logged_in.content).unwrap();
         assert_eq!(value["exitCode"], 0, "{value}");
         let expected = format!(
-            "Authenticated Orbit A CLI\n{}\n{}\nprivate\n",
+            "Authenticated Sprite A CLI\n{}\n{}\nprivate\n",
             contexts[0].workspace.display(),
             contexts[0].workspace.display()
         );

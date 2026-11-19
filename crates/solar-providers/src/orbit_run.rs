@@ -69,9 +69,9 @@ impl RigOrbitRun {
         max_turns: usize,
     ) -> Result<Self, String> {
         let mut messages = solar_messages_to_rig(history).map_err(|e| e.to_string())?;
-        let prompt = messages.pop().ok_or("An Orbit run needs a user message")?;
+        let prompt = messages.pop().ok_or("A Sprite run needs a user message")?;
         if !matches!(prompt, Message::User { .. }) {
-            return Err("An Orbit run must begin with a user message".into());
+            return Err("A Sprite run must begin with a user message".into());
         }
         Ok(Self {
             format_version: FORMAT_VERSION,
@@ -179,7 +179,7 @@ impl RigOrbitRun {
     pub fn accept_model_turn(&mut self, turn: CompletedModelTurn) -> Result<(), String> {
         self.ensure_active()?;
         if !self.awaiting_model {
-            return Err("No Orbit model call is awaiting a response".into());
+            return Err("No Sprite model call is awaiting a response".into());
         }
         // Reject ambiguous correlation atomically before changing Rig history.
         let mut ids = BTreeSet::new();
@@ -276,7 +276,7 @@ impl RigOrbitRun {
     pub fn commit_tool_batch(&mut self) -> Result<(), String> {
         self.ensure_active()?;
         if self.effects.is_empty() {
-            return Err("No Orbit tool batch is awaiting results".into());
+            return Err("No Sprite tool batch is awaiting results".into());
         }
         let results = self
             .effects
@@ -288,7 +288,7 @@ impl RigOrbitRun {
                 let result = effect
                     .result
                     .clone()
-                    .ok_or("An Orbit tool call is still awaiting its result")?;
+                    .ok_or("A Sprite tool call is still awaiting its result")?;
                 solar_tool_result_to_rig(result).map_err(|e| e.to_string())
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -341,7 +341,7 @@ impl RigOrbitRun {
         self.effects
             .iter_mut()
             .find(|effect| effect.call.id == call_id)
-            .ok_or_else(|| "Tool result does not match a pending Orbit call".into())
+            .ok_or_else(|| "Tool result does not match a pending Sprite call".into())
     }
 
     fn ensure_format(&self) -> Result<(), String> {

@@ -11,31 +11,31 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ),
         definition(
             "screen_capture",
-            "Capture the screen/window the user is currently sharing with this Orbit. The user must start sharing explicitly.",
+            "Capture the screen/window the user is currently sharing with this Sprite. The user must start sharing explicitly.",
             json!({}),
             &[],
         ),
         definition(
             "computer_inspect",
-            "Read the accessibility hierarchy of the foreground macOS application during this Orbit's active shared-screen session.",
+            "Read the accessibility hierarchy of the foreground macOS application during this Sprite's active shared-screen session.",
             json!({}),
             &[],
         ),
         definition(
             "computer_click",
-            "Click a global desktop coordinate during this Orbit's user-started shared-screen session.",
+            "Click a global desktop coordinate during this Sprite's user-started shared-screen session.",
             json!({"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"]}}),
             &["x", "y"],
         ),
         definition(
             "computer_type",
-            "Type text into the focused macOS control during this Orbit's user-started screen session.",
+            "Type text into the focused macOS control during this Sprite's user-started screen session.",
             json!({"text":{"type":"string"}}),
             &["text"],
         ),
         definition(
             "computer_key",
-            "Press a keyboard shortcut during this Orbit's shared-screen session. Supported keys include Return, Tab, Escape, arrows, and letter shortcuts such as CMD+A.",
+            "Press a keyboard shortcut during this Sprite's shared-screen session. Supported keys include Return, Tab, Escape, arrows, and letter shortcuts such as CMD+A.",
             json!({"key":{"type":"string"}}),
             &["key"],
         ),
@@ -112,7 +112,7 @@ impl NativeBridge {
     #[cfg(target_os = "macos")]
     pub async fn start_share(&mut self, orbit_id: &str) -> Result<ToolOutput, String> {
         if self.owner.as_deref().is_some_and(|owner| owner != orbit_id) {
-            return Err("Another Orbit owns the active screen-sharing session. Stop it before sharing with this Orbit.".into());
+            return Err("Another Sprite owns the active screen-sharing session. Stop it before sharing with this Sprite.".into());
         }
         let result = self.request("share_start", json!({})).await?;
         self.owner = Some(orbit_id.into());
@@ -122,7 +122,7 @@ impl NativeBridge {
     #[cfg(target_os = "macos")]
     pub async fn stop_share(&mut self, orbit_id: &str) -> Result<(), String> {
         if self.owner.as_deref().is_some_and(|owner| owner != orbit_id) {
-            return Err("Screen sharing belongs to another Orbit".into());
+            return Err("Screen sharing belongs to another Sprite".into());
         }
         self.owner = None;
         if self.child.is_some() {
@@ -141,7 +141,7 @@ impl NativeBridge {
         if name != "native_permissions"
             && (!context.screen_share_allowed || self.owner.as_deref() != Some(&context.orbit_id))
         {
-            return Err("The user must explicitly share a screen with this Orbit before native observation or control".into());
+            return Err("The user must explicitly share a screen with this Sprite before native observation or control".into());
         }
         let action = match name {
             "native_permissions" => "permissions",

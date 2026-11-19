@@ -91,12 +91,12 @@ function failureSummary(activity: ToolActivity): string | undefined {
   if (activity.status === "interrupted") return "This action was interrupted. Its result has not been confirmed.";
   if (activity.status !== "failed") return undefined;
   const text = activity.output.toLowerCase();
-  if (/timed? out|timeout/.test(text)) return "The tool took too long to respond. The Orbit can retry.";
+  if (/timed? out|timeout/.test(text)) return "The tool took too long to respond. The Sprite can retry.";
   if (/not found|no such file/.test(text)) return "The requested file or resource couldn’t be found.";
-  if (/permission|not allowed|denied/.test(text)) return "Access was denied. Check the Orbit’s access or permissions.";
+  if (/permission|not allowed|denied/.test(text)) return "Access was denied. Check the Sprite’s access or permissions.";
   if (/unauthori[sz]ed|authentication|api key|401/.test(text)) return "The service needs a valid connection. Check its sign-in settings.";
   if (/connection|network|dns|unreachable/.test(text)) return "The service couldn’t be reached. Check the connection and try again.";
-  return "This tool couldn’t finish. The Orbit can try another approach.";
+  return "This tool couldn’t finish. The Sprite can try another approach.";
 }
 
 /** Deliberately projects useful labels from tool data instead of dumping payloads. */
@@ -131,24 +131,27 @@ export function presentTool(message: Message, servers: McpServer[] = []): ToolPr
     return { ...base, category: "web", title: titles[name] || "Browser activity", summary: query ? `“${query}”` : [title, source].filter(Boolean).join(" · ") || (name === "browser_type" ? "Entering text in the selected field" : "Solar browser") };
   }
   if (name.startsWith("files_")) {
-    const path = compact(args.path || result.path, 300) || "Orbit workspace";
+    const path = compact(args.path || result.path, 300) || "Sprite workspace";
     const titles: Record<string, string> = { files_read: "Read a file", files_write: "Write a file", files_list: "Browse files", files_search: "Search files" };
     const count = Array.isArray(result.matches) ? result.matches.length : Array.isArray(result.entries) ? result.entries.length : undefined;
     return { ...base, category: "files", title: titles[name] || "File activity", summary: args.query ? `“${compact(args.query)}” · ${path}` : path, outcome: count !== undefined && activity.status === "completed" ? `${count} ${name === "files_search" ? "matches" : "items"}` : base.outcome };
   }
   if (name === "pull_from_user_home") {
     const count = Array.isArray(result.copied) ? result.copied.length : Array.isArray(args.files) ? args.files.length : undefined;
-    return { ...base, category: "files", title: "Import into Orbit home", summary: count === undefined ? "Copy approved home files and their dependencies" : `${count} ${count === 1 ? "file" : "files"} · private copies for this Orbit` };
+    return { ...base, category: "files", title: "Import into Sprite home", summary: count === undefined ? "Copy approved home files and their dependencies" : `${count} ${count === 1 ? "file" : "files"} · private copies for this Sprite` };
   }
-  if (name.startsWith("memory_")) return { ...base, category: "memory", title: name === "memory_save" ? "Save a memory" : "Search memories", summary: args.query ? `“${compact(args.query)}”` : args.shared ? "Shared project memory" : "Private Orbit memory" };
+  if (name.startsWith("memory_")) return { ...base, category: "memory", title: name === "memory_save" ? "Save a memory" : "Search memories", summary: args.query ? `“${compact(args.query)}”` : args.shared ? "Shared project memory" : "Private Sprite memory" };
   if (name === "orbit_delegate") return { ...base, category: "team", title: "Ask a teammate", summary: compact(args.task, 240) || "Delegating a focused task" };
-  if (name === "orbit_list") return { ...base, category: "team", title: "Find teammates", summary: Array.isArray(parse(activity.output)) ? `${(parse(activity.output) as unknown[]).length} Orbits available` : "Check the Solar team" };
+  if (name === "orbit_list") {
+    const teammates = parse(activity.output);
+    return { ...base, category: "team", title: "Find teammates", summary: Array.isArray(teammates) ? `${teammates.length} ${teammates.length === 1 ? "Sprite" : "Sprites"} available` : "Check the Solar team" };
+  }
   if (name === "routine_list") {
     const parsed = parse(activity.output);
     const routines = Array.isArray(parsed) ? parsed : Array.isArray(result.routines) ? result.routines : undefined;
     const count = routines?.length;
     const enabled = routines?.filter((routine) => record(routine).enabled === true).length;
-    return { ...base, category: "routine", title: "View routines", summary: count !== undefined && activity.status === "completed" ? `${count} ${count === 1 ? "routine" : "routines"} · ${enabled} enabled` : "View this Orbit’s saved routines" };
+    return { ...base, category: "routine", title: "View routines", summary: count !== undefined && activity.status === "completed" ? `${count} ${count === 1 ? "routine" : "routines"} · ${enabled} enabled` : "View this Sprite’s saved routines" };
   }
   const routineTitles: Record<string, [string, string]> = {
     routine_create: ["Create routine", "Set up a recurring task"],

@@ -394,7 +394,7 @@ export function StarBirth({ reducedMotion, onComplete, onPhaseChange, onSoundCue
         <h1>Solar</h1>
         <p>Your universe of helpful minds.</p>
       </div>
-      <p className="star-birth-description">White ripples gather into a new star. Meet Solar, your team of helpful Orbits.</p>
+      <p className="star-birth-description">White ripples gather into a new star. Meet Solar, your team of helpful Sprites.</p>
       <button className="star-birth-skip" onClick={finish} type="button">Skip opening <span aria-hidden="true">→</span></button>
     </section>
   );

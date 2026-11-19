@@ -4,12 +4,12 @@ import { orbitPosition, orbitTracks, ORBIT_PERIOD } from "./solarSystemMotion.ts
 
 const roster = (count) => Array.from({ length: count }, (_, index) => ({ id: `orbit-${String(index).padStart(3, '0')}` }));
 
-test("empty systems contain no invented Orbits", () => assert.deepEqual(orbitTracks([]), []));
+test("empty systems contain no invented Sprites", () => assert.deepEqual(orbitTracks([]), []));
 test("tracks are deterministic regardless of input order", () => {
   const orbits = roster(18);
   assert.deepEqual(orbitTracks(orbits), orbitTracks([...orbits].reverse()));
 });
-test("eighteen Orbits share two resonant lanes with stable separation", () => {
+test("eighteen Sprites share two resonant lanes with stable separation", () => {
   const tracks = orbitTracks(roster(18));
   assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD).length, 6);
   assert.equal(tracks.filter(t => t.period === ORBIT_PERIOD * 2).length, 12);
@@ -42,7 +42,7 @@ test("positions remain bounded after resize", () => {
   }
 });
 
-test("twenty and forty Orbits use distinct, proportionate lanes with room for their smaller characters", () => {
+test("twenty and forty Sprites use distinct, proportionate lanes with room for their smaller characters", () => {
   for (const count of [20, 40]) {
     const tracks = orbitTracks(roster(count));
     const minimum = count > 36 ? 32 : 36;

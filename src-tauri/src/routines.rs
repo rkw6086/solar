@@ -245,7 +245,7 @@ impl Engine {
     fn validate_routine_target(&self, routine: &Routine) -> Result<(), String> {
         let orbit = self.orbit(&routine.orbit_id)?;
         if !orbit.enabled {
-            return Err("This Orbit is disabled".into());
+            return Err("This Sprite is disabled".into());
         }
         if routine.trigger == "folder" && routine.project_id.is_none() {
             return Err("Folder routines need a project".into());
@@ -253,7 +253,7 @@ impl Engine {
         if let Some(project_id) = &routine.project_id {
             self.project(project_id)?;
             if !orbit.project_ids.contains(project_id) {
-                return Err("Grant the Orbit access to this project first".into());
+                return Err("Grant the Sprite access to this project first".into());
             }
         }
         Ok(())

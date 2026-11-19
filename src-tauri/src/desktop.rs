@@ -110,7 +110,7 @@ fn chat_origin(
     let id = window
         .label()
         .strip_prefix("chat-")
-        .ok_or("This is not an Orbit chat")?;
+        .ok_or("This is not a Sprite chat")?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
     let chat = window.outer_position().map_err(|e| e.to_string())?;
     let planet = app.get_webview_window(&format!("orbit-{id}"));
@@ -407,10 +407,10 @@ fn set_desktop_expanded(
 ) -> Result<(), String> {
     let settings = engine.settings()?;
     if !settings.onboarding_complete {
-        return Err("Finish or skip the welcome tour before opening desktop Orbits".into());
+        return Err("Finish or skip the welcome tour before opening desktop Sprites".into());
     }
     if expanded && !settings.desktop_enabled {
-        return Err("Enable desktop companions in Settings before opening desktop Orbits".into());
+        return Err("Enable desktop companions in Settings before opening desktop Sprites".into());
     }
     if expanded {
         COMPANIONS_HIDDEN.store(false, Ordering::SeqCst);
@@ -1070,7 +1070,7 @@ pub fn run() {
                 .collect();
             TrayIconBuilder::new()
                 .icon(tauri::image::Image::new_owned(pixels, 32, 32))
-                .tooltip("Solar — your Orbits")
+                .tooltip("Solar — your Sprites")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {

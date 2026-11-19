@@ -117,7 +117,7 @@ export function OrbitForm({
   const [orbit, setOrbit] = useState<Orbit>(() => existing ? {
     ...existing, tasks: existing.tasks ?? "",
   } : {
-    id: id(), name: "", role: "Personal Orbit", personality: "",
+    id: id(), name: "", role: "Personal Sprite", personality: "",
     tasks: "", instructions: "", color: colors[data.orbits.length % colors.length],
     model: "", providerId: "", autonomy: "ask", toolGrants: ["*"],
     projectIds: [], enabled: true,
@@ -148,7 +148,7 @@ export function OrbitForm({
     event.preventDefault();
     if (busy) return;
     if (needsGeneration && (!orbit.providerId || !orbit.model)) {
-      setError("Choose a model for your Orbit.");
+      setError("Choose a model for your Sprite.");
       return;
     }
     setBusy(true);
@@ -170,12 +170,12 @@ export function OrbitForm({
     }
   }
   return (
-    <><Modal title={existing ? `${existing.name}’s profile` : "Create your Orbit"}
+    <><Modal title={existing ? `${existing.name}’s profile` : "Create your Sprite"}
       subtitle={existing ? "Shape their personality, tasks, and model." : "Tell us who they are and what you’d like their help with."}
       onClose={close} wide dismissible={!busy}>
       <form onSubmit={(event) => void submit(event)} className="simple-orbit-form" inert={busy}>
         <div className="simple-orbit-heading">
-          <Planet identity={orbit.id} name={orbit.name || "Your Orbit"} color={orbit.color} size={64} />
+          <Planet identity={orbit.id} name={orbit.name || "Your Sprite"} color={orbit.color} size={64} />
           <div><strong>{orbit.name || "Your next teammate"}</strong><p>{existing ? "All tools available" : "Solar builds their instructions automatically."}</p></div>
         </div>
         <div className="form-body">
@@ -199,7 +199,7 @@ export function OrbitForm({
           <ModelPicker providers={data.providers} providerId={orbit.providerId} model={orbit.model}
             required={needsGeneration} disabled={busy} onChange={(selection) => setOrbit((current) => ({ ...current, ...selection }))} />
           {needsGeneration && !data.providers.some((provider) => provider.models.length) && (
-            <p className="simple-orbit-note">Add a connection and discover its models in Connections before {existing ? "updating" : "creating"} an Orbit.</p>
+            <p className="simple-orbit-note">Add a connection and discover its models in Connections before {existing ? "updating" : "creating"} a Sprite.</p>
           )}
           {existing ? <>
             <label className="field"><span>Role</span><input required maxLength={300} disabled={busy}
@@ -215,10 +215,10 @@ export function OrbitForm({
                 checked={orbit.projectIds.includes(project.id)} onChange={(event) => update("projectIds", event.target.checked
                   ? [...orbit.projectIds, project.id] : orbit.projectIds.filter((value) => value !== project.id))} /><span>{project.name}</span></label>)}
             </fieldset>}
-          </> : <p className="simple-orbit-note">Your selected model will turn these details into working instructions. Your Orbit starts with all tools available and asks before acting. You can change its settings any time.</p>}
+          </> : <p className="simple-orbit-note">Your selected model will turn these details into working instructions. Your Sprite starts with all tools available and asks before acting. You can change its settings any time.</p>}
           {busy && !needsGeneration && <p className="simple-orbit-progress" role="status"><LoaderCircle size={16} className="spin" />Saving settings…</p>}
         </div>
-        <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Orbit" : "Create Orbit"} />
+        <FormFooter busy={busy} error={error} onClose={close} label={existing ? "Save Sprite" : "Create Sprite"} />
       </form>
     </Modal>{busy && needsGeneration && <OrbitProgress identity={orbit.id} name={orbit.name.trim()} color={orbit.color} creating={!existing} />}</>
   );
@@ -261,7 +261,7 @@ export function ProviderForm({
   return (
     <Modal
       title={existing ? "Edit connection" : "Connect a model"}
-      subtitle="Choose where your Orbits think. Their work stays organized here."
+      subtitle="Choose where your Sprites think. Their work stays organized here."
       onClose={onClose}
     >
       <form
@@ -428,7 +428,7 @@ export function GroupForm({
   const status = useSubmit(() => {});
   return (
     <Modal
-      title="Bring your Orbits together"
+      title="Bring your Sprites together"
       subtitle="One conversation. Different perspectives. A shared result."
       onClose={onClose}
     >
@@ -437,7 +437,7 @@ export function GroupForm({
           event.preventDefault();
           void status.submit(async () => {
             if (!participants.length)
-              throw new Error("Choose at least one Orbit.");
+              throw new Error("Choose at least one Sprite.");
             const conversation = await api<Conversation>(
               "create_conversation",
               {
@@ -461,7 +461,7 @@ export function GroupForm({
             />
           </label>
           <fieldset className="participant-options">
-            <legend>Invite Orbits</legend>
+            <legend>Invite Sprites</legend>
             {data.orbits
               .filter((orbit) => orbit.enabled)
               .map((orbit) => (
@@ -683,10 +683,10 @@ export function MemoryForm({ data, existing, onClose, onSaved }: {
     if (scope === "orbit") setOrbitIds(next); else setProjectIds(next);
   }
   return <Modal title={existing ? "Edit memory" : "Something worth remembering"}
-    subtitle="Share a fact with the whole Solar System, selected Orbits, or selected projects."
+    subtitle="Share a fact with the whole Solar System, selected Sprites, or selected projects."
     onClose={onClose} dismissible={!status.busy}>
     <form onSubmit={event => { event.preventDefault(); void status.submit(async () => {
-      if (scope !== "system" && !selected.length) throw new Error(`Choose at least one ${scope === "orbit" ? "Orbit" : "project"}.`);
+      if (scope !== "system" && !selected.length) throw new Error(`Choose at least one ${scope === "orbit" ? "Sprite" : "project"}.`);
       return api("save_memory", { memory: { id: existing?.id ?? id(), content,
         createdAt: existing?.createdAt ?? new Date().toISOString(),
         orbitIds: scope === "orbit" ? orbitIds : [], projectIds: scope === "project" ? projectIds : [],
@@ -694,11 +694,11 @@ export function MemoryForm({ data, existing, onClose, onSaved }: {
     }); }}>
       <div className="form-body">
         <label className="field"><span>Share with</span><select aria-label="Share with" value={scope} onChange={event => setScope(event.target.value as typeof scope)}>
-          <option value="system">Entire Solar System</option><option value="orbit">Selected Orbits</option><option value="project">Selected projects</option>
-        </select><small>{scope === "system" ? "Every Orbit can see and update this memory." : scope === "orbit" ? "Choose one or more Orbits that should share this memory." : "Orbits can use this memory when they have access to one of these projects."}</small></label>
-        {scope !== "system" && <fieldset className="memory-share-options"><legend>{scope === "orbit" ? "Orbits" : "Projects"}</legend>
+          <option value="system">Entire Solar System</option><option value="orbit">Selected Sprites</option><option value="project">Selected projects</option>
+        </select><small>{scope === "system" ? "Every Sprite can see and update this memory." : scope === "orbit" ? "Choose one or more Sprites that should share this memory." : "Sprites can use this memory when they have access to one of these projects."}</small></label>
+        {scope !== "system" && <fieldset className="memory-share-options"><legend>{scope === "orbit" ? "Sprites" : "Projects"}</legend>
           {choices.map(choice => <label className="check-row" key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={() => toggle(choice.id)} /><span>{choice.name}</span></label>)}
-          {!choices.length && <p className="subtle-label">Add {scope === "orbit" ? "an Orbit" : "a project"} first, or share with the entire Solar System.</p>}
+          {!choices.length && <p className="subtle-label">Add {scope === "orbit" ? "a Sprite" : "a project"} first, or share with the entire Solar System.</p>}
         </fieldset>}
         <label className="field"><span>Memory</span><textarea required maxLength={16000} rows={6} value={content} onChange={event => setContent(event.target.value)} placeholder="Preferences, decisions, context, or a useful fact." /></label>
       </div><FormFooter {...status} label="Save memory" onClose={onClose} />
@@ -711,8 +711,8 @@ export function RoutineForm({ existing, onClose, onSaved }: {
 }) {
   const [routine, setRoutine] = useState<Routine | undefined>(existing);
   const status = useSubmit(onSaved);
-  if (!routine) return <Modal title="Ask an Orbit" onClose={onClose}><div className="form-body">Describe the routine in chat and your Orbit will set it up.</div></Modal>;
-  return <Modal title="Routine schedule" subtitle="Ask the Orbit in chat to change what this routine does." onClose={onClose} dismissible={!status.busy}>
+  if (!routine) return <Modal title="Ask a Sprite" onClose={onClose}><div className="form-body">Describe the routine in chat and your Sprite will set it up.</div></Modal>;
+  return <Modal title="Routine schedule" subtitle="Ask the Sprite in chat to change what this routine does." onClose={onClose} dismissible={!status.busy}>
     <form onSubmit={event => { event.preventDefault(); void status.submit(() => api("save_routine", { routine })); }}>
       <div className="form-body"><h3>{routine.title || routine.prompt.split("\n")[0]}</h3>
         <label className="field"><span>When should it run?</span><select value={routine.trigger} onChange={event => setRoutine({ ...routine, trigger: event.target.value as Routine["trigger"], cron: routine.cron || "0 9 * * 1-5" })}>
@@ -753,7 +753,7 @@ export function McpForm({
   return (
     <Modal
       title={existing ? "Edit MCP server" : "Connect more possibilities"}
-      subtitle="Give your Orbits access to tools through the Model Context Protocol."
+      subtitle="Give your Sprites access to tools through the Model Context Protocol."
       onClose={onClose}
     >
       <form
@@ -859,7 +859,7 @@ export function McpForm({
                 <ShieldCheck size={17} />
                 <p>
                   A local MCP server executes code on your computer. Connect
-                  software you trust. Connected tools become available to all Orbits and follow their approval preferences.
+                  software you trust. Connected tools become available to all Sprites and follow their approval preferences.
                 </p>
               </div>
             </>

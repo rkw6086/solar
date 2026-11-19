@@ -147,7 +147,7 @@ export function AttentionWidget() {
     ) : null;
   }
   const orbit = data.orbits.find((item) => item.id === displayed.orbitId);
-  const name = orbit?.name ?? "Your Orbit";
+  const name = orbit?.name ?? "Your Sprite";
   const color = orbit?.color ?? "#e8aa62";
   const remaining = Math.max(0, state.items.length - 1);
   const style = {

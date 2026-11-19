@@ -128,7 +128,7 @@ impl ShellSession {
         let config_directory = PathBuf::from(
             environment
                 .get(OsStr::new("XDG_CONFIG_HOME"))
-                .ok_or("Orbit configuration directory is unavailable")?
+                .ok_or("Sprite configuration directory is unavailable")?
                 .as_os_str(),
         );
         let glab_directory = managed_subdirectory(&config_directory, "glab-cli")?;
@@ -299,7 +299,7 @@ fn executable_path(
             paths.push(path);
         }
     }
-    std::env::join_paths(paths).map_err(|_| "Cannot construct the Orbit executable path".into())
+    std::env::join_paths(paths).map_err(|_| "Cannot construct the Sprite executable path".into())
 }
 
 fn initialize_shell_profiles(
@@ -328,7 +328,11 @@ fn initialize_bash_profile(home: &Path, path_prefix: &str) -> Result<(), String>
         match std::fs::symlink_metadata(home.join(name)) {
             Ok(_) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("Cannot inspect Orbit shell startup files: {error}")),
+            Err(error) => {
+                return Err(format!(
+                    "Cannot inspect Sprite shell startup files: {error}"
+                ));
+            }
         }
     }
     let contents = format!(
@@ -383,7 +387,7 @@ fn update_generated_wrapper(path: &Path, contents: &[u8], previous: &[u8]) -> Re
     write_private_file_if_missing(path, contents, 0o700)?;
     let read_previous = || -> Result<bool, String> {
         let metadata = std::fs::symlink_metadata(path)
-            .map_err(|_| "Cannot inspect Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot inspect Sprite SSH wrapper".to_owned())?;
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
             || metadata.len() != previous.len() as u64
@@ -399,10 +403,10 @@ fn update_generated_wrapper(path: &Path, contents: &[u8], previous: &[u8]) -> Re
         }
         let file = options
             .open(path)
-            .map_err(|_| "Cannot read Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot read Sprite SSH wrapper".to_owned())?;
         if !file
             .metadata()
-            .map_err(|_| "Cannot inspect Orbit SSH wrapper")?
+            .map_err(|_| "Cannot inspect Sprite SSH wrapper")?
             .is_file()
         {
             return Ok(false);
@@ -410,7 +414,7 @@ fn update_generated_wrapper(path: &Path, contents: &[u8], previous: &[u8]) -> Re
         let mut actual = Vec::new();
         file.take(previous.len() as u64 + 1)
             .read_to_end(&mut actual)
-            .map_err(|_| "Cannot read Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot read Sprite SSH wrapper".to_owned())?;
         Ok(actual == previous)
     };
     if !read_previous()? {
@@ -427,14 +431,14 @@ fn update_generated_wrapper(path: &Path, contents: &[u8], previous: &[u8]) -> Re
         }
         let mut file = options
             .open(&temporary)
-            .map_err(|_| "Cannot update Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot update Sprite SSH wrapper".to_owned())?;
         file.write_all(contents)
-            .map_err(|_| "Cannot update Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot update Sprite SSH wrapper".to_owned())?;
         file.sync_all()
-            .map_err(|_| "Cannot save Orbit SSH wrapper".to_owned())?;
+            .map_err(|_| "Cannot save Sprite SSH wrapper".to_owned())?;
         if read_previous()? {
             std::fs::rename(&temporary, path)
-                .map_err(|_| "Cannot finish Orbit SSH wrapper update".to_owned())?;
+                .map_err(|_| "Cannot finish Sprite SSH wrapper update".to_owned())?;
         }
         Ok(())
     })();
@@ -467,7 +471,7 @@ fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
     .into_iter()
     .map(PathBuf::from)
     .find(|path| path.is_file()) else {
-        return Err("Git is needed to update this Orbit's imported Git configuration".into());
+        return Err("Git is needed to update this Sprite's imported Git configuration".into());
     };
     let parent = path
         .parent()
@@ -506,7 +510,7 @@ fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     if !status.success() {
-        return Err("The Orbit's Git configuration could not be read. Check its syntax.".into());
+        return Err("The Sprite's Git configuration could not be read. Check its syntax.".into());
     }
     let text = std::str::from_utf8(&output).map_err(|_| "Git configuration must use UTF-8 text")?;
     let mut removed = BTreeSet::new();
@@ -522,7 +526,7 @@ fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     if removed.len() > 128 {
-        return Err("Orbit Git configuration has too many Keychain helper entries".into());
+        return Err("Sprite Git configuration has too many Keychain helper entries".into());
     }
     for (key, value) in removed {
         let (status, _) = git_config_command(
@@ -533,7 +537,7 @@ fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
         )?;
         if !status.success() {
             return Err(
-                "Cannot remove a Keychain helper from the Orbit's Git configuration".into(),
+                "Cannot remove a Keychain helper from the Sprite's Git configuration".into(),
             );
         }
     }
@@ -541,7 +545,7 @@ fn remove_keychain_git_helpers(path: &Path) -> Result<(), String> {
         return Err("Private Git configuration disappeared".into());
     }
     if read_private_git_config(path, MAX_CONFIG)?.as_deref() != Some(original.as_slice()) {
-        return Err("The Orbit's Git configuration changed during its update. Try again.".into());
+        return Err("The Sprite's Git configuration changed during its update. Try again.".into());
     }
     // Git preserves unrelated lines/comments. Ensure its rewritten copy is
     // private before the atomic replacement, regardless of the process umask.
@@ -569,10 +573,10 @@ fn read_private_git_config(path: &Path, maximum: usize) -> Result<Option<Vec<u8>
         Err(_) => return Err("Cannot inspect private Git configuration".into()),
     };
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err("Orbit Git configuration must be a regular private file".into());
+        return Err("Sprite Git configuration must be a regular private file".into());
     }
     if metadata.len() > maximum as u64 {
-        return Err("Orbit Git configuration exceeds the 1 MiB limit".into());
+        return Err("Sprite Git configuration exceeds the 1 MiB limit".into());
     }
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -589,14 +593,14 @@ fn read_private_git_config(path: &Path, maximum: usize) -> Result<Option<Vec<u8>
         .map_err(|_| "Cannot inspect private Git configuration")?
         .is_file()
     {
-        return Err("Orbit Git configuration must be a regular private file".into());
+        return Err("Sprite Git configuration must be a regular private file".into());
     }
     let mut output = Vec::new();
     file.take(maximum as u64 + 1)
         .read_to_end(&mut output)
         .map_err(|_| "Cannot read private Git configuration")?;
     if output.len() > maximum {
-        return Err("Orbit Git configuration exceeds the 1 MiB limit".into());
+        return Err("Sprite Git configuration exceeds the 1 MiB limit".into());
     }
     Ok(Some(output))
 }
@@ -703,12 +707,12 @@ fn write_private_file_if_missing(path: &Path, contents: &[u8], mode: u32) -> Res
     let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
-        Err(error) => return Err(format!("Cannot create Orbit shell startup file: {error}")),
+        Err(error) => return Err(format!("Cannot create Sprite shell startup file: {error}")),
     };
     if let Err(error) = file.write_all(contents) {
         let _ = std::fs::remove_file(path);
         return Err(format!(
-            "Cannot initialize Orbit shell startup file: {error}"
+            "Cannot initialize Sprite shell startup file: {error}"
         ));
     }
     Ok(())
@@ -1118,7 +1122,7 @@ mod tests {
         let config = root.path().join("config");
         let included = root.path().join("included.gitconfig");
         let content = format!(
-            "# keep this comment\n[user]\n\tname = Orbit\n[credential]\n\thelper = osxkeychain\n\thelper = !glab auth git-credential\n[credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n\thelper = /usr/bin/git-credential-osxkeychain\n[include]\n\tpath = {}\n",
+            "# keep this comment\n[user]\n\tname = Sprite\n[credential]\n\thelper = osxkeychain\n\thelper = !glab auth git-credential\n[credential \"https://github.com\"]\n\thelper = !gh auth git-credential\n\thelper = /usr/bin/git-credential-osxkeychain\n[include]\n\tpath = {}\n",
             included.display()
         );
         std::fs::write(&source, &content).unwrap();
@@ -1286,7 +1290,7 @@ mod tests {
         }
         let root = private_root();
         let shell = fake_shell(root.path(), "bash");
-        let workspace = root.path().join("Orbit's SSH files");
+        let workspace = root.path().join("Sprite's SSH files");
         let session =
             ShellSession::for_test(shell.to_str().unwrap(), root.path(), &workspace, vec![])
                 .unwrap();

@@ -89,7 +89,7 @@ type Dialog =
 
 const navigation: { id: Page; label: string; icon: typeof Sun }[] = [
   { id: "home", label: "Solar system", icon: Sun },
-  { id: "orbits", label: "Your Orbits", icon: OrbitIcon },
+  { id: "orbits", label: "Your Sprites", icon: OrbitIcon },
   { id: "conversations", label: "Conversations", icon: MessageCircle },
   { id: "projects", label: "Projects", icon: Folder },
   { id: "memory", label: "Memory", icon: Layers3 },
@@ -375,11 +375,11 @@ export function App() {
     if (!file) return;
     try {
       if (file.size > 64_000)
-        throw new Error("Orbit profiles must be smaller than 64 KB.");
+        throw new Error("Sprite profiles must be smaller than 64 KB.");
       await api("import_orbit", { profileJson: await file.text() });
       await refresh();
       setToast(
-        "Orbit imported. Review its connection and permissions before use.",
+        "Sprite imported. Review its connection and permissions before use.",
       );
     } catch (failure) {
       setError(errorText(failure));
@@ -390,7 +390,7 @@ export function App() {
     void refresh();
   }
   const orbitName = (id: string) =>
-    data.orbits.find((orbit) => orbit.id === id)?.name ?? "Orbit";
+    data.orbits.find((orbit) => orbit.id === id)?.name ?? "Sprite";
   const filteredOrbits = data.orbits.filter((orbit) =>
     `${orbit.name} ${orbit.role}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -452,8 +452,8 @@ export function App() {
             <button
               className="icon-button"
               onClick={() => setDialog({ kind: "orbit" })}
-              title="Create an Orbit"
-              aria-label="Create an Orbit"
+              title="Create a Sprite"
+              aria-label="Create a Sprite"
             >
               <Plus size={15} />
             </button>
@@ -478,7 +478,7 @@ export function App() {
               onClick={() => setDialog({ kind: "orbit" })}
             >
               <Plus size={18} />
-              <span>Create your first Orbit</span>
+              <span>Create your first Sprite</span>
             </button>
           )}
         </div>
@@ -577,8 +577,8 @@ export function App() {
               <div className="page-content">
                 <PageHeading
                   eyebrow="YOUR PERSONAL TEAM"
-                  title="Your Orbits"
-                  description={data.orbits.length ? "Choose an Orbit to chat, or bring a team together." : "Create your first Orbit and make it your own."}
+                  title="Your Sprites"
+                  description={data.orbits.length ? "Choose a Sprite to chat, or bring a team together." : "Create your first Sprite and make it your own."}
                 >
                   <button
                     className="button button-quiet"
@@ -593,22 +593,22 @@ export function App() {
                     onClick={() => setDialog({ kind: "orbit" })}
                   >
                     <Plus size={16} />
-                    Create Orbit
+                    Create Sprite
                   </button>
                 </PageHeading>
                 <section className="universe-banner">
                   <div className="universe-copy">
                     <span className="banner-kicker">
                       <span className="online-indicator" />A HOME FOR YOUR
-                      ORBITS
+                      SPRITES
                     </span>
                     <h2>
-                      Your Orbits,
+                      Your Sprites,
                       <br />
                       on your desktop.
                     </h2>
                     <p>
-                      Give each Orbit a specialty, a personality, and a place on
+                      Give each Sprite a specialty, a personality, and a place on
                       your desktop.
                     </p>
                     <button
@@ -618,12 +618,12 @@ export function App() {
                           "set_desktop_expanded",
                           { expanded: true },
                           native
-                            ? "Your Orbits are on the desktop."
+                            ? "Your Sprites are on the desktop."
                             : "Desktop characters are available in the native app.",
                         )
                       }
                     >
-                      Bring Orbits to desktop <ArrowRight size={15} />
+                      Bring Sprites to desktop <ArrowRight size={15} />
                     </button>
                   </div>
                   <div className="universe-art" aria-hidden="true">
@@ -656,7 +656,7 @@ export function App() {
                       <OrbitIcon size={17} />
                     </span>
                     <strong>{data.orbits.length}</strong>
-                    <span>Orbits in your team</span>
+                    <span>{data.orbits.length === 1 ? "Sprite" : "Sprites"} in your team</span>
                   </div>
                   <div>
                     <span className="stat-icon green">
@@ -683,16 +683,16 @@ export function App() {
                     <div className="search-input">
                       <Search size={15} />
                       <input
-                        aria-label="Find an Orbit"
-                        placeholder="Find an Orbit…"
+                        aria-label="Find a Sprite"
+                        placeholder="Find a Sprite…"
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
                       />
                     </div>
                     <button
                       className="icon-button"
-                      aria-label="Import an Orbit profile"
-                      title="Import Orbit"
+                      aria-label="Import a Sprite profile"
+                      title="Import Sprite"
                       onClick={() => importFile.current?.click()}
                     >
                       <ArrowDownToLine size={17} />
@@ -744,7 +744,7 @@ export function App() {
                                 }
                               >
                                 <Settings2 size={14} />
-                                Edit Orbit
+                                Edit Sprite
                               </button>
                               <button onClick={() => void exportOrbit(orbit)}>
                                 <FileJson size={14} />
@@ -769,7 +769,7 @@ export function App() {
                                   setConfirm({
                                     title: `Remove ${orbit.name}?`,
                                     description:
-                                      "Remove this Orbit from your team. Export its profile first if you want a copy.",
+                                      "Remove this Sprite from your team. Export its profile first if you want a copy.",
                                     action: () =>
                                       api("delete_orbit", { id: orbit.id }),
                                   })
@@ -816,23 +816,23 @@ export function App() {
                     <span>
                       <Plus size={23} />
                     </span>
-                    <strong>Meet your next Orbit</strong>
+                    <strong>Meet your next Sprite</strong>
                     <p>
                       A new specialty.
                       <br />A new perspective.
                     </p>
                     <span className="add-orbit-link">
-                      Create an Orbit <ArrowRight size={13} />
+                      Create a Sprite <ArrowRight size={13} />
                     </span>
                   </button>
                 </div>
                 {search && filteredOrbits.length === 0 && (
-                  <p className="muted centered">No Orbits match “{search}”.</p>
+                  <p className="muted centered">No Sprites match “{search}”.</p>
                 )}
                 <div className="bottom-note">
                   <ShieldCheck size={15} />
                   <span>
-                    Your Orbits have their own memories. Shared projects bring
+                    Your Sprites have their own memories. Shared projects bring
                     them together.
                   </span>
                 </div>
@@ -851,7 +851,7 @@ export function App() {
                 <div className="page-content">
                   <PageHeading
                     title="Conversations"
-                    description="Pick up where you left off, with one Orbit or the whole team."
+                    description="Pick up where you left off, with one Sprite or the whole team."
                   >
                     <button
                       className="button button-primary"
@@ -1111,7 +1111,7 @@ export function App() {
                 ) : (
                   <Empty
                     icon={<Sparkles size={29} />}
-                    title="Choose where your Orbits think"
+                    title="Choose where your Sprites think"
                     action={
                       <button
                         className="button button-primary"
@@ -1204,7 +1204,7 @@ export function App() {
                   <div className="inline-empty">
                     <Radio size={19} />
                     <p>
-                      Connect standard MCP servers to extend your Orbits’ tools.
+                      Connect standard MCP servers to extend your Sprites’ tools.
                     </p>
                   </div>
                 )}
@@ -1212,13 +1212,13 @@ export function App() {
             )}
             {page === "memory" && (
               <div className="page-content">
-                <PageHeading title="Memories" description="Knowledge shared across your Solar System, selected Orbits, or projects.">
+                <PageHeading title="Memories" description="Knowledge shared across your Solar System, selected Sprites, or projects.">
                   <button className="button button-primary" onClick={() => setDialog({ kind: "memory" })}><Plus size={16} />Add memory</button>
                 </PageHeading>
                 <div className="filter-bar"><div className="search-input"><Search size={15} /><input placeholder="Search memories…" aria-label="Search memories" value={search} onChange={event => setSearch(event.target.value)} /></div>
                   <select value={memoryOwner} onChange={event => setMemoryOwner(event.target.value)} aria-label="Filter memories">
                     <option value="">All memories</option><option value="system">Solar System</option>
-                    <optgroup label="Orbits">{data.orbits.map(orbit => <option key={orbit.id} value={`orbit:${orbit.id}`}>{orbit.name}</option>)}</optgroup>
+                    <optgroup label="Sprites">{data.orbits.map(orbit => <option key={orbit.id} value={`orbit:${orbit.id}`}>{orbit.name}</option>)}</optgroup>
                     <optgroup label="Projects">{data.projects.map(project => <option key={project.id} value={`project:${project.id}`}>{project.name}</option>)}</optgroup>
                   </select>
                 </div>
@@ -1233,13 +1233,13 @@ export function App() {
                     <button className="icon-button" aria-label="Edit memory" onClick={() => setDialog({ kind: "memory", value: memory })}><Settings2 size={14} /></button>
                     <button className="icon-button" aria-label="Delete memory" onClick={() => setConfirm({ title: "Forget this memory?", description: "This removes the shared memory for everyone attached to it. Conversation messages remain.", action: () => api("delete_memory", { id: memory.id }) })}><Trash2 size={14} /></button>
                   </div><div className="memory-content"><ReactMarkdown remarkPlugins={[remarkGfm]}>{memory.content}</ReactMarkdown></div><time>{new Date(memory.createdAt).toLocaleDateString()}</time>
-                </article>)}</div> : <Empty icon={<Layers3 size={29} />} title="A little context goes a long way">Save preferences, decisions, and useful facts. Share with everyone, selected Orbits, or selected projects.</Empty>}
+                </article>)}</div> : <Empty icon={<Layers3 size={29} />} title="A little context goes a long way">Save preferences, decisions, and useful facts. Share with everyone, selected Sprites, or selected projects.</Empty>}
               </div>
             )}
             {page === "routines" && (
               <div className="page-content">
-                <PageHeading title="Routines" description="Ask an Orbit in chat to set up a routine. Manage its schedule here." />
-                <div className="notice page-notice"><Clock3 size={18} /><p>Routines run while Solar is open and your computer is awake, within the Orbit’s existing permissions. Schedules use this computer’s local time.</p></div>
+                <PageHeading title="Routines" description="Ask a Sprite in chat to set up a routine. Manage its schedule here." />
+                <div className="notice page-notice"><Clock3 size={18} /><p>Routines run while Solar is open and your computer is awake, within the Sprite’s existing permissions. Schedules use this computer’s local time.</p></div>
                 {data.routines.length ? <div className="routine-list">{data.routines.map(routine => <article className="surface-card routine-card" key={routine.id}>
                   <Planet identity={routine.orbitId} color={data.orbits.find(orbit => orbit.id === routine.orbitId)?.color} size={52} />
                   <details className="routine-details"><summary><strong>{routine.title || routine.prompt.split("\n")[0]}</strong><span className="subtle-label">{orbitName(routine.orbitId)} · {routine.trigger === "cron" ? "Scheduled" : routine.trigger === "folder" ? "When project files change" : routine.trigger === "completion" ? "After task completion" : `Every ${routine.intervalMinutes} minutes`}</span></summary>
@@ -1250,7 +1250,7 @@ export function App() {
                   </details>
                   <button className={`switch ${routine.enabled ? "on" : ""}`} role="switch" aria-checked={routine.enabled} aria-label={`Enable ${routine.title || "routine"}`} onClick={() => void action("save_routine", { routine: { ...routine, enabled: !routine.enabled } })}><span /></button>
                   <button className="icon-button" aria-label="Edit routine schedule" onClick={() => setDialog({ kind: "routine", value: routine })}><Settings2 size={16} /></button>
-                </article>)}</div> : <Empty icon={<Clock3 size={29} />} title="Helpful habits start with a conversation">Ask an Orbit something like “Check my project every weekday at 9 AM.” It will create the routine and choose a clear title and instructions.</Empty>}
+                </article>)}</div> : <Empty icon={<Clock3 size={29} />} title="Helpful habits start with a conversation">Ask a Sprite something like “Check my project every weekday at 9 AM.” It will create the routine and choose a clear title and instructions.</Empty>}
               </div>
             )}
             {page === "settings" && (
@@ -1284,14 +1284,14 @@ export function App() {
                     </button>
                   </SettingsRow>
                   <SettingsRow
-                    title="Orbit chimes"
-                    description="A short, distinct melody when an Orbit needs you while companions are collapsed."
+                    title="Sprite chimes"
+                    description="A short, distinct melody when a Sprite needs you while companions are collapsed."
                   >
                     <button
                       className={`switch ${data.settings.attentionSound !== false ? "on" : ""}`}
                       role="switch"
                       aria-checked={data.settings.attentionSound !== false}
-                      aria-label="Orbit chimes"
+                      aria-label="Sprite chimes"
                       onClick={() =>
                         void action("save_settings", {
                           settings: {
@@ -1329,12 +1329,12 @@ export function App() {
                     </label>
                   </SettingsRow>
                   <SettingsRow
-                    title="Preview an Orbit’s nudge"
+                    title="Preview a Sprite’s nudge"
                     description={native ? "See the top-of-screen peek and hear its generated melody." : "Preview the top-of-screen peek. Chimes play in the desktop app."}
                   >
                     <div className="attention-preview-control">
                       <select
-                        aria-label="Orbit to preview"
+                        aria-label="Sprite to preview"
                         value={data.orbits.some((orbit) => orbit.id === previewOrbitId && orbit.enabled) ? previewOrbitId : data.orbits.find((orbit) => orbit.enabled)?.id ?? ""}
                         onChange={(event) => setPreviewOrbitId(event.target.value)}
                         disabled={!data.orbits.some((orbit) => orbit.enabled)}
@@ -1385,10 +1385,10 @@ export function App() {
                 </section>
                 <section className="settings-section">
                   <h2>Welcome experience</h2>
-                  <SettingsRow title="Sound effects" description="Clicks, Solar’s introduction, and Orbit sound feedback.">
+                  <SettingsRow title="Sound effects" description="Clicks, Solar’s introduction, and Sprite sound feedback.">
                     <button className={`switch ${data.settings.soundEffects !== false ? "on" : ""}`} role="switch" aria-checked={data.settings.soundEffects !== false} aria-label="Sound effects" onClick={() => void action("save_settings", { settings: { ...data.settings, soundEffects: data.settings.soundEffects === false } })}><span /></button>
                   </SettingsRow>
-                  <SettingsRow title="Sound effects volume" description="Intro and click volume. Orbit chimes have their own volume.">
+                  <SettingsRow title="Sound effects volume" description="Intro and click volume. Sprite chimes have their own volume.">
                     <label className="attention-volume">
                       <input type="range" min="0" max="0.5" step="0.01" aria-label="Sound effects volume" value={Number(data.settings.soundEffectsVolume ?? 0.25)} onChange={(event) => void action("save_settings", { settings: { ...data.settings, soundEffectsVolume: Number(event.target.value) } })} />
                       <output>{Math.round(Number(data.settings.soundEffectsVolume ?? 0.25) * 200)}%</output>
@@ -1402,7 +1402,7 @@ export function App() {
                   <h2>Work and connections</h2>
                   <SettingsRow
                     title="Concurrent model turns"
-                    description="Limit how many Orbits can make model requests at once."
+                    description="Limit how many Sprites can make model requests at once."
                   >
                     <select
                       aria-label="Concurrent model turns"
@@ -1461,7 +1461,7 @@ export function App() {
                   <h2>About Solar</h2>
                   <SettingsRow
                     title={appVersion ? `Solar ${appVersion}` : "Solar"}
-                    description="A local home for your personal team of Orbits."
+                    description="A local home for your personal team of Sprites."
                   >
                     <span className="value-label">AGPL-3.0-only</span>
                   </SettingsRow>
@@ -1574,7 +1574,7 @@ export function App() {
       )}
       {dialog?.kind === "export" && (
         <Modal
-          title="Portable Orbit profile"
+          title="Portable Sprite profile"
           subtitle="This profile contains its personality and configuration. Review it before sharing."
           onClose={() => setDialog(null)}
         >
@@ -1605,7 +1605,7 @@ export function App() {
                   );
                   const link = document.createElement("a");
                   link.href = url;
-                  link.download = "orbit.solar.json";
+                  link.download = "sprite.solar.json";
                   link.click();
                   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
                 }}
@@ -1626,15 +1626,15 @@ export function App() {
           <div className="form-body help-body">
             <Planet sun color="#e8aa62" size={104} />
             <p>
-              Start by connecting a model. Create an Orbit, choose its specialty
+              Start by connecting a model. Create a Sprite, choose its specialty
               and tools, and open a conversation. Shared projects let your
-              Orbits work together while keeping their private memories
+              Sprites work together while keeping their private memories
               separate.
             </p>
             <p>
               Hover over the desktop sun to see orbital paths. Click to bring
-              your Orbits out, drag them to a comfortable spot, and click an
-              Orbit to chat.
+              your Sprites out, drag them to a comfortable spot, and click a
+              Sprite to chat.
             </p>
             {!native && (
               <div className="notice">

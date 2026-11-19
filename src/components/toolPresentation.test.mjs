@@ -59,7 +59,7 @@ test("file and generic tools use concise labels, not raw payloads", () => {
   assert.equal(unknown.summary, "custom analysis");
   assert.equal(unknown.output, undefined);
   assert.equal(presentTool(message("web_fetch", {}, "Network connection refused", "failed")).failure, "The service couldn’t be reached. Check the connection and try again.");
-  assert.equal(presentTool(message("mcp__svc__call", {}, '{"private":"secret"}', "failed")).failure, "This tool couldn’t finish. The Orbit can try another approach.");
+  assert.equal(presentTool(message("mcp__svc__call", {}, '{"private":"secret"}', "failed")).failure, "This tool couldn’t finish. The Sprite can try another approach.");
 });
 
 test("approvals retain exact shell command and useful context without JSON", () => {
@@ -109,7 +109,7 @@ test("routine lists report counts without exposing stored prompts or identifiers
   }
   assert.equal(presentTool(message("routine_list", {}, "[]")).summary, "0 routines · 0 enabled");
   assert.equal(presentTool(message("routine_list", {}, '[{"enabled":true}]')).summary, "1 routine · 1 enabled");
-  assert.equal(presentTool(message("routine_list", {}, "", "running")).summary, "View this Orbit’s saved routines");
+  assert.equal(presentTool(message("routine_list", {}, "", "running")).summary, "View this Sprite’s saved routines");
 });
 
 test("routine run and delete cards use friendly action labels", () => {

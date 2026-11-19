@@ -227,8 +227,8 @@ export function Chat({
           <h2>{conversation.title}</h2>
           <p>
             {team.length > 1
-              ? `${team.map((item) => item.name).join(", ")} · ${orbit?.name ?? "Orbit"} leads`
-              : (orbit?.role ?? "Orbit conversation")}
+              ? `${team.map((item) => item.name).join(", ")} · ${orbit?.name ?? "Sprite"} leads`
+              : (orbit?.role ?? "Sprite conversation")}
           </p>
         </div>
         {orbit && <button
@@ -305,11 +305,11 @@ export function Chat({
             <h3>
               {team.length > 1
                 ? "A team for your next idea"
-                : `Say hello to ${orbit?.name ?? "your Orbit"}`}
+                : `Say hello to ${orbit?.name ?? "your Sprite"}`}
             </h3>
             <p>
               {team.length > 1
-                ? "Share the goal. Your lead Orbit will bring in the right specialists."
+                ? "Share the goal. Your lead Sprite will bring in the right specialists."
                 : orbit?.personality ||
                   "Start with a question, a task, or something you’re thinking about."}
             </p>
@@ -362,7 +362,7 @@ export function Chat({
                 <header>
                   <strong>
                     {message.role === "assistant"
-                      ? (author?.name ?? "Orbit")
+                      ? (author?.name ?? "Sprite")
                       : "You"}
                   </strong>
                   <time>
@@ -405,7 +405,7 @@ export function Chat({
                 .map(
                   (task) =>
                     data.orbits.find((item) => item.id === task.orbitId)
-                      ?.name ?? "Orbit",
+                      ?.name ?? "Sprite",
                 )
                 .join(", ")}{" "}
               {approvals.length ? "waiting for your approval" : "working"}
@@ -463,7 +463,7 @@ export function Chat({
         {!connected && onConnections && (
           <div className="connection-hint">
             <span>
-              Connect a model and assign it to {orbit?.name ?? "this Orbit"} to
+              Connect a model and assign it to {orbit?.name ?? "this Sprite"} to
               begin.
             </span>
             <button onClick={onConnections}>
@@ -490,11 +490,11 @@ export function Chat({
           <textarea
             ref={textarea}
             rows={compact ? 2 : 3}
-            aria-label="Message your Orbit"
+            aria-label="Message your Sprite"
             placeholder={
               team.length > 1
                 ? "Tell your team what you have in mind…"
-                : `Message ${orbit?.name ?? "your Orbit"}…`
+                : `Message ${orbit?.name ?? "your Sprite"}…`
             }
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

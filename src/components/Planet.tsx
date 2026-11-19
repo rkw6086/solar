@@ -26,7 +26,7 @@ function shade(hex: string, amount: number) {
 
 export function Planet({
   color = "#79bcb5",
-  name = "Orbit",
+  name = "Sprite",
   size = 88,
   sun = false,
   busy = false,

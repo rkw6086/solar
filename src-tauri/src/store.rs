@@ -143,14 +143,14 @@ impl StoreState {
             let profile = self
                 .profile
                 .as_ref()
-                .ok_or("Orbit storage requires a Solar profile")?;
+                .ok_or("Sprite storage requires a Solar profile")?;
             let path = profile.orbit_dir(owner)?.join("orbit.sqlite");
             self.orbit_dbs
                 .insert(owner.into(), open_connection(&path, true)?);
         }
         self.orbit_dbs
             .get_mut(owner)
-            .ok_or_else(|| "Orbit database is unavailable".into())
+            .ok_or_else(|| "Sprite database is unavailable".into())
     }
 
     fn orbit_ids(&self) -> Vec<String> {
@@ -202,7 +202,7 @@ impl StoreState {
                         }
                     }
                     if matches.len() > 1 {
-                        return Err("Ambiguous Orbit history key".into());
+                        return Err("Ambiguous Sprite history key".into());
                     }
                     matches.into_iter().next()
                 }
@@ -211,10 +211,10 @@ impl StoreState {
         };
         if let Some(owner) = &owner {
             if !profile.locations().contains_key(owner) {
-                return Err("Private record references an unknown Orbit".into());
+                return Err("Private record references an unknown Sprite".into());
             }
         } else if kind != "memories" {
-            return Err("Cannot determine the Orbit for this private record".into());
+            return Err("Cannot determine the Sprite for this private record".into());
         }
         Ok(owner)
     }
@@ -229,14 +229,14 @@ impl StoreState {
         };
         let value: Value = serde_json::from_str(&conversation.data).map_err(|e| e.to_string())?;
         let Some(orbits) = value["orbitIds"].as_array() else {
-            return Err("Conversation has invalid Orbit membership".into());
+            return Err("Conversation has invalid Sprite membership".into());
         };
         if orbits.len() != 1 {
             return Ok(None);
         }
         let owner = orbits[0]
             .as_str()
-            .ok_or("Conversation has invalid Orbit membership")?;
+            .ok_or("Conversation has invalid Sprite membership")?;
         if !self
             .profile
             .as_ref()
@@ -244,7 +244,7 @@ impl StoreState {
             .locations()
             .contains_key(owner)
         {
-            return Err("Conversation references an unknown Orbit".into());
+            return Err("Conversation references an unknown Sprite".into());
         }
         Ok(Some(owner.into()))
     }
@@ -394,7 +394,7 @@ impl Store {
             .map_err(|_| "Database lock unavailable")?
             .profile
             .as_ref()
-            .ok_or("Orbit storage requires a Solar profile")?
+            .ok_or("Sprite storage requires a Solar profile")?
             .orbit_dir(orbit_id)
     }
 
@@ -411,7 +411,7 @@ impl Store {
         for (kind, id, data) in &documents {
             let owner = state.owner(kind, id, data)?;
             if target.as_ref().is_some_and(|previous| previous != &owner) {
-                return Err("A transaction cannot span multiple Orbit databases".into());
+                return Err("A transaction cannot span multiple Sprite databases".into());
             }
             target = Some(owner);
         }
@@ -559,9 +559,9 @@ impl Store {
         let profile = state
             .profile
             .as_ref()
-            .ok_or("Orbit reset requires a Solar profile")?;
+            .ok_or("Sprite reset requires a Solar profile")?;
         if !profile.locations().contains_key(orbit_id) {
-            return Err("Orbit not found".into());
+            return Err("Sprite not found".into());
         }
         let private_chats: Vec<String> = query_documents(&state.main, "conversations")?
             .into_iter()

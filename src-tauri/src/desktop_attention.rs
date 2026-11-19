@@ -167,7 +167,7 @@ pub(crate) fn preview_attention(
 ) -> Result<(), String> {
     let orbit = engine.orbit(&orbit_id)?;
     if !orbit.enabled {
-        return Err("Choose an enabled Orbit to preview".into());
+        return Err("Choose an enabled Sprite to preview".into());
     }
     engine.request_attention(AttentionItem {
         id: format!("preview:{}", crate::model::id()),
@@ -187,7 +187,7 @@ pub(crate) fn refresh(app: &tauri::AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(error) = present(&handle) {
-            eprintln!("Could not present Orbit attention: {error}");
+            eprintln!("Could not present Sprite attention: {error}");
         }
     });
 }
@@ -257,7 +257,7 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
             "attention",
             WebviewUrl::App("index.html#attention".into()),
         )
-        .title("Solar · Orbit attention")
+        .title("Solar · Sprite attention")
         .incognito(true)
         .inner_size(geometry.width, geometry.height)
         .position(geometry.x, geometry.y)
@@ -319,7 +319,7 @@ fn present(app: &tauri::AppHandle) -> Result<(), String> {
                 if let Err(error) =
                     crate::attention_sound::play(&current.orbit_id, settings.attention_volume)
                 {
-                    eprintln!("Could not play Orbit attention sound: {error}");
+                    eprintln!("Could not play Sprite attention sound: {error}");
                 }
             }
         }

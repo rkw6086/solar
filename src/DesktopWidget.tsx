@@ -143,7 +143,7 @@ export function DesktopWidget({
         promise: api<Conversation>("create_conversation", {
           orbitIds: [orbitId],
           leadOrbitId: orbitId,
-          title: orbit?.name ?? "Orbit",
+          title: orbit?.name ?? "Sprite",
           projectId: undefined,
         }),
       };
@@ -207,7 +207,7 @@ export function DesktopWidget({
         <div className="widget-orbit-path widget-orbit-two" />
         <button
           className="character-button sun-character"
-          aria-label={expanded ? "Gather Orbits" : "Expand Orbits"}
+          aria-label={expanded ? "Gather Sprites" : "Expand Sprites"}
           onPointerDown={drag.onPointerDown}
           onPointerMove={drag.onPointerMove}
           onClick={(event) => void toggle(event.detail === 0)}
@@ -218,7 +218,7 @@ export function DesktopWidget({
         >
           <Planet sun color="#e8aa62" size={100} name="Solar sun" mood={sunMood} />
           <span className="sun-widget-label">
-            {expanded ? "Gather Orbits" : "Your Orbits"}
+            {expanded ? "Gather Sprites" : "Your Sprites"}
           </span>
         </button>
         <button

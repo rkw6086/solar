@@ -104,18 +104,18 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
   if (editing) return <OrbitForm data={data} existing={orbit}
     onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged("edit"); }} />;
   if (cliVisible) return <Modal title={`${orbit.name}’s CLI sign-ins`}
-    subtitle="Set up command-line tools for this Orbit." onClose={closeCli} dismissible={!cliOpening}>
+    subtitle="Set up command-line tools for this Sprite." onClose={closeCli} dismissible={!cliOpening}>
     <div className="form-body orbit-cli-body">
-      <p className="orbit-cli-intro">This Orbit uses its own home and configuration folders. Solar does not automatically copy your personal CLI sign-ins. You can also ask this Orbit in chat to import specific home files or shell profiles; it will show the files for approval first.</p>
+      <p className="orbit-cli-intro">This Sprite uses its own home and configuration folders. Solar does not automatically copy your personal CLI sign-ins. You can also ask this Sprite in chat to import specific home files or shell profiles; it will show the files for approval first.</p>
       <ol className="orbit-cli-steps">
-        <li><strong>Open the Orbit’s terminal.</strong><span>It starts in this Orbit’s workspace, using the same private configuration as its shell commands.</span></li>
-        <li><strong>Sign in to the tools it needs.</strong><span>For GitLab, run <code>glab auth login --git-protocol https --insecure-storage</code> and follow the prompts for your GitLab host. This uses HTTPS for Git and keeps the login in the Orbit’s private configuration folder instead of your shared system keychain. Enter credentials in the terminal, not in chat.</span></li>
-        <li><strong>Return to Solar.</strong><span>Close the terminal when you’re finished, then ask {orbit.name} to try again. Each Orbit signs in separately.</span></li>
+        <li><strong>Open the Sprite’s terminal.</strong><span>It starts in this Sprite’s workspace, using the same private configuration as its shell commands.</span></li>
+        <li><strong>Sign in to the tools it needs.</strong><span>For GitLab, run <code>glab auth login --git-protocol https --insecure-storage</code> and follow the prompts for your GitLab host. This uses HTTPS for Git and keeps the login in the Sprite’s private configuration folder instead of your shared system keychain. Enter credentials in the terminal, not in chat.</span></li>
+        <li><strong>Return to Solar.</strong><span>Close the terminal when you’re finished, then ask {orbit.name} to try again. Each Sprite signs in separately.</span></li>
       </ol>
-      {cliLoading && <p className="orbit-cli-loading" role="status"><LoaderCircle size={16} className="spin" />Preparing this Orbit’s terminal…</p>}
+      {cliLoading && <p className="orbit-cli-loading" role="status"><LoaderCircle size={16} className="spin" />Preparing this Sprite’s terminal…</p>}
       {cliError && <p className="form-error" role="alert">{cliError}</p>}
       {cliOpened && <p className="orbit-cli-opened" role="status"><Check size={16} />Terminal opened. Complete the sign-in there, then return to Solar.</p>}
-      {!native && <p className="orbit-cli-preview">This is a browser preview. Open Solar’s desktop app to prepare an actual Orbit terminal.</p>}
+      {!native && <p className="orbit-cli-preview">This is a browser preview. Open Solar’s desktop app to prepare an actual Sprite terminal.</p>}
       {cliSetup && <details className="orbit-cli-details">
         <summary>Folders and manual setup</summary>
         <dl className="orbit-settings-summary">
@@ -133,7 +133,7 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
       <button type="button" className="button button-quiet" disabled={cliOpening} onClick={closeCli}>Back to settings</button>
       {!cliSetup && !cliLoading && <button type="button" className="button button-secondary" onClick={() => void loadCli()}>Try again</button>}
       <button type="button" className="button button-primary" disabled={!native || !cliSetup || cliLoading || cliOpening} onClick={() => void openCli()}>
-        {cliOpening ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}{cliOpened ? "Open terminal again" : "Open Orbit terminal"}
+        {cliOpening ? <LoaderCircle size={16} className="spin" /> : <Terminal size={16} />}{cliOpened ? "Open terminal again" : "Open Sprite terminal"}
       </button>
     </footer>
   </Modal>;
@@ -141,18 +141,18 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
     onClose={() => { if (!busy) { setConfirm(null); setError(""); } }}>
     <div className="form-body">
       <p className="orbit-settings-confirm-copy">{confirm === "reset"
-        ? "This stops current work and clears this Orbit’s private conversations, saved memory, and activity. Its profile, model, project access, workspace files, and shared group conversations stay in place."
-        : "This stops current work and removes this Orbit from your team. Its profile will no longer be available in Solar. Your project files are kept."}</p>
+        ? "This stops current work and clears this Sprite’s private conversations, saved memory, and activity. Its profile, model, project access, workspace files, and shared group conversations stay in place."
+        : "This stops current work and removes this Sprite from your team. Its profile will no longer be available in Solar. Your project files are kept."}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
     </div>
     <footer className="form-footer">
       <button type="button" className="button button-quiet" disabled={busy} onClick={() => { setConfirm(null); setError(""); }}>Cancel</button>
       <button type="button" className="button orbit-settings-danger" disabled={busy} onClick={() => void perform()}>
-        {busy && <LoaderCircle size={15} className="spin" />}{confirm === "reset" ? "Reset Orbit" : "Delete Orbit"}
+        {busy && <LoaderCircle size={15} className="spin" />}{confirm === "reset" ? "Reset Sprite" : "Delete Sprite"}
       </button>
     </footer>
   </Modal>;
-  return <Modal title={`${orbit.name} settings`} subtitle="Manage this Orbit’s character, model, and saved data." onClose={onClose}>
+  return <Modal title={`${orbit.name} settings`} subtitle="Manage this Sprite’s character, model, and saved data." onClose={onClose}>
     <div className="form-body orbit-settings-body">
       <div className="orbit-settings-identity"><Planet identity={orbit.id} name={orbit.name} color={orbit.color} size={76} /><div><h3>{orbit.name}</h3><p>{orbit.role}</p></div></div>
       <dl className="orbit-settings-summary">
@@ -160,17 +160,17 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
         <div><dt>Personality</dt><dd>{orbit.personality || "Not set"}</dd></div>
         <div><dt>Tasks</dt><dd>{orbit.tasks || "Not set"}</dd></div>
       </dl>
-      <button type="button" className="button button-primary" onClick={() => setEditing(true)}><Settings2 size={16} />Edit Orbit</button>
+      <button type="button" className="button button-primary" onClick={() => setEditing(true)}><Settings2 size={16} />Edit Sprite</button>
       <div className="orbit-settings-data">
         <h3>CLI sign-ins</h3>
-        <p>Give this Orbit its own sign-ins for command-line tools such as GitLab.</p>
+        <p>Give this Sprite its own sign-ins for command-line tools such as GitLab.</p>
         <button type="button" className="button button-secondary" onClick={() => void loadCli()}><Terminal size={16} />Set up CLI sign-ins</button>
       </div>
       <div className="orbit-settings-data">
         <h3>Saved data</h3>
-        <p>Clear learned context without changing this Orbit’s setup.</p>
-        <button type="button" className="button button-secondary" onClick={() => setConfirm("reset")}><RotateCcw size={15} />Reset Orbit</button>
-        <button type="button" className="button button-quiet orbit-settings-delete" onClick={() => setConfirm("delete")}><Trash2 size={15} />Delete Orbit</button>
+        <p>Clear learned context without changing this Sprite’s setup.</p>
+        <button type="button" className="button button-secondary" onClick={() => setConfirm("reset")}><RotateCcw size={15} />Reset Sprite</button>
+        <button type="button" className="button button-quiet orbit-settings-delete" onClick={() => setConfirm("delete")}><Trash2 size={15} />Delete Sprite</button>
       </div>
     </div>
   </Modal>;

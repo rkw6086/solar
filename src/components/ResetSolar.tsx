@@ -42,7 +42,7 @@ export function ResetSolar({ onReset }: { onReset: () => Promise<void> }) {
         <Modal title="Reset Solar?" subtitle="Solar will restart from the beginning." onClose={close}>
           <div className="form-body">
             <p className="confirm-description">
-              This permanently removes your Orbits, conversations, memories, routines, settings, saved sign-ins, and files inside Solar’s private workspaces. Files in external project folders stay where they are.
+              This permanently removes your Sprites, conversations, memories, routines, settings, saved sign-ins, and files inside Solar’s private workspaces. Files in external project folders stay where they are.
             </p>
             {error && <p className="form-error" role="alert">{error}</p>}
             {busy && <p className="muted" role="status">Stopping active work and preparing to restart…</p>}

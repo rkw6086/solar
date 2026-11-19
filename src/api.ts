@@ -112,10 +112,10 @@ function previewOrbitProfile(draft: Orbit, existing?: Orbit): Orbit {
   }
   const tasks = (draft.tasks ?? "").trim();
   if (!draft.name.trim() || !draft.personality.trim() || !tasks) throw new Error("Name, personality, and tasks are required.");
-  if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model for your Orbit.");
+  if (!draft.model || !preview.providers.some((item) => item.id === draft.providerId)) throw new Error("Choose a model for your Sprite.");
   const name = draft.name.trim();
   const personality = draft.personality.trim();
-  const role = existing ? draft.role.trim() : "Personal Orbit";
+  const role = existing ? draft.role.trim() : "Personal Sprite";
   if (!role) throw new Error("Role is required.");
   return {
     ...draft, name, personality, tasks, role, toolGrants: ["*"],
@@ -135,7 +135,7 @@ async function previewCommand(
   switch (command) {
     case "create_orbit": {
       const draft = args.orbit as Orbit;
-      if (preview.orbits.some((item) => item.id === draft.id)) throw new Error("This Orbit already exists.");
+      if (preview.orbits.some((item) => item.id === draft.id)) throw new Error("This Sprite already exists.");
       const orbit = previewOrbitProfile(draft);
       preview.orbits = [...preview.orbits, orbit];
       savePreview();
@@ -144,7 +144,7 @@ async function previewCommand(
     case "update_orbit_profile": {
       const draft = args.orbit as Orbit;
       const existing = preview.orbits.find((item) => item.id === draft.id);
-      if (!existing) throw new Error("This Orbit no longer exists.");
+      if (!existing) throw new Error("This Sprite no longer exists.");
       const orbit = previewOrbitProfile(draft, existing);
       preview.orbits = replaceById(preview.orbits, orbit);
       savePreview();
@@ -184,7 +184,7 @@ async function previewCommand(
       return;
     case "preview_attention": {
       const orbit = preview.orbits.find((item) => item.id === args.orbitId && item.enabled);
-      if (!orbit) throw new Error("Choose an enabled Orbit to preview.");
+      if (!orbit) throw new Error("Choose an enabled Sprite to preview.");
       const conversation = preview.conversations.find((item) =>
         item.orbitIds.length === 1 && item.orbitIds[0] === orbit.id,
       );
@@ -224,7 +224,7 @@ async function previewCommand(
     case "get_orbit_cli_setup": {
       const orbitId = requiredString(args, "orbitId");
       const orbit = preview.orbits.find((item) => item.id === orbitId);
-      if (!orbit) throw new Error("This Orbit no longer exists.");
+      if (!orbit) throw new Error("This Sprite no longer exists.");
       const folder = orbit.id.replace(/[^a-zA-Z0-9_-]/g, "_") || "orbit";
       const base = `/Users/you/.solar/orbits/${folder}`;
       return {
@@ -235,9 +235,9 @@ async function previewCommand(
       };
     }
     case "open_orbit_cli_setup":
-      throw new Error("Orbit terminals are available in Solar’s desktop app. Open the desktop app to set up this Orbit’s CLI sign-ins.");
+      throw new Error("Sprite terminals are available in Solar’s desktop app. Open the desktop app to set up this Sprite’s CLI sign-ins.");
     case "reset_orbit": {
-      if (args.confirmed !== true) throw new Error("Confirm before clearing this Orbit's saved data.");
+      if (args.confirmed !== true) throw new Error("Confirm before clearing this Sprite's saved data.");
       const privateIds = new Set(preview.conversations.filter((chat) => chat.orbitIds.length === 1 && chat.orbitIds[0] === args.orbitId).map((chat) => chat.id));
       preview.conversations = preview.conversations.filter((chat) => !privateIds.has(chat.id));
       preview.messages = preview.messages.filter((message) => !privateIds.has(message.conversationId));
@@ -338,7 +338,7 @@ async function previewCommand(
       return saved;
     }
     case "save_routine":
-      if (!preview.routines.some(routine => routine.id === (args.routine as {id: string}).id)) throw new Error("Ask an Orbit to create a routine in chat first.");
+      if (!preview.routines.some(routine => routine.id === (args.routine as {id: string}).id)) throw new Error("Ask a Sprite to create a routine in chat first.");
       preview.routines = replaceById(
         preview.routines,
         args.routine as PreviewState["routines"][number],
@@ -350,7 +350,7 @@ async function previewCommand(
       savePreview();
       return;
     case "run_routine":
-      throw new Error("Run routines in the desktop app with a connected Orbit.");
+      throw new Error("Run routines in the desktop app with a connected Sprite.");
     case "get_memories":
       return preview.memories.filter((memory) =>
         args.orbitId
@@ -426,7 +426,7 @@ async function previewCommand(
         orbit: Orbit;
       };
       if (!data.orbit?.name || !data.orbit?.role)
-        throw new Error("Choose an exported Solar Orbit profile.");
+        throw new Error("Choose an exported Solar Sprite profile.");
       const orbit = {
         ...data.orbit,
         id: crypto.randomUUID(),

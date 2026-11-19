@@ -94,7 +94,7 @@ async fn chatgpt_gateway_receives_plain_system_text_without_changing_tools_or_im
     });
 
     let system =
-        "You are a careful Solar Orbit.\nRespect tool permissions and preserve this instruction.";
+        "You are a careful Solar Sprite.\nRespect tool permissions and preserve this instruction.";
     let parameters = json!({
         "type": "object",
         "properties": { "query": { "type": "string" } },

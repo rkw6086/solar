@@ -17,13 +17,13 @@ pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         definition(
             "browser_open",
-            "Open an HTTP(S) page in this Orbit's visible, separate Solar browser profile.",
+            "Open an HTTP(S) page in this Sprite's visible, separate Solar browser profile.",
             json!({"url":{"type":"string"}}),
             &["url"],
         ),
         definition(
             "browser_search",
-            "Search the web in this Orbit's separate browser profile. Inspect the resulting page for sources.",
+            "Search the web in this Sprite's separate browser profile. Inspect the resulting page for sources.",
             json!({"query":{"type":"string"}}),
             &["query"],
         ),
@@ -76,7 +76,7 @@ impl BrowserManager {
         context: &ToolContext,
     ) -> Result<ToolOutput, String> {
         if !context.allow_host_execution {
-            return Err("Browser automation launches a host browser and requires this Orbit's explicit host-execution grant".into());
+            return Err("Browser automation launches a host browser and requires this Sprite's explicit host-execution grant".into());
         }
         let directory = profile_directory(context)?;
         if self
@@ -232,7 +232,7 @@ fn prepare_browser_credentials(directory: &Path, without_keychain: bool) -> Resu
             if bytes.len() > 4_194_304 {
                 return Err("Solar browser preferences are too large".into());
             }
-            serde_json::from_slice::<Value>(&bytes).map_err(|_| "Solar browser preferences are invalid; repair this Orbit's browser profile before reopening it")?
+            serde_json::from_slice::<Value>(&bytes).map_err(|_| "Solar browser preferences are invalid; repair this Sprite's browser profile before reopening it")?
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(_) => return Err("Cannot inspect Solar browser preferences".into()),

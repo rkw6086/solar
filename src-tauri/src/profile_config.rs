@@ -233,7 +233,7 @@ fn validate_orbit(orbit: &Orbit) -> Result<(), String> {
         || orbit.y.is_some_and(|v| !v.is_finite())
     {
         return Err(
-            "Invalid Orbit configuration: check its name, role, autonomy, and instruction lengths"
+            "Invalid Sprite configuration: check its name, role, autonomy, and instruction lengths"
                 .into(),
         );
     }
@@ -256,14 +256,14 @@ impl ProfileConfig {
         let mut seen_directories = BTreeMap::new();
         for reference in &master.orbits {
             if !valid_id(&reference.id) || !safe_component(&reference.directory) {
-                return Err("Invalid Orbit id or directory in config.toml".into());
+                return Err("Invalid Sprite id or directory in config.toml".into());
             }
             let folded = reference.directory.to_ascii_lowercase();
             if seen_directories
                 .insert(folded, reference.id.clone())
                 .is_some()
             {
-                return Err("Orbit directories must be unique, including case".into());
+                return Err("Sprite directories must be unique, including case".into());
             }
             let directory = root.join("orbits").join(&reference.directory);
             secure_directory(&directory)?;
@@ -273,7 +273,7 @@ impl ProfileConfig {
                 || config.orbit.name.trim().is_empty()
             {
                 return Err(format!(
-                    "Invalid Orbit configuration: {}",
+                    "Invalid Sprite configuration: {}",
                     directory.display()
                 ));
             }
@@ -282,7 +282,7 @@ impl ProfileConfig {
                 .insert(reference.id.clone(), config.orbit)
                 .is_some()
             {
-                return Err("Duplicate Orbit id in config.toml".into());
+                return Err("Duplicate Sprite id in config.toml".into());
             }
             locations.insert(reference.id.clone(), reference.directory.clone());
             Self::ensure_layout(&directory)?;
@@ -293,7 +293,7 @@ impl ProfileConfig {
                 || !safe_component(directory)
                 || !all_directories.insert(directory.to_ascii_lowercase())
             {
-                return Err("Invalid or colliding stored Orbit location".into());
+                return Err("Invalid or colliding stored Sprite location".into());
             }
         }
         for (kind, values) in [
@@ -346,7 +346,7 @@ impl ProfileConfig {
         let directory = self
             .locations
             .get(id)
-            .ok_or("Orbit data directory is unavailable")?;
+            .ok_or("Sprite data directory is unavailable")?;
         let path = self.root.join("orbits").join(directory);
         secure_directory(&path)?;
         Ok(path)
@@ -435,7 +435,7 @@ impl ProfileConfig {
                 return Ok(candidate);
             }
         }
-        Err("Cannot allocate an Orbit data directory".into())
+        Err("Cannot allocate a Sprite data directory".into())
     }
 
     fn check_external_edits(&self, orbit_id: Option<&str>) -> Result<(), String> {
@@ -455,7 +455,7 @@ impl ProfileConfig {
                 || serde_json::to_value(&disk.orbit).map_err(|e| e.to_string())?
                     != serde_json::to_value(previous).map_err(|e| e.to_string())?
             {
-                return Err("This Orbit config.toml changed outside Solar. Restart Solar to reload it before saving.".into());
+                return Err("This Sprite config.toml changed outside Solar. Restart Solar to reload it before saving.".into());
             }
         }
         Ok(())
@@ -492,7 +492,7 @@ impl ProfileConfig {
                 let orbit: Orbit = serde_json::from_value(value).map_err(|e| e.to_string())?;
                 validate_orbit(&orbit)?;
                 if orbit.id != id {
-                    return Err("Orbit configuration id mismatch".into());
+                    return Err("Sprite configuration id mismatch".into());
                 }
                 let directory = updated.directory_for_new(&orbit)?;
                 let path = updated.root.join("orbits").join(&directory);

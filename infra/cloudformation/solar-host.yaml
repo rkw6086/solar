@@ -69,7 +69,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      GroupDescription: Solar host administrator SSH only; no inbound Orbit/relay traffic
+      GroupDescription: Solar host administrator SSH only; no inbound Sprite/relay traffic
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - Description: Administrator SSH

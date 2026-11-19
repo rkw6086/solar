@@ -10,7 +10,7 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
     let fields = json!({
         "title": {"type":"string","minLength":1,"maxLength":160,"description":"A short, readable title for this routine."},
         "cron": {"type":"string","description":"Five-field local-time cron expression: minute hour day month weekday. Required for cron triggers; e.g. 0 9 * * 1-5 means weekdays at 9 AM."},
-        "prompt": {"type":"string","minLength":1,"maxLength":16000,"description":"The instructions this Orbit should follow each time the routine runs."},
+        "prompt": {"type":"string","minLength":1,"maxLength":16000,"description":"The instructions this Sprite should follow each time the routine runs."},
         "trigger": {"type":"string","enum":["cron","folder","completion"],"description":"cron: run on the supplied local-time cron schedule; folder: run when the project folder changes; completion: run after a direct user task finishes successfully. Routine runs do not trigger completion routines again."},
         "enabled": {"type":"boolean","description":"Enable or pause automatic runs. Defaults to true on creation."},
         "projectId": {"type":["string","null"],"description":"An accessible project ID from project_list. Required for folder triggers. Null means a private routine; omit on update to preserve the project."}
@@ -25,7 +25,7 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         ),
         (
             "routine_create",
-            "Create a recurring or event-triggered routine for yourself. Check routine_list first to avoid duplicates. Use cron scheduling, project folder changes, or successful direct-task completion. Available in direct conversations; delegated tasks must ask the user to schedule with the responsible Orbit.",
+            "Create a recurring or event-triggered routine for yourself. Check routine_list first to avoid duplicates. Use cron scheduling, project folder changes, or successful direct-task completion. Available in direct conversations; delegated tasks must ask the user to schedule with the responsible Sprite.",
             json!({"type":"object","properties":fields,"required":["title","prompt","trigger"],"additionalProperties":false}),
         ),
         (
@@ -124,7 +124,7 @@ fn direct_task(ctx: &RunContext) -> Result<(), String> {
     // A scheduled task starts a new root run. Until routines can persist inherited
     // scope, delegation must not turn restricted work into unrestricted future work.
     if ctx.ancestry.len() > 1 {
-        return Err("Delegated tasks cannot change or run routines. Ask the user to schedule this in a direct conversation with the responsible Orbit.".into());
+        return Err("Delegated tasks cannot change or run routines. Ask the user to schedule this in a direct conversation with the responsible Sprite.".into());
     }
     Ok(())
 }
@@ -139,7 +139,7 @@ fn visible_routine(routine: &Routine, ctx: &RunContext, projects: &[String]) -> 
 
 fn check_scope(routine: &Routine, ctx: &RunContext, projects: &[String]) -> Result<(), String> {
     if !visible_routine(routine, ctx, projects) {
-        return Err("Routine not found or not available to this Orbit".into());
+        return Err("Routine not found or not available to this Sprite".into());
     }
     Ok(())
 }

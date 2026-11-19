@@ -122,12 +122,14 @@ impl Engine {
         }
         let orbit_ids = memory.orbit_ids();
         if !orbit_ids.is_empty() && !orbit_ids.contains(&ctx.task.orbit_id) {
-            return Err("Shared Orbit memories must include the Orbit saving them".into());
+            return Err("Shared Sprite memories must include the Sprite saving them".into());
         }
         if ctx.ancestry.len() > 1
             && (orbit_ids != vec![ctx.task.orbit_id.clone()] || !memory.project_ids().is_empty())
         {
-            return Err("Delegated tasks may only save private notes for the current Orbit".into());
+            return Err(
+                "Delegated tasks may only save private notes for the current Sprite".into(),
+            );
         }
         memory.content = args.content;
         let saved = self.save_memory(memory)?;
