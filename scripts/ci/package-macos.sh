@@ -6,10 +6,25 @@ umask 077
 
 fail() { echo "Solar macOS package: $*" >&2; exit 1; }
 [[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail 'Use the native macos-arm64 runner.'
-[[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == refs/tags/* ]] || fail 'Signing requires a pushed version tag.'
-version=${GITHUB_REF#refs/tags/}
-[[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Use a bare stable version tag such as 0.1.0.'
-[[ ${SOLAR_RELEASE_VERSION:-} == "$version" ]] || fail 'Validated release version is missing or does not match the tag.'
+channel=${SOLAR_BUILD_CHANNEL:-release}
+version=${SOLAR_RELEASE_VERSION:-}
+[[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Use a validated stable package version.'
+[[ ${SOLAR_RELEASE_SHA:-} =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || fail 'Validated source commit is missing.'
+if [[ $channel == beta ]]; then
+  [[ ( ${GITHUB_EVENT_NAME:-} == schedule || ${GITHUB_EVENT_NAME:-} == workflow_dispatch ) && ${GITHUB_REF:-} == refs/heads/main ]] || fail 'Beta signing requires a scheduled or manual main run.'
+  [[ ${SOLAR_BETA_ID:-} == "$SOLAR_RELEASE_SHA" ]] || fail 'Beta identity must match the validated main commit.'
+  artifact_version="beta_$SOLAR_BETA_ID"
+  volume_name='Solar Beta'
+elif [[ $channel == release ]]; then
+  [[ ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == "refs/tags/$version" ]] || fail 'Release signing requires the validated pushed version tag.'
+  artifact_version=$version
+  volume_name=Solar
+else
+  fail 'Build channel must be release or beta.'
+fi
+[[ $(git rev-parse HEAD) == "$SOLAR_RELEASE_SHA" ]] || fail 'Checkout no longer matches the validated source commit.'
+[[ -z $(git status --porcelain) ]] || fail 'Signing requires an unchanged source checkout.'
+
 for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8 CARGO_TARGET_DIR SOLAR_RELEASE_DIR; do
   [[ -n ${!variable:-} ]] || fail "Missing Gitea secret or job variable: $variable"
 done
@@ -23,7 +38,9 @@ done
 app="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Solar.app"
 [[ -x "$app/Contents/MacOS/solar" && -x "$app/Contents/MacOS/solar-native-helper" ]] || fail 'Build the complete app first.'
 bundle_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
-[[ $bundle_version == "$version" ]] || fail 'App bundle version does not match the release tag.'
+bundle_channel=$(/usr/libexec/PlistBuddy -c 'Print :SolarBuildChannel' "$app/Contents/Info.plist")
+bundle_commit=$(/usr/libexec/PlistBuddy -c 'Print :SolarSourceCommit' "$app/Contents/Info.plist")
+[[ $bundle_version == "$version" && $bundle_channel == "$channel" && $bundle_commit == "$SOLAR_RELEASE_SHA" ]] || fail 'App bundle version, channel, or source commit does not match the validated build.'
 # macOS's basic certificate-chain lookup must discover this keychain too.
 # Register it in the standard location before importing its certificates.
 work=$(mktemp -d "$HOME/Library/Keychains/solar-sign.XXXXXX")
@@ -145,8 +162,8 @@ stage="$work/dmg-root"
 mkdir "$stage"
 ditto "$app" "$stage/Solar.app"
 ln -s /Applications "$stage/Applications"
-dmg="$SOLAR_RELEASE_DIR/Solar_${version}_aarch64.dmg"
-hdiutil create -volname Solar -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null
+dmg="$SOLAR_RELEASE_DIR/Solar_${artifact_version}_aarch64.dmg"
+hdiutil create -volname "$volume_name" -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null
 /usr/bin/codesign --force --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" --identifier net.solar.orbits.dmg "$dmg"
 /usr/bin/codesign --verify --strict --verbose=2 "$dmg"
 notarize "$dmg" dmg

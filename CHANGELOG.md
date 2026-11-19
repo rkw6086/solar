@@ -1,9 +1,13 @@
 # Changelog
 
 Solar uses stable Semantic Versioning tags without a prefix, such as `0.1.0`.
-Released tags and their downloads are immutable; changes receive a new version.
+Numbered Git tags are immutable. Downloads retain one stable release and one rolling beta; verified replacements retire older artifacts.
 
 ## [Unreleased]
+
+### Changed
+
+- Keep one stable release and one rolling beta with verified replacement and cleanup of superseded downloads. Nightly beta checks run at 3:00 a.m. America/Chicago; About Solar identifies beta builds by source commit.
 
 ## [0.1.3]
 

@@ -177,7 +177,11 @@ corepack pnpm run version:check
 
 Add matching notes to `CHANGELOG.md`, commit and push `main`, then run `corepack pnpm run release:tag VERSION --push` with the prepared version. Use `minor`, `major`, or an exact version in place of `patch` when appropriate. The initial release is `0.1.0`; prerelease tags are not currently supported.
 
-Only newly pushed version tags start macOS signing. Branch and pull-request checks have no Apple credentials. A successful release publishes its signed, notarized, and stapled DMG plus checksums on [Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases).
+Stable releases build when a new version tag is pushed. A separate beta workflow checks current `main` every night at **3:00 a.m. America/Chicago**, including daylight saving time; it skips a complete beta when the source has not changed. The beta workflow can also be started manually. Branch and pull-request checks have no Apple credentials.
+
+[Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases) retains **one current stable release and one rolling `beta` release**. Each contains a signed, notarized, stapled DMG and its checksum. New downloads are verified before old release records and assets are deleted. Numbered Git tags remain permanent source references; only the `beta` channel moves. Superseded Solar macOS Actions archives are also removed once both download channels verify, while active runs and unrelated artifacts are preserved. Gitea reclaims deleted archive storage asynchronously.
+
+Beta DMGs include the source commit in their filename, and About Solar shows the beta channel and commit. Stable and beta share the same app identifier and `~/.solar` data; install the stable DMG again to return to the stable build.
 
 See the [Gitea macOS release setup](docs/macos-release.md) for the full release steps, `macos-arm64` host runner, Developer ID Application certificate, notarization API key, and shared organization secrets. Signing credentials belong in Gitea secrets, not the repository.
 

@@ -1,0 +1,88 @@
+name: macOS beta
+
+on:
+  schedule:
+    - cron: 'CRON_TZ=America/Chicago 0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  macos-beta:
+    # Build, publish, and prune within the same capacity-one native runner job.
+    runs-on: macos-arm64
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    timeout-minutes: 300
+    permissions:
+      code: write # Only the rolling beta and owned staging tags can move.
+      actions: write
+      releases: write
+    env:
+      CI: 'true'
+      SOLAR_BUILD_CHANNEL: beta
+      PYTHONDONTWRITEBYTECODE: '1'
+      SOLAR_JOB_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      GITEA_SERVER_URL: ${{ github.server_url }}
+      GITEA_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out current main
+        uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Scheduled context SHAs may lag; preflight validates the live branch.
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: https://github.com/actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.17.0'
+
+      - name: Check main and changes since the published beta
+        id: beta
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: node scripts/ci/check-beta-build.mjs
+
+      - name: Set up pinned build tools
+        if: steps.beta.outputs.build == 'true'
+        shell: bash
+        run: bash scripts/ci/setup-macos.sh
+
+      - name: Build and check Solar without signing credentials
+        if: steps.beta.outputs.build == 'true'
+        shell: bash
+        run: |
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+          bash scripts/ci/build-macos.sh
+
+      - name: Sign, notarize, staple, and create beta DMG
+        if: steps.beta.outputs.build == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: bash scripts/ci/package-macos.sh
+
+      - name: Replace the beta release and prune superseded downloads
+        if: steps.beta.outputs.build == 'true'
+        shell: bash
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: python3 scripts/ci/publish-release.py
+
+      - name: Remove job build files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Signing restores the runner keychains in package-macos.sh's trap.
+          # Only this job's temporary paths are removed, never global caches.
+          [[ "$RUNNER_TEMP" == /* && "$SOLAR_JOB_ID" =~ ^[0-9]+-[0-9]+$ ]]
+          for kind in build artifacts notes; do
+            rm -rf -- "$RUNNER_TEMP/solar-$kind-$SOLAR_JOB_ID"
+          done

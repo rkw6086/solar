@@ -2,7 +2,19 @@
 
 Solar's release workflow is [`.gitea/workflows/macos-release.yml`](../.gitea/workflows/macos-release.yml). [`scripts/ci/build-macos.sh`](../scripts/ci/build-macos.sh) builds and checks the app; [`scripts/ci/package-macos.sh`](../scripts/ci/package-macos.sh) signs and packages it.
 
-The workflow targets the existing **`macos-arm64`** runner and produces an Apple Silicon DMG only when a new version tag is pushed. It builds Solar and the bundled Swift helper, signs the helper before the app, notarizes and staples the app, creates a DMG containing `Solar.app` and an Applications shortcut, then signs, notarizes, staples, and verifies the DMG. After those checks succeed, it publishes the DMG and `SHA256SUMS` on [Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases), using that version's changelog notes.
+The stable workflow targets the existing **`macos-arm64`** runner and produces an Apple Silicon DMG when a new version tag is pushed. It builds Solar and the bundled Swift helper, signs the helper before the app, notarizes and staples the app, creates a DMG containing `Solar.app` and an Applications shortcut, then signs, notarizes, staples, and verifies the DMG. After those checks succeed, it publishes the DMG and `SHA256SUMS` on [Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases), using that version's changelog notes.
+
+## Stable and nightly beta channels
+
+Solar keeps **one published stable release and one rolling beta release**. A stable release uses its numbered tag, such as `0.1.3`. The [beta workflow](../.gitea/workflows/macos-beta.yml) checks current `main` at **3:00 a.m. America/Chicago** with `CRON_TZ=America/Chicago 0 3 * * *`, including daylight saving time. It skips an unchanged, complete beta; start the same workflow manually on `main` to rebuild on demand. Branch pushes and pull requests do not sign builds.
+
+The workflow checks out live `main` and validates it against Gitea before building. The rolling [`beta` release](https://git.ryserve.net/internal/solar-chat/releases/tag/beta) contains `Solar_beta_COMMIT_aarch64.dmg` and `SHA256SUMS`; About Solar shows its package version, beta channel, and source commit. Beta release notes describe commits since the previous successfully published beta, not failed build attempts.
+
+Stable and beta build, sign, publish, and prune within the same capacity-one native runner job. There is no duplicate Actions artifact upload. A new download is checked remotely before older release records and assets are removed. The beta uses a verified staging release before replacing its rolling tag; Gitea cannot switch tag and release atomically, so the beta URL may be briefly unavailable during cutover while the staging download remains recoverable. An uncertain API write stops cleanup; retrying reconciles the exact owned state.
+
+Historical numbered **Git tags remain immutable** for source history; their old release pages and DMG/checksum downloads are removed after a newer stable download verifies. Old owned Solar macOS Actions archives from completed runs are removed once both current channels verify healthy. Active runs, unrelated artifacts/releases, and shared runner caches are preserved. Gitea reclaims deleted archive bytes asynchronously. Tiny asset-free staging refs may remain if Gitea cannot delete an unindexed ref through its tag API.
+
+Stable and beta use the same application identifier and `~/.solar` profile. Installing the stable DMG restores the stable application without moving profile data.
 
 The files alone do not configure Apple signing. Complete the certificate, API-key, and Gitea-secret steps below before running the workflow.
 
@@ -110,7 +122,7 @@ The packaging script creates and registers a temporary keychain under the runner
 
 The publishing step uses Gitea's built-in Actions token with release-write permission. It does not require another personal access token or another Apple secret.
 
-The Mac uploads its verified files as an Actions artifact first. A separate Linux job publishes those same files to Gitea Releases, so a failed publication can be retried without signing the app again. Existing release files are never silently replaced; published versions remain immutable.
+The Mac publishes its verified files directly to Gitea Releases before releasing its runner slot. Publication and retention use release-write and Actions-write permissions; the beta additionally needs code-write permission for its rolling and staging tags. Credentials remain limited to their required steps. A failed publication preserves recoverable release state instead of deleting working downloads.
 
 ## 5. Prepare and publish a version
 
@@ -141,10 +153,10 @@ corepack pnpm run release:tag 0.1.1 --push
 
 For the initial release, use `0.1.0` with matching version files and changelog notes. Without `--push`, `release:tag` creates the tag locally and prints the command to push it. The helper checks the version, notes, and Git state before tagging.
 
-Only a newly pushed version tag starts macOS signing. Branch pushes and pull requests run release checks without Apple credentials; there is no manual signing workflow. CI rejects mismatched, moved, or reused tags and does not replace an already published release. Treat version tags as permanent: source changes for a release belong in a new version. Protect the version-tag pattern in Gitea as well as `main`.
+Only a newly pushed numbered tag starts stable signing. Nightly/manual beta signing is restricted to `main`. Branch pushes and pull requests run release checks without Apple credentials. CI rejects mismatched, moved, reused, and stale numbered tags; source changes for a stable release belong in a new version. Protect numbered tags and `main`, while allowing the trusted beta workflow to replace its owned `beta` and staging refs.
 
 The job verifies the app's code signature, notarization ticket, and Gatekeeper assessment, then does the corresponding checks for the DMG. Each Apple submission waits for up to 90 minutes; Apple's first notarization submission may take longer than later submissions. Failure leaves the job failed; an unsigned or rejected package is not presented as a successful release. [Apple notarization overview](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution/)
 
-Download the DMG and `SHA256SUMS` from the version's [Gitea Release](https://git.ryserve.net/internal/solar-chat/releases). A secondary Actions artifact named **`Solar-VERSION-macos-arm64`**, for example `Solar-0.1.0-macos-arm64`, also contains those files and available notarization logs. The workflow uses Gitea's v4-compatible upload action pinned to a commit; build and artifact files live in job-specific temporary paths and are removed after upload. Actions artifacts are retained for 14 days. Test the downloaded DMG on a Mac: mount it, drag Solar to Applications, launch it, and exercise screen sharing and Accessibility permissions. Signing/notarization checks do not replace that functional test. [Gitea artifacts](https://docs.gitea.com/usage/actions/artifacts/)
+Download the DMG and `SHA256SUMS` from the version's [Gitea Release](https://git.ryserve.net/internal/solar-chat/releases). Build and packaging files live in job-specific temporary directories and are removed after publication. New builds do not retain duplicate Actions archives. Test the downloaded DMG on a Mac: mount it, drag Solar to Applications, launch it, and exercise screen sharing and Accessibility permissions. Signing/notarization checks do not replace that functional test. [Gitea artifacts](https://docs.gitea.com/usage/actions/artifacts/)
 
 This initial workflow builds Apple Silicon only. Solar's helper staging currently supports separate `aarch64-apple-darwin` and `x86_64-apple-darwin` builds, not a universal helper; an Intel or universal release needs a separate extension to the pipeline.

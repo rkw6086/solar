@@ -18,6 +18,7 @@
     "test:tools": "node --test src/components/toolPresentation.test.mjs",
     "test:projects": "node --test src/projectLocation.test.mjs",
     "test:release": "node --test scripts/release.test.mjs",
+    "test:beta": "node --test scripts/beta.test.mjs",
     "version:check": "node scripts/release.mjs check",
     "release:prepare": "node scripts/release.mjs prepare",
     "release:tag": "node scripts/release.mjs tag",

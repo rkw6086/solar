@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -9,7 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 MOCK = r'''#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys
+import json, os, pathlib, plistlib, shutil, sys
 tool, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 with open(os.environ['MOCK_CALLS'], 'a') as log:
     log.write(json.dumps([tool, *args]) + '\n')
@@ -18,7 +19,7 @@ if tool == 'uname':
 elif tool == 'rustc': print('rustc 1.99.1 (test)')
 elif tool == 'node': print('v24.17.0' if '--version' in args else '0.1.0')
 elif tool == 'git':
-    print('deadbeef' if args == ['rev-parse', 'HEAD'] else '', end='')
+    print(os.environ['SOLAR_RELEASE_SHA'] if args == ['rev-parse', 'HEAD'] else '', end='')
 elif tool == 'openssl':
     if args[0] == 'rand': print('a' * 64)
     elif args[0] == 'x509':
@@ -63,7 +64,11 @@ elif tool == 'codesign':
         assert args[args.index('--keychain')+1] in search
     if '-dv' in args:
         print('TeamIdentifier=ABCDEFGHIJ\nflags=0x10000(runtime)', file=sys.stderr)
-elif tool == 'PlistBuddy': print(os.environ.get('MOCK_BUNDLE_VERSION', '0.1.0'))
+elif tool == 'PlistBuddy':
+    field = args[1].removeprefix('Print :')
+    with open(args[-1], 'rb') as source: data = plistlib.load(source)
+    override = {'CFBundleShortVersionString': 'MOCK_BUNDLE_VERSION', 'SolarBuildChannel': 'MOCK_BUNDLE_CHANNEL', 'SolarSourceCommit': 'MOCK_BUNDLE_COMMIT'}.get(field)
+    print(os.environ.get(override, data[field]) if override else data[field])
 elif tool == 'ditto':
     if '-c' in args: pathlib.Path(args[-1]).write_bytes(b'dummy-zip')
     else: shutil.copytree(args[-2], args[-1])
@@ -86,6 +91,8 @@ elif tool == 'corepack' and 'tauri' in args:
         path = app / name
         path.write_text('dummy executable')
         path.chmod(0o755)
+    with (app.parent / 'Info.plist').open('wb') as destination:
+        plistlib.dump({'CFBundleShortVersionString':'0.1.0'}, destination)
 '''
 
 
@@ -112,6 +119,7 @@ class ReleaseTest(unittest.TestCase):
             'MOCK_EFFECTIVE_LIST': str(self.root / 'effective-list.json'),
             'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/tags/0.1.0',
             'SOLAR_RELEASE_VERSION': '0.1.0',
+            'SOLAR_RELEASE_SHA': 'a' * 40,
             'APPLE_CERTIFICATE': base64.b64encode(b'dummy-p12').decode(),
             'APPLE_CERTIFICATE_PASSWORD': 'dummy-p12-password',
             'APPLE_SIGNING_IDENTITY': 'Developer ID Application: Solar Test (ABCDEFGHIJ)',
@@ -140,6 +148,10 @@ class ReleaseTest(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('dummy')
             path.chmod(0o755)
+        with (self.app / 'Contents/Info.plist').open('wb') as destination:
+            plistlib.dump({'CFBundleShortVersionString': '0.1.0',
+                           'SolarBuildChannel': self.env.get('SOLAR_BUILD_CHANNEL', 'release'),
+                           'SolarSourceCommit': self.env['SOLAR_RELEASE_SHA']}, destination)
 
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -180,6 +192,51 @@ class ReleaseTest(unittest.TestCase):
         self.assertTrue((self.root / 'artifacts/SHA256SUMS').is_file())
         for secret in ('dummy-p12-password', self.env['APPLE_CERTIFICATE'], self.env['APPLE_API_KEY_P8']):
             self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def beta_environment(self, event='schedule'):
+        self.env.update(SOLAR_BUILD_CHANNEL='beta', SOLAR_BETA_ID=self.env['SOLAR_RELEASE_SHA'],
+                        GITHUB_EVENT_NAME=event, GITHUB_REF='refs/heads/main')
+
+    def test_beta_build_embeds_channel_and_source_identity(self):
+        self.beta_environment()
+        result = self.run_script('build-macos.sh')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with (self.app / 'Contents/Info.plist').open('rb') as source:
+            data = plistlib.load(source)
+        self.assertEqual(data['SolarBuildChannel'], 'beta')
+        self.assertEqual(data['SolarSourceCommit'], self.env['SOLAR_RELEASE_SHA'])
+        result = self.run_script('package-macos.sh')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / f'artifacts/Solar_beta_{"a" * 40}_aarch64.dmg').is_file())
+        self.assert_cleaned()
+
+    def test_manual_beta_can_sign_main(self):
+        self.beta_environment('workflow_dispatch')
+        self.prepare_app()
+        result = self.run_script('package-macos.sh')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_cleaned()
+
+    def test_beta_rejects_branch_push_wrong_branch_and_wrong_identity_before_keys(self):
+        self.beta_environment()
+        self.prepare_app()
+        for updates in ({'GITHUB_EVENT_NAME': 'push'}, {'GITHUB_REF': 'refs/heads/feature'},
+                        {'SOLAR_BETA_ID': 'b' * 40}):
+            previous = self.env.copy()
+            self.env.update(updates)
+            self.assertNotEqual(self.run_script('build-macos.sh').returncode, 0)
+            self.assertNotEqual(self.run_script('package-macos.sh').returncode, 0)
+            self.env = previous
+        self.assertFalse(any(call[0] == 'security' for call in self.recorded()))
+
+    def test_bundle_channel_and_commit_must_match_before_keys(self):
+        self.prepare_app()
+        for key, value in [('MOCK_BUNDLE_CHANNEL', 'beta'), ('MOCK_BUNDLE_COMMIT', 'b' * 40)]:
+            self.env[key] = value
+            result = self.run_script('package-macos.sh')
+            self.assertNotEqual(result.returncode, 0)
+            del self.env[key]
+        self.assertFalse(any(call[0] == 'security' for call in self.recorded()))
 
     def test_notary_rejection_cleans_credentials_and_distributable(self):
         self.prepare_app()
