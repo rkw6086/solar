@@ -5,6 +5,8 @@ Released tags and their downloads are immutable; changes receive a new version.
 
 ## [Unreleased]
 
+## [0.1.3]
+
 ### Changed
 
 - Renamed agent companions from Orbits to Sprites throughout the interface, onboarding, notifications, and agent instructions. Existing profiles, storage paths, and integrations stay compatible.
