@@ -7,6 +7,8 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Changed
 
+- Move all builds, checks, signing, and release publication to GitHub Actions, with Gitea remaining the primary source and securely synchronizing with the public `rkw6086/solar` repository.
+- Remote diagnostics require a runtime `RYSERVE_LOGGING_KEY`; distributed source and new binaries contain no embedded logging credential.
 - Keep one stable release and one rolling beta with verified replacement and cleanup of superseded downloads. Nightly beta checks run at 3:00 a.m. America/Chicago; About Solar identifies beta builds by source commit.
 - Give every Sprite a separate orbital path in the launcher and desktop formation, with synchronized motion that keeps neighbors apart.
 - Smooth desktop expansion, contraction, and orbiting; hovering or focusing a Sprite pauses the formation and gently enlarges its avatar. Remove the gold hover decorations.

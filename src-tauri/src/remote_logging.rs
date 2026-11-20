@@ -37,9 +37,9 @@ struct Config {
 }
 
 impl Config {
-    fn from_key(environment: Option<&str>, bundled: &str, endpoint: &str) -> Option<Self> {
-        // Presence wins, even when blank: an empty override explicitly opts out.
-        let key = environment.unwrap_or(bundled).trim();
+    fn from_key(environment: Option<&str>, endpoint: &str) -> Option<Self> {
+        // Diagnostics are opt-in. Published source and binaries carry no key.
+        let key = environment?.trim();
         if key.is_empty() || key.len() > 8_192 {
             return None;
         }
@@ -88,11 +88,7 @@ pub(crate) fn init() {
             Err(std::env::VarError::NotPresent) => None,
             Err(std::env::VarError::NotUnicode(_)) => return None,
         };
-        let config = Config::from_key(
-            environment.as_deref(),
-            super::logging_credentials::BUNDLED_KEY,
-            ENDPOINT,
-        )?;
+        let config = Config::from_key(environment.as_deref(), ENDPOINT)?;
         let sanitizer = config.sanitizer.clone();
         // Regex initialization must happen during normal startup, not while
         // unwinding a panic or holding the panic-hook recursion guard.

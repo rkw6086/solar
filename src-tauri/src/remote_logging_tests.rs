@@ -20,15 +20,14 @@ fn logger(capacity: usize) -> (Logger, mpsc::Receiver<Command>) {
 }
 
 #[test]
-fn environment_overrides_bundle_and_blank_or_invalid_values_disable() {
-    let fallback = Config::from_key(None, "bundled-test-value", ENDPOINT).unwrap();
-    assert_eq!(fallback.api_key, "bundled-test-value");
-    let override_value = Config::from_key(Some(" env-test-value "), "bundle", ENDPOINT).unwrap();
-    assert_eq!(override_value.api_key, "env-test-value");
-    assert!(override_value.api_key.is_sensitive());
-    assert!(Config::from_key(Some("  "), "bundle", ENDPOINT).is_none());
-    assert!(Config::from_key(Some("invalid\r\nheader"), "bundle", ENDPOINT).is_none());
-    assert!(Config::from_key(None, "", ENDPOINT).is_none());
+fn environment_key_is_required_and_blank_or_invalid_values_disable() {
+    assert!(Config::from_key(None, ENDPOINT).is_none());
+    let configured = Config::from_key(Some(" env-test-value "), ENDPOINT).unwrap();
+    assert_eq!(configured.api_key, "env-test-value");
+    assert!(configured.api_key.is_sensitive());
+    assert!(Config::from_key(Some("  "), ENDPOINT).is_none());
+    assert!(Config::from_key(Some("invalid\r\nheader"), ENDPOINT).is_none());
+    assert!(Config::from_key(Some(&"x".repeat(8_193)), ENDPOINT).is_none());
 }
 
 #[test]
@@ -199,7 +198,7 @@ fn test_client() -> Client {
 #[tokio::test]
 async fn wire_format_matches_galaxy_and_retries_transient_failures_only() {
     let (url, received) = server(vec![503, 204]).await;
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     let (logger, _) = logger(1);
     let payload = logger.payload(
         "info",
@@ -232,7 +231,7 @@ async fn wire_format_matches_galaxy_and_retries_transient_failures_only() {
     }
     assert_eq!(requests[0].1, requests[1].1);
     let (url, received) = server(vec![401]).await;
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     assert!(!deliver(&test_client(), &config, &payload, Duration::ZERO).await);
     assert_eq!(received.await.unwrap().len(), 1);
 }
@@ -240,13 +239,13 @@ async fn wire_format_matches_galaxy_and_retries_transient_failures_only() {
 #[tokio::test]
 async fn retries_are_bounded_and_redirects_do_not_forward_credentials() {
     let (url, received) = server(vec![503; MAX_ATTEMPTS]).await;
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     let (logger, _) = logger(1);
     let payload = logger.payload("warn", "retry_test", "Retry test", json!({}));
     assert!(!deliver(&test_client(), &config, &payload, Duration::ZERO).await);
     assert_eq!(received.await.unwrap().len(), MAX_ATTEMPTS);
     let (url, received) = server(vec![307, 204]).await;
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     assert!(!deliver(&test_client(), &config, &payload, Duration::ZERO).await);
     assert_eq!(received.await.unwrap().len(), 1);
 }
@@ -254,7 +253,7 @@ async fn retries_are_bounded_and_redirects_do_not_forward_credentials() {
 #[tokio::test]
 async fn queue_is_bounded_and_flush_acknowledges_earlier_records() {
     let (url, received) = server(vec![204]).await;
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     let (logger, receiver) = logger(1);
     assert!(
         logger
@@ -374,7 +373,7 @@ async fn plain_thread_panic_preempts_a_stalled_normal_delivery() {
             .unwrap();
         (normal_body, panic_body)
     });
-    let config = Config::from_key(Some("test-ingestion-key"), "", &url).unwrap();
+    let config = Config::from_key(Some("test-ingestion-key"), &url).unwrap();
     let (mut logger, mut receiver) = logger(1);
     let (panic_sender, mut panic_receiver) = mpsc::channel(1);
     logger.panic_sender = panic_sender;

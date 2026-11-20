@@ -210,6 +210,26 @@ class ReleaseTest(unittest.TestCase):
         self.assertTrue((self.root / f'artifacts/Solar_beta_{"a" * 40}_aarch64.dmg').is_file())
         self.assert_cleaned()
 
+    def test_github_pull_request_builds_without_signing(self):
+        self.env.update(SOLAR_BUILD_CHANNEL='ci', SOLAR_GITHUB_CI='1',
+                        GITHUB_SERVER_URL='https://github.com', GITHUB_REPOSITORY='rkw6086/solar',
+                        GITHUB_EVENT_NAME='pull_request', GITHUB_REF='refs/pull/42/merge')
+        result = self.run_script('build-macos.sh')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with (self.app / 'Contents/Info.plist').open('rb') as source:
+            self.assertEqual(plistlib.load(source)['SolarBuildChannel'], 'ci')
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[0] in ('security', 'codesign') for call in self.recorded()))
+
+    def test_foreign_repository_cannot_request_unsigned_build_mode(self):
+        self.env.update(SOLAR_BUILD_CHANNEL='ci', SOLAR_GITHUB_CI='1',
+                        GITHUB_SERVER_URL='https://github.com', GITHUB_REPOSITORY='someone/solar',
+                        GITHUB_EVENT_NAME='pull_request')
+        result = self.run_script('build-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[0] == 'corepack' for call in self.recorded()))
+
     def test_manual_beta_can_sign_main(self):
         self.beta_environment('workflow_dispatch')
         self.prepare_app()

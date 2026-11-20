@@ -18,7 +18,9 @@ export SOLAR_BUILD_CHANNEL=${SOLAR_BUILD_CHANNEL:-release}
 [[ ${SOLAR_RELEASE_VERSION:-} == "$version" ]] || fail 'Validated package version is missing or mismatched.'
 [[ ${SOLAR_RELEASE_SHA:-} =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || fail 'Validated source commit is missing.'
 [[ $(git rev-parse HEAD) == "$SOLAR_RELEASE_SHA" ]] || fail 'Checkout does not match the validated source commit.'
-if [[ $SOLAR_BUILD_CHANNEL == beta ]]; then
+if [[ $SOLAR_BUILD_CHANNEL == ci ]]; then
+  [[ ${SOLAR_GITHUB_CI:-} == 1 && ${GITHUB_SERVER_URL:-} == https://github.com && ${GITHUB_REPOSITORY:-} == rkw6086/solar && ${GITHUB_EVENT_NAME:-} == pull_request ]] || fail 'Unsigned validation requires a GitHub pull request.'
+elif [[ $SOLAR_BUILD_CHANNEL == beta ]]; then
   [[ ( ${GITHUB_EVENT_NAME:-} == schedule || ${GITHUB_EVENT_NAME:-} == workflow_dispatch ) && ${GITHUB_REF:-} == refs/heads/main ]] || fail 'Beta builds require a scheduled or manual main run.'
   [[ ${SOLAR_BETA_ID:-} == "$SOLAR_RELEASE_SHA" ]] || fail 'Beta identity must match the validated main commit.'
 elif [[ $SOLAR_BUILD_CHANNEL == release ]]; then
@@ -33,7 +35,12 @@ export SOLAR_SOURCE_MODIFIED=false
 export VITE_SOLAR_BUILD_CHANNEL="$SOLAR_BUILD_CHANNEL"
 export VITE_SOLAR_SOURCE_COMMIT="$SOLAR_RELEASE_SHA"
 
-corepack pnpm install --frozen-lockfile
+install_args=(install --frozen-lockfile)
+if [[ -n ${SOLAR_PNPM_STORE_DIR:-} ]]; then
+  [[ $SOLAR_PNPM_STORE_DIR == "$RUNNER_TEMP/solar-ci-cache-v1/tools/pnpm-store" ]] || fail 'Unexpected package cache directory.'
+  install_args+=(--store-dir "$SOLAR_PNPM_STORE_DIR")
+fi
+corepack pnpm "${install_args[@]}"
 corepack pnpm run check
 corepack pnpm run test:intro
 corepack pnpm run test:system
@@ -43,6 +50,8 @@ corepack pnpm run test:tools
 corepack pnpm run test:projects
 corepack pnpm run test:release
 corepack pnpm run test:beta
+corepack pnpm run test:github
+corepack pnpm run test:chat
 cargo fmt --all -- --check
 
 # Do not put any signing/notarization secrets in this step's environment.

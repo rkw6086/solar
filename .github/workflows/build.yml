@@ -1,0 +1,244 @@
+name: Build Solar
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
+  schedule:
+    - cron: '0 3 * * *'
+      timezone: America/Chicago
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'publication' }}
+  queue: max
+  cancel-in-progress: false
+
+env:
+  CI: 'true'
+  PYTHONDONTWRITEBYTECODE: '1'
+  CARGO_BUILD_JOBS: '3'
+  CARGO_INCREMENTAL: '0'
+  SOLAR_GITHUB_CI: '1'
+  SOLAR_JOB_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  prepare-publication:
+    if: >-
+      github.repository == 'rkw6086/solar' &&
+      (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !github.event.deleted))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      build: ${{ steps.prepare.outputs.build }}
+      channel: ${{ steps.prepare.outputs.channel }}
+      version: ${{ steps.prepare.outputs.version }}
+      sha: ${{ steps.prepare.outputs.sha }}
+      beta_id: ${{ steps.prepare.outputs.beta_id }}
+      previous_beta_sha: ${{ steps.prepare.outputs.previous_beta_sha }}
+      previous_beta_release_id: ${{ steps.prepare.outputs.previous_beta_release_id }}
+    steps:
+      - name: Check out source and immutable tag history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.17.0'
+      - name: Validate source, channel, and current beta
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/check-github-build.mjs
+      - name: Retain bounded release notes
+        if: steps.prepare.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: solar-release-notes
+          path: ${{ steps.prepare.outputs.notes_file }}
+          retention-days: 1
+          overwrite: true
+          if-no-files-found: error
+
+  prepare-pr:
+    if: github.repository == 'rkw6086/solar' && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.prepare.outputs.build }}
+      channel: ${{ steps.prepare.outputs.channel }}
+      version: ${{ steps.prepare.outputs.version }}
+      sha: ${{ steps.prepare.outputs.sha }}
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.17.0'
+      - name: Validate unsigned pull request build
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/check-github-build.mjs
+
+  prepare:
+    needs: [prepare-publication, prepare-pr]
+    if: >-
+      ${{ !cancelled() && github.repository == 'rkw6086/solar' &&
+          ((github.event_name == 'pull_request' && needs['prepare-pr'].result == 'success') ||
+           (github.event_name != 'pull_request' && needs['prepare-publication'].result == 'success')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      build: ${{ needs['prepare-publication'].outputs.build || needs['prepare-pr'].outputs.build }}
+      channel: ${{ needs['prepare-publication'].outputs.channel || needs['prepare-pr'].outputs.channel }}
+      version: ${{ needs['prepare-publication'].outputs.version || needs['prepare-pr'].outputs.version }}
+      sha: ${{ needs['prepare-publication'].outputs.sha || needs['prepare-pr'].outputs.sha }}
+      beta_id: ${{ needs['prepare-publication'].outputs.beta_id }}
+      previous_beta_sha: ${{ needs['prepare-publication'].outputs.previous_beta_sha }}
+      previous_beta_release_id: ${{ needs['prepare-publication'].outputs.previous_beta_release_id }}
+    steps:
+      - name: Forward validated inputs
+        run: echo 'Validated Solar build inputs are ready.'
+
+  macos:
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      SOLAR_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      SOLAR_RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+      SOLAR_BUILD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      SOLAR_BETA_ID: ${{ needs.prepare.outputs.beta_id }}
+    steps:
+      - name: Check out the validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.17.0'
+      - name: Restore unsigned build caches
+        id: build_cache
+        uses: ./.github/actions/build-cache
+      - name: Set up pinned native tools
+        run: bash scripts/ci/setup-macos.sh
+      - name: Build and check Solar without signing credentials
+        run: |
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+          bash scripts/ci/build-macos.sh
+      - name: Flush compiler cache
+        id: finish_cache
+        continue-on-error: true
+        run: node scripts/ci/cache-paths.mjs finish
+      - name: Retain unsigned caches from trusted main builds
+        if: >-
+          ${{ success() && steps.finish_cache.outcome == 'success' && steps.build_cache.outputs.cache-hit != 'true' &&
+              github.repository == 'rkw6086/solar' && github.ref == 'refs/heads/main' &&
+              (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.build_cache.outputs.paths }}
+          key: ${{ steps.build_cache.outputs.key }}
+      - name: Sign, notarize, staple, and package Solar
+        if: github.event_name != 'pull_request' && needs.prepare.outputs.channel != 'ci'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: bash scripts/ci/package-macos.sh
+      - name: Transfer verified downloads to publication
+        if: github.event_name != 'pull_request' && needs.prepare.outputs.channel != 'ci'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: solar-macos
+          path: |
+            ${{ env.SOLAR_RELEASE_DIR }}/*.dmg
+            ${{ env.SOLAR_RELEASE_DIR }}/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+          compression-level: 0
+      - name: Remove job build files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_TEMP" == /* && "$SOLAR_JOB_ID" =~ ^[0-9]+-[0-9]+$ ]]
+          for kind in build artifacts; do
+            rm -rf -- "$RUNNER_TEMP/solar-$kind-$SOLAR_JOB_ID"
+          done
+          if [[ -n "${SOLAR_BUILD_CACHE_ROOT:-}" ]]; then
+            [[ "$SOLAR_BUILD_CACHE_ROOT" == "$RUNNER_TEMP/solar-ci-cache-v1" && "$CARGO_TARGET_DIR" == "$RUNNER_TEMP/solar-build" ]]
+            rm -rf -- "$CARGO_TARGET_DIR"
+          fi
+
+  publish:
+    needs: [prepare, macos]
+    if: >-
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.macos.result == 'success' &&
+          github.repository == 'rkw6086/solar' && github.event_name != 'pull_request' &&
+          needs.prepare.outputs.build == 'true' && needs.prepare.outputs.channel != 'ci' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    env:
+      SOLAR_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      SOLAR_RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+      SOLAR_BUILD_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      SOLAR_BETA_ID: ${{ needs.prepare.outputs.beta_id }}
+      SOLAR_PREVIOUS_BETA_SHA: ${{ needs.prepare.outputs.previous_beta_sha }}
+      SOLAR_PREVIOUS_BETA_RELEASE_ID: ${{ needs.prepare.outputs.previous_beta_release_id }}
+    steps:
+      - name: Set job-owned publication directories
+        run: |
+          echo "SOLAR_RELEASE_DIR=$RUNNER_TEMP/solar-publication" >> "$GITHUB_ENV"
+          echo "SOLAR_RELEASE_NOTES_FILE=$RUNNER_TEMP/solar-notes/release-notes.md" >> "$GITHUB_ENV"
+      - name: Check out the validated publication implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Collect verified macOS downloads
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: solar-macos
+          path: ${{ env.SOLAR_RELEASE_DIR }}
+      - name: Collect release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: solar-release-notes
+          path: ${{ runner.temp }}/solar-notes
+      - name: Publish verified downloads and retire superseded releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/publish-github-release.py

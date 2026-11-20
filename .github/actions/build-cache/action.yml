@@ -1,0 +1,41 @@
+name: Restore unsigned Solar build cache
+description: Reuse bounded compiler entries, public Cargo downloads and pinned packaging tools.
+outputs:
+  cache-hit:
+    description: Whether the exact source cache was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+  key:
+    description: Source-specific compatible cache key.
+    value: ${{ steps.paths.outputs.key }}
+  paths:
+    description: Explicit unsigned cache paths.
+    value: ${{ steps.paths.outputs.paths }}
+runs:
+  using: composite
+  steps:
+    - name: Prepare stable compiler paths and compatible cache identity
+      id: paths
+      shell: bash
+      env:
+        SOLAR_CACHE_INPUTS: ${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', 'rust-toolchain.toml', '.github/workflows/build.yml', '.github/actions/build-cache/action.yml', 'scripts/ci/setup-*', 'scripts/ci/build-*', 'scripts/ci/cache-paths.mjs') }}
+      run: node scripts/ci/cache-paths.mjs prepare
+    - name: Restore unsigned compiler, dependency and tool entries
+      id: restore
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: ${{ steps.paths.outputs.key }}
+        restore-keys: ${{ steps.paths.outputs.prefix }}
+    - name: Install the pinned compiler cache wrapper
+      id: compiler
+      continue-on-error: true
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      with:
+        version: v0.19.0
+        disable_annotations: true
+    - name: Enable the verified local compiler cache
+      if: steps.compiler.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      run: node scripts/ci/cache-paths.mjs activate

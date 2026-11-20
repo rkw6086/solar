@@ -1,7 +1,5 @@
 mod attention;
 pub mod engine;
-#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
-mod logging_credentials;
 pub mod model;
 mod onboarding;
 #[cfg_attr(not(feature = "desktop"), allow(dead_code))]

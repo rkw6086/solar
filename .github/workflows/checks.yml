@@ -1,0 +1,38 @@
+name: Solar checks
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.17.0'
+      - name: Set up pinned package manager
+        run: npm install --global corepack@0.36.0
+      - name: Install exact frontend dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Check frontend, version metadata, and release protections
+        run: |
+          corepack pnpm run build
+          node scripts/release.mjs check
+          node --test scripts/*.test.mjs src/components/*.test.mjs src/onboarding/*.test.mjs src/*.test.mjs
+          python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Validate shell syntax
+        run: bash -n scripts/ci/setup-macos.sh scripts/ci/build-macos.sh scripts/ci/package-macos.sh

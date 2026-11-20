@@ -2,6 +2,8 @@
 
 Your personal team of Sprites, at home on your desktop.
 
+[Download Solar](https://github.com/rkw6086/solar/releases) · [Public source](https://github.com/rkw6086/solar)
+
 Solar is a local Rust and Tauri application with a React/TypeScript interface. Each Sprite has a role, personality, model connection, private memory, workspace, and approval preferences. A pixel-art sun gathers your Sprites and brings them onto the desktop.
 
 ## Develop
@@ -75,9 +77,9 @@ OpenAI-compatible requests serialize text-only system instructions as plain stri
 
 ## Remote diagnostics
 
-The desktop app sends operational diagnostics to `https://logging.ryserve.net/api/logs`, using Galaxy's `x-api-key` protocol and the `solar` service name. This includes startup/shutdown, frontend errors, task/model/tool outcomes, approval decisions, durations, usage counts, and correlation IDs. Each event identifies the build and process session. Chat messages, prompts, tool arguments/results, and provider credentials are excluded; errors are bounded and credential-like values are redacted.
+When configured, the desktop app sends operational diagnostics to `https://logging.ryserve.net/api/logs`, using Galaxy's `x-api-key` protocol and the `solar` service name. This includes startup/shutdown, frontend errors, task/model/tool outcomes, approval decisions, durations, usage counts, and correlation IDs. Each event identifies the build and process session. Chat messages, prompts, tool arguments/results, and provider credentials are excluded; errors are bounded and credential-like values are redacted.
 
-For this development build, the shared RyServe logging credential is bundled in the Rust code. Set `RYSERVE_LOGGING_KEY` in the app process's environment to override it; explicitly setting it to an empty string disables remote logging. A Finder-launched app uses the bundled fallback unless that environment variable is supplied to the app process.
+Remote logging is disabled by default. To enable it, supply your own `RYSERVE_LOGGING_KEY` in the app process's environment before startup. An unset, blank, or invalid value leaves logging disabled. No logging credential is bundled in the source or published app. Finder-launched apps need the variable supplied to their process; exporting it in a shell only configures apps launched from that shell.
 
 ```sh
 export RYSERVE_LOGGING_KEY='your-logging-key'
@@ -177,13 +179,13 @@ corepack pnpm run version:check
 
 Add matching notes to `CHANGELOG.md`, commit and push `main`, then run `corepack pnpm run release:tag VERSION --push` with the prepared version. Use `minor`, `major`, or an exact version in place of `patch` when appropriate. The initial release is `0.1.0`; prerelease tags are not currently supported.
 
-Stable releases build when a new version tag is pushed. A separate beta workflow checks current `main` every night at **3:00 a.m. America/Chicago**, including daylight saving time; it skips a complete beta when the source has not changed. The beta workflow can also be started manually. Branch and pull-request checks have no Apple credentials.
+All builds and checks run on GitHub Actions. Stable releases build when Gitea sync publishes a new version tag. The build workflow checks current `main` every night at **3:00 a.m. America/Chicago**, including daylight saving time; it skips a complete beta when the source has not changed. Run **Build Solar** manually on `main` to rebuild beta. Pull requests build without Apple credentials.
 
-[Gitea Releases](https://git.ryserve.net/internal/solar-chat/releases) retains **one current stable release and one rolling `beta` release**. Each contains a signed, notarized, stapled DMG and its checksum. New downloads are verified before old release records and assets are deleted. Numbered Git tags remain permanent source references; only the `beta` channel moves. Superseded Solar macOS Actions archives are also removed once both download channels verify, while active runs and unrelated artifacts are preserved. Gitea reclaims deleted archive storage asynchronously.
+[GitHub Releases](https://github.com/rkw6086/solar/releases) retains **one current stable release and one rolling `beta` release**. Each contains a signed, notarized, stapled DMG and its checksum. New downloads are verified before old release records and assets are deleted. Numbered Git tags remain permanent source references; only the `beta` channel moves. Temporary package transfers expire after one day and are deleted after successful publication.
 
 Beta DMGs include the source commit in their filename, and About Solar shows the beta channel and commit. Stable and beta share the same app identifier and `~/.solar` data; install the stable DMG again to return to the stable build.
 
-See the [Gitea macOS release setup](docs/macos-release.md) for the full release steps, `macos-arm64` host runner, Developer ID Application certificate, notarization API key, and shared organization secrets. Signing credentials belong in Gitea secrets, not the repository.
+Gitea remains the primary source: push only to `origin`, and the [sync pipeline](docs/github-sync.md) reconciles branches with public GitHub and copies immutable version tags outward. See [macOS release setup](docs/macos-release.md) for GitHub-hosted builds, Developer ID signing, notarization, caches, and repository secrets.
 
 ## Architecture and license
 

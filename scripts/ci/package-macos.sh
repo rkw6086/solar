@@ -5,7 +5,7 @@ set -euo pipefail
 umask 077
 
 fail() { echo "Solar macOS package: $*" >&2; exit 1; }
-[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail 'Use the native macos-arm64 runner.'
+[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || fail 'Use a native Apple Silicon macOS runner.'
 channel=${SOLAR_BUILD_CHANNEL:-release}
 version=${SOLAR_RELEASE_VERSION:-}
 [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Use a validated stable package version.'
@@ -26,7 +26,7 @@ fi
 [[ -z $(git status --porcelain) ]] || fail 'Signing requires an unchanged source checkout.'
 
 for variable in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_P8 CARGO_TARGET_DIR SOLAR_RELEASE_DIR; do
-  [[ -n ${!variable:-} ]] || fail "Missing Gitea secret or job variable: $variable"
+  [[ -n ${!variable:-} ]] || fail "Missing signing secret or job variable: $variable"
 done
 [[ $APPLE_SIGNING_IDENTITY == 'Developer ID Application: '* ]] || fail 'Use a Developer ID Application signing identity.'
 [[ $APPLE_TEAM_ID =~ ^[A-Z0-9]{10}$ ]] || fail 'Invalid Apple Team ID.'
