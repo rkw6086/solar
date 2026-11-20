@@ -69,6 +69,9 @@ elif tool == 'PlistBuddy':
     with open(args[-1], 'rb') as source: data = plistlib.load(source)
     override = {'CFBundleShortVersionString': 'MOCK_BUNDLE_VERSION', 'SolarBuildChannel': 'MOCK_BUNDLE_CHANNEL', 'SolarSourceCommit': 'MOCK_BUNDLE_COMMIT'}.get(field)
     print(os.environ.get(override, data[field]) if override else data[field])
+elif tool == 'lipo':
+    assert len(args) == 3 and pathlib.Path(args[0]).is_file()
+    assert args[1:] == ['-verify_arch', 'arm64']
 elif tool == 'ditto':
     if '-c' in args: pathlib.Path(args[-1]).write_bytes(b'dummy-zip')
     else: shutil.copytree(args[-2], args[-1])

@@ -60,8 +60,8 @@ corepack pnpm tauri build --ci --target aarch64-apple-darwin --bundles app --no-
 app="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Solar.app"
 [[ -x "$app/Contents/MacOS/solar" ]] || fail 'Solar executable missing from app bundle.'
 [[ -x "$app/Contents/MacOS/solar-native-helper" ]] || fail 'Native helper missing from app bundle.'
-lipo -verify_arch arm64 "$app/Contents/MacOS/solar"
-lipo -verify_arch arm64 "$app/Contents/MacOS/solar-native-helper"
+lipo "$app/Contents/MacOS/solar" -verify_arch arm64
+lipo "$app/Contents/MacOS/solar-native-helper" -verify_arch arm64
 # Record identity in the unsigned bundle; packaging verifies it before signing.
 python3 - "$app/Contents/Info.plist" "$SOLAR_BUILD_CHANNEL" "$SOLAR_RELEASE_SHA" <<'IDENTITY'
 import pathlib, plistlib, sys

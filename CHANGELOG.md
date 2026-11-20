@@ -5,7 +5,11 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
-## [0.1.4]
+## [0.1.5]
+
+### Fixed
+
+- Use Apple's supported argument order when verifying the architecture of the app and native helper in GitHub macOS builds.
 
 ### Changed
 
