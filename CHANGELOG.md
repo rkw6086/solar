@@ -5,6 +5,8 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+## [0.1.4]
+
 ### Changed
 
 - Move all builds, checks, signing, and release publication to GitHub Actions, with Gitea remaining the primary source and securely synchronizing with the public `rkw6086/solar` repository.

@@ -34,6 +34,10 @@ LFS_ENDPOINTS = {
     "github": "git@github.com:rkw6086/solar.git",
 }
 OBJECT_ID = re.compile(r"[0-9a-f]{40}\Z")
+# This legacy blob contained a private credential and was removed from the
+# public history. Reject an older clone that brings it back without reading or
+# logging any blob contents. This is an exact object deny-list, not a scanner.
+FORBIDDEN_PUBLIC_BLOBS = frozenset({"b6fffad8b893dd7b8b66d28ce3ea2bddf9d8450c"})
 MAX_REFS = 10_000
 MAX_OUTPUT = 4 * 1024 * 1024
 
@@ -58,6 +62,7 @@ class Repository:
         self.directory = directory
         self.lfs_fetched = set()
         self.lfs_pushed = set()
+        self.public_history_checked = set()
         self.env = {
             key: value for key, value in os.environ.items()
             if not key.startswith("GIT_") or key == "GIT_SSH_COMMAND"
@@ -210,6 +215,29 @@ class Repository:
             self.lfs_pushed.add(identity)
             report("lfs-pushed", destination=remote, oid=oid)
 
+    def check_public_history(self, oid):
+        if not OBJECT_ID.fullmatch(oid):
+            raise SyncError("Invalid public source identity.")
+        if oid in self.public_history_checked:
+            return
+        # Check the entire reachable history, not just today's tree: a revert
+        # or merge from a pre-scrub clone must not republish the removed blob.
+        # The existing Git output bound and this timeout fail closed if the
+        # graph is too large or cannot be read. Object paths/content stay out
+        # of both the command output and workflow logs.
+        _, output = self.git(
+            "rev-list", "--objects", "--no-object-names", oid, "--",
+            operation="check public history", timeout=60,
+        )
+        if not output.strip():
+            raise SyncError("Public history did not return any object identities.")
+        for item in output.splitlines():
+            if not OBJECT_ID.fullmatch(item):
+                raise SyncError("Public history returned an invalid object identity.")
+            if item in FORBIDDEN_PUBLIC_BLOBS:
+                raise SyncError("GitHub publication blocked: source history contains a protected private credential object. Remove that history before retrying.")
+        self.public_history_checked.add(oid)
+
     def merge(self, ref, gitea, peer_oid, dry_run):
         status, _ = self.git(
             "merge-base", gitea, peer_oid,
@@ -259,6 +287,9 @@ class Repository:
         if destination == "gitea" and not self.env.get("GITEA_TOKEN"):
             if not dry_run:
                 raise SyncError(f"GITEA_TOKEN is required to import {PEER_LABELS[self.peer]} changes.")
+        if destination == "github":
+            # Run before LFS or Git writes, including during a dry-run preview.
+            self.check_public_history(oid)
         if dry_run:
             report("would-copy", source=source, destination=destination, ref=ref, oid=oid)
             return

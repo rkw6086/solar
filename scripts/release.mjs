@@ -164,7 +164,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (option && option !== '--push') throw new Error('Usage: release.mjs tag [X.Y.Z] [--push]');
       const push = argument === '--push' || option === '--push';
       const version = createReleaseTag(root, argument === '--push' ? undefined : argument, push);
-      console.log(push ? `Pushed ${version}; Gitea will build the signed release.` : `Created ${version}. Publish with: git push origin refs/tags/${version}`);
+      console.log(push ? `Pushed ${version}; Gitea sync will trigger the signed GitHub release.` : `Created ${version}. Publish with: git push origin refs/tags/${version}`);
     } else throw new Error('Use check, prepare, or tag.');
   } catch (error) {
     console.error(error.message);

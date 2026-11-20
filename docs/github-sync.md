@@ -32,4 +32,6 @@ Read-only inspection with these credentials configured:
 python3 scripts/ci/sync-repositories.py --peer github --dry-run
 ```
 
-For initial setup, disable GitHub Actions while seeding historical refs to avoid building every old version tag. Configure signing secrets, import verified current stable downloads, then enable Actions and manually run **Build Solar** on `main` to publish the first beta. Before enabling public sync, remove embedded credentials and revoke any credentials present in reachable history; a clean current tree alone does not clean its history.
+For initial setup, disable GitHub Actions while seeding historical refs to avoid building every old version tag. Configure signing secrets, then enable Actions and publish a new stable version and a beta from the cleaned source. Never copy old binaries containing embedded credentials to a public release. Before enabling public sync, remove credentials from both the current tree and every history being published; a clean current tree alone does not clean its history.
+
+The November 2026 public migration included a one-time rewrite removing an embedded logging credential from historical source. Historical commit and tag object IDs changed; their names and version numbers remain. Use a fresh clone for work based on the old history, rather than merging it back. The synchronization job rejects the original credential-bearing blob so an old checkout cannot republish it. Numbered tags created after this migration are immutable as usual.
