@@ -71,7 +71,7 @@ final class NativeService: NSObject, SCContentSharingPickerObserver, SCStreamDel
             if let stream { try? await stream.stopCapture(); self.stream = nil }
             filter = nil
             NSApplication.shared.setActivationPolicy(.accessory)
-            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSApplication.shared.activate()
             picker.isActive = true
             let selected = try await withCheckedThrowingContinuation { (pending: CheckedContinuation<SCContentFilter, Error>) in
                 continuation = pending
