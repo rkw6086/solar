@@ -749,6 +749,7 @@ fn scoped_command(
     }
     let mut command = tokio::process::Command::new(wrapper);
     command
+        .current_dir(&scope.working_directory)
         .arg("-p")
         .arg(macos_profile_for(scope, browser)?)
         .arg(executable)
