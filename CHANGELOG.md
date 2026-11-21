@@ -5,6 +5,17 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+### Added
+
+- More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
+- Read-only-by-default shared folder links for selected or all current and future Sprites, plus opt-in setup discovery of home configuration and global agent folders.
+- Metadata-only home search and always-approved requests to add live links to a Sprite workspace.
+
+### Fixed
+
+- Workspace-anchored file access and process filesystem allowlists restrict unshared host data; permission changes cancel work and invalidate cached sessions.
+- Clicking away from desktop companions closes their chats and collapses the formation; Sprite labels appear only on hover or focus.
+
 ## [0.1.6]
 
 ### Fixed

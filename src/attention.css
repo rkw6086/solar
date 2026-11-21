@@ -100,7 +100,6 @@
   animation: orbit-attention-hop 800ms ease-in-out 2;
   filter: drop-shadow(0 0 7px #f5bf7959);
 }
-.orbit-widget.needs-attention .orbit-widget-name { opacity: 1; transform: translateY(0); }
 .orbit-attention-pip { width: 6px; height: 6px; background: #f3bc75; border-radius: 50%; box-shadow: 0 0 0 3px #f3bc751b; }
 .attention-preview-control { display: flex; align-items: center; gap: 8px; }
 .attention-volume { display: flex; align-items: center; gap: 9px; min-width: 140px; }

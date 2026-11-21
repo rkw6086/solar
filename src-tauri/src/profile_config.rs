@@ -3,7 +3,7 @@
 //! TOML is authoritative at startup. SQLite stores runtime state and a cache of
 //! these documents; settings screens write the TOML before updating that cache.
 
-use crate::model::{McpServer, Orbit, Project, Routine, Settings};
+use crate::model::{McpServer, Orbit, Project, Routine, Settings, SharedFolder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use solar_providers::ProviderProfile;
@@ -28,6 +28,7 @@ struct MasterConfig {
     settings: Settings,
     providers: Vec<ProviderProfile>,
     projects: Vec<Project>,
+    shared_folders: Vec<SharedFolder>,
     mcp: Vec<McpServer>,
     routines: Vec<Routine>,
     orbits: Vec<OrbitReference>,
@@ -40,6 +41,7 @@ impl Default for MasterConfig {
             settings: Settings::default(),
             providers: vec![],
             projects: vec![],
+            shared_folders: vec![],
             mcp: vec![],
             routines: vec![],
             orbits: vec![],
@@ -62,10 +64,11 @@ pub(crate) struct ProfileConfig {
     locations: BTreeMap<String, String>,
 }
 
-pub(crate) const CONFIG_KINDS: [&str; 6] = [
+pub(crate) const CONFIG_KINDS: [&str; 7] = [
     "settings",
     "providers",
     "projects",
+    "shared_folders",
     "mcp",
     "routines",
     "orbits",
@@ -204,6 +207,9 @@ fn validate_master(master: &MasterConfig) -> Result<(), String> {
                 .into(),
         );
     }
+    for folder in &master.shared_folders {
+        crate::sharing::validate_shared_folder(folder)?;
+    }
     let mut mcp_ids = std::collections::HashSet::new();
     for server in &master.mcp {
         if !valid_id(&server.id)
@@ -313,6 +319,14 @@ impl ProfileConfig {
                 "projects",
                 master.projects.iter().map(|v| v.id.as_str()).collect(),
             ),
+            (
+                "shared_folders",
+                master
+                    .shared_folders
+                    .iter()
+                    .map(|v| v.id.as_str())
+                    .collect(),
+            ),
             ("mcp", master.mcp.iter().map(|v| v.id.as_str()).collect()),
             (
                 "routines",
@@ -346,6 +360,32 @@ impl ProfileConfig {
         &self.locations
     }
 
+    pub(crate) fn shared_folders(&self) -> &[SharedFolder] {
+        &self.master.shared_folders
+    }
+
+    pub(crate) fn replace_shared_folders(
+        &mut self,
+        folders: Vec<SharedFolder>,
+    ) -> Result<(), String> {
+        self.check_external_edits(None)?;
+        let mut updated = self.clone();
+        updated.master.shared_folders = folders;
+        let mut ids = std::collections::HashSet::new();
+        if updated
+            .master
+            .shared_folders
+            .iter()
+            .any(|folder| !ids.insert(folder.id.clone()))
+        {
+            return Err("Shared folder ids must be unique".into());
+        }
+        validate_master(&updated.master)?;
+        write_toml(&updated.root.join("config.toml"), &updated.master)?;
+        *self = updated;
+        Ok(())
+    }
+
     pub fn orbit_dir(&self, id: &str) -> Result<PathBuf, String> {
         let directory = self
             .locations
@@ -375,6 +415,7 @@ impl ProfileConfig {
         }
         collect!("providers", &self.master.providers);
         collect!("projects", &self.master.projects);
+        collect!("shared_folders", &self.master.shared_folders);
         collect!("mcp", &self.master.mcp);
         collect!("routines", &self.master.routines);
         collect!("orbits", self.profiles.values());
@@ -490,6 +531,7 @@ impl ProfileConfig {
             }
             "providers" => replace!(providers, ProviderProfile),
             "projects" => replace!(projects, Project),
+            "shared_folders" => replace!(shared_folders, SharedFolder),
             "mcp" => replace!(mcp, McpServer),
             "routines" => replace!(routines, Routine),
             "orbits" => {
@@ -531,6 +573,7 @@ impl ProfileConfig {
         match kind {
             "providers" => updated.master.providers.retain(|item| item.id != id),
             "projects" => updated.master.projects.retain(|item| item.id != id),
+            "shared_folders" => updated.master.shared_folders.retain(|item| item.id != id),
             "mcp" => updated.master.mcp.retain(|item| item.id != id),
             "routines" => updated.master.routines.retain(|item| item.id != id),
             "orbits" => {

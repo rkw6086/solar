@@ -4241,6 +4241,7 @@ name = "solar"
 version = "0.1.6"
 dependencies = [
  "async-trait",
+ "cap-std",
  "chrono",
  "croner",
  "futures",

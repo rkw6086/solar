@@ -398,6 +398,53 @@ impl Store {
             .orbit_dir(orbit_id)
     }
 
+    /// One approved home request becomes one configuration update, not a
+    /// sequence of partially visible per-file grants.
+    pub(crate) fn replace_shared_folders(
+        &self,
+        folders: Vec<crate::model::SharedFolder>,
+    ) -> Result<(), String> {
+        let mut state = self.0.lock().map_err(|_| "Database lock unavailable")?;
+        let previous = state
+            .profile
+            .as_ref()
+            .ok_or("Solar profile is unavailable")?
+            .shared_folders()
+            .to_vec();
+        let documents = folders
+            .iter()
+            .map(|folder| {
+                Ok((
+                    folder.id.clone(),
+                    serde_json::to_string(folder).map_err(|e| e.to_string())?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        state
+            .profile
+            .as_mut()
+            .unwrap()
+            .replace_shared_folders(folders)?;
+        let result = (|| {
+            let tx = state.main.transaction().map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM documents WHERE kind='shared_folders'", [])
+                .map_err(|e| e.to_string())?;
+            for (id, data) in documents {
+                tx.execute("INSERT INTO documents(kind,id,data,updated_at) VALUES('shared_folders',?1,?2,?3)", params![id, data, now()]).map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())
+        })();
+        if let Err(error) = result {
+            state
+                .profile
+                .as_mut()
+                .unwrap()
+                .replace_shared_folders(previous)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn put_batch(&self, documents: Vec<(&str, String, Value)>) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "Database lock unavailable")?;
         if state.profile.is_some()
@@ -611,6 +658,39 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_shared_folder_cache_update_restores_authoritative_config() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open_profile(root.path()).unwrap();
+        store.0.lock().unwrap().main.execute_batch(
+            "CREATE TRIGGER fail_share BEFORE INSERT ON documents WHEN NEW.kind = 'shared_folders' BEGIN SELECT RAISE(ABORT, 'test failure'); END;"
+        ).unwrap();
+        let folder = crate::model::SharedFolder {
+            id: "test-share".into(),
+            name: "Shared".into(),
+            directory: root.path().to_string_lossy().into_owned(),
+            mount_path: "shared/test".into(),
+            all_sprites: true,
+            orbit_ids: vec![],
+            writable: false,
+        };
+        assert!(store.replace_shared_folders(vec![folder]).is_err());
+        assert!(
+            store
+                .list::<crate::model::SharedFolder>("shared_folders")
+                .unwrap()
+                .is_empty()
+        );
+        drop(store);
+        let reopened = Store::open_profile(root.path()).unwrap();
+        assert!(
+            reopened
+                .list::<crate::model::SharedFolder>("shared_folders")
+                .unwrap()
+                .is_empty()
+        );
+    }
     use crate::model::{Memory, Orbit};
 
     fn orbit(id: &str, name: &str) -> Orbit {

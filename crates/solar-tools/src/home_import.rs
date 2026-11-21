@@ -1,35 +1,85 @@
-//! Explicit, reviewable copying from the user's home into an Orbit's private home.
-//! Planning never runs profile code. Only the exact buffered files shown at approval
-//! can be written; files changing at the destination invalidate that approval.
-use crate::{CancellationToken, ToolDefinition, definition as tool_definition};
+//! Explicit, reviewable live links from the user's home into a Sprite workspace.
+//! Search reads names only. Planning never runs profiles or exposes their contents.
+use crate::{CancellationToken, ToolDefinition, WorkspaceMount, definition as tool_definition};
 use cap_std::fs::{Dir, OpenOptions};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{Read, Write},
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
-const MAX_FILES: usize = 256;
-const MAX_FILE: usize = 5 * 1024 * 1024;
-const MAX_TOTAL: usize = 20 * 1024 * 1024;
+const MAX_LINKS: usize = 256;
+const MAX_PROFILE: usize = 256 * 1024;
+const MAX_SEARCH_VISITS: usize = 4096;
 
 pub(crate) fn definition() -> ToolDefinition {
     tool_definition(
         "pull_from_user_home",
-        "Request files or folders from the user's home, copied into this Sprite's private home/configuration. Always requires a separate user approval showing every file and replacement, even for trusted Sprites. Discovers literal shell source dependencies and home-contained symlinks without running code; rewrites home paths to the private copies. Profile files can contain credentials and executable startup code. Use only files needed for the user's task; never request the whole home. Dynamic includes may need a follow-up request.",
-        json!({"paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},"includeDependencies":{"type":"boolean","default":true}}),
+        "Request specific files or folders from the user's home as live symlinks inside this Sprite's workspace. ALWAYS requires a separate user approval, including for trusted Sprites. Use search_user_home to discover names first. The review lists every link and access level. Sources stay on the user's computer; read-only is the default. Existing workspace files are never overwritten. Static shell source dependencies can be included without running profile code; absolute host paths in profiles are not rewritten.",
+        json!({"paths":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},"includeDependencies":{"type":"boolean","default":true},"writable":{"type":"boolean","default":false}}),
         &["paths"],
     )
 }
 
-struct PlannedFile {
-    source: String,
-    source_path: PathBuf,
+pub(crate) fn search_definition() -> ToolDefinition {
+    tool_definition(
+        "search_user_home",
+        "Find files or folders by name or relative path in the user's home before requesting a workspace share. Reads metadata only, never file contents, and does not recurse through symlinks. Solar storage and inaccessible projects are excluded. A result is not a grant: use pull_from_user_home to request a live workspace link and wait for the user's required approval. Supports * and ? wildcards.",
+        json!({"query":{"type":"string","minLength":1,"maxLength":200},"path":{"type":"string","description":"Optional home-relative folder, for example .config or Documents"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":50}}),
+        &["query"],
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Identity {
+    directory: bool,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+    #[cfg(not(unix))]
+    created: Option<std::time::SystemTime>,
+    #[cfg(not(unix))]
+    modified: Option<std::time::SystemTime>,
+    #[cfg(not(unix))]
+    length: u64,
+}
+
+fn identity(metadata: &std::fs::Metadata) -> Identity {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Identity {
+        directory: metadata.is_dir(),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(not(unix))]
+        created: metadata.created().ok(),
+        #[cfg(not(unix))]
+        modified: if metadata.is_dir() {
+            None
+        } else {
+            metadata.modified().ok()
+        },
+        #[cfg(not(unix))]
+        length: if metadata.is_dir() { 0 } else { metadata.len() },
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Destination {
+    link: Option<(PathBuf, Identity)>,
+    parents: Vec<(PathBuf, Identity)>,
+}
+
+struct PlannedLink {
+    requested: PathBuf,
     target: PathBuf,
-    data: Vec<u8>,
-    previous: Option<Vec<u8>>,
-    executable: bool,
+    source_identity: Identity,
+    destination: PathBuf,
+    previous: Destination,
     dependency: bool,
 }
 
@@ -37,12 +87,68 @@ pub struct HomeImportPlan {
     home: PathBuf,
     workspace: PathBuf,
     storage: PathBuf,
-    files: Vec<PlannedFile>,
+    links: Vec<PlannedLink>,
     warnings: BTreeSet<String>,
-    total: usize,
-    visited: usize,
     denied: Vec<PathBuf>,
     include_dependencies: bool,
+    writable: bool,
+}
+
+fn normalized(path: &Path) -> Result<PathBuf, String> {
+    let mut output = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::ParentDir => {
+                if !output.pop() {
+                    return Err("Invalid home path".into());
+                }
+            }
+            Component::CurDir => {}
+            other => output.push(other.as_os_str()),
+        }
+    }
+    Ok(output)
+}
+
+fn expand_home(home: &Path, input: &str, base: &Path) -> Result<PathBuf, String> {
+    let input = input.trim();
+    if input.is_empty() || input.chars().any(char::is_control) {
+        return Err("Choose a valid home path".into());
+    }
+    let expanded = if matches!(input, "~" | "$HOME" | "${HOME}") {
+        home.to_owned()
+    } else if let Some(tail) = input
+        .strip_prefix("~/")
+        .or_else(|| input.strip_prefix("$HOME/"))
+        .or_else(|| input.strip_prefix("${HOME}/"))
+    {
+        home.join(tail)
+    } else if input.contains(['$', '`']) {
+        return Err("Dynamic paths must be requested explicitly after resolving them".into());
+    } else if Path::new(input).is_absolute() {
+        PathBuf::from(input)
+    } else {
+        base.join(input)
+    };
+    let path = normalized(&expanded)?;
+    if !path.starts_with(home) {
+        return Err("Home requests cannot access outside the user's home".into());
+    }
+    if path
+        .strip_prefix(home)
+        .unwrap_or(&path)
+        .components()
+        .any(|part| part.as_os_str() == ".solar")
+    {
+        return Err("Solar's private storage cannot be shared into a Sprite".into());
+    }
+    Ok(path)
+}
+
+fn denied_path(path: &Path, directory: bool, denied: &[PathBuf]) -> bool {
+    denied
+        .iter()
+        .any(|root| path.starts_with(root) || (directory && root.starts_with(path)))
 }
 
 impl HomeImportPlan {
@@ -53,10 +159,10 @@ impl HomeImportPlan {
         denied: &[PathBuf],
         args: &Value,
     ) -> Result<Self, String> {
-        let paths = args
+        let requested = args
             .get("paths")
             .and_then(Value::as_array)
-            .filter(|v| !v.is_empty() && v.len() <= 20)
+            .filter(|paths| !paths.is_empty() && paths.len() <= 20)
             .ok_or("Choose between 1 and 20 home files or folders")?;
         let mut plan = Self {
             home: home
@@ -64,260 +170,93 @@ impl HomeImportPlan {
                 .map_err(|_| "The user's home is unavailable")?,
             workspace: workspace
                 .canonicalize()
-                .map_err(|_| "The Sprite's private home is unavailable")?,
+                .map_err(|_| "The Sprite workspace is unavailable")?,
             storage: storage
                 .canonicalize()
-                .map_err(|_| "The Sprite's storage is unavailable")?,
-            files: Vec::new(),
+                .map_err(|_| "The Sprite storage is unavailable")?,
+            links: vec![],
             warnings: BTreeSet::new(),
-            total: 0,
-            visited: 0,
             denied: denied
                 .iter()
-                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+                .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
                 .collect(),
             include_dependencies: args
                 .get("includeDependencies")
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
+            writable: args
+                .get("writable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         };
-        if !plan.workspace.starts_with(&plan.storage) {
-            return Err("Sprite home must be inside its private storage".into());
+        if plan.workspace == plan.storage || !plan.workspace.starts_with(&plan.storage) {
+            return Err("Sprite workspace must be inside its private storage".into());
         }
-        for path in paths {
-            let requested = path.as_str().ok_or("Every home path must be text")?;
-            let source = plan.expand(requested, &plan.home)?;
-            if source == plan.home {
-                return Err("Select specific files or folders, not the entire home".into());
-            }
+        let mut paths = requested
+            .iter()
+            .map(|path| {
+                plan.expand(
+                    path.as_str().ok_or("Every home path must be text")?,
+                    &plan.home,
+                )
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // A folder grant already includes descendants. Plan parents first so
+        // the review does not create redundant links through planned symlinks.
+        paths.sort_by_key(|path| path.components().count());
+        for source in paths {
             plan.collect(&source, false, &mut BTreeSet::new(), 0)?;
         }
-        if plan.files.is_empty() {
-            return Err("No regular files were found to import".into());
+        if plan.links.is_empty() {
+            return Err("No files or folders were found to share".into());
         }
-        plan.files.sort_by(|a, b| a.target.cmp(&b.target));
+        plan.links.sort_by(|a, b| a.destination.cmp(&b.destination));
         Ok(plan)
     }
 
+    pub fn links(&self) -> Vec<WorkspaceMount> {
+        self.links
+            .iter()
+            .map(|link| WorkspaceMount {
+                path: link.destination.clone(),
+                target: link.target.clone(),
+                writable: self.writable,
+            })
+            .collect()
+    }
+
     pub fn validate_scope(&self, denied: &[PathBuf]) -> Result<(), String> {
-        for denied in denied {
-            let root = denied.canonicalize().unwrap_or_else(|_| denied.clone());
-            if self
-                .files
-                .iter()
-                .any(|file| file.source_path.starts_with(&root))
-            {
-                return Err(
-                    "Project access changed while approval was open. Request the import again."
-                        .into(),
-                );
-            }
+        let denied: Vec<_> = denied
+            .iter()
+            .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
+            .collect();
+        if self
+            .links
+            .iter()
+            .any(|link| denied_path(&link.target, link.source_identity.directory, &denied))
+        {
+            return Err(
+                "Project access changed while approval was open. Request the share again.".into(),
+            );
         }
         Ok(())
     }
 
     pub fn review(&self) -> Value {
-        json!({"files":self.files.iter().map(|file|json!({"source":file.source,"destination":file.target.to_string_lossy(),"bytes":file.data.len(),"replace":file.previous.is_some(),"dependency":file.dependency})).collect::<Vec<_>>(),"warnings":self.warnings,"totalBytes":self.total,"notice":"These files may contain credentials or executable startup instructions. Approve only files you intend this Sprite to use. Copies remain private to this Sprite; source files are not changed."})
+        json!({"links":self.links.iter().map(|link|json!({
+            "source":self.display(&link.requested),"destination":link.destination,
+            "directory":link.source_identity.directory,"writable":self.writable,
+            "dependency":link.dependency,"existing":link.previous.link.is_some()
+        })).collect::<Vec<_>>(),"warnings":self.warnings,
+        "notice":"These are live links to the selected originals, not copies. Read-only unless you approve write access. Profiles may contain credentials and executable startup code. Every link requires your approval; file contents are not included in this review."})
     }
 
     fn expand(&self, input: &str, base: &Path) -> Result<PathBuf, String> {
-        let input = input.trim();
-        let expanded = if input == "~" || input == "$HOME" || input == "${HOME}" {
-            self.home.clone()
-        } else if let Some(tail) = input
-            .strip_prefix("~/")
-            .or_else(|| input.strip_prefix("$HOME/"))
-            .or_else(|| input.strip_prefix("${HOME}/"))
-        {
-            self.home.join(tail)
-        } else if Path::new(input).is_absolute() {
-            PathBuf::from(input)
-        } else if input.contains('$') || input.contains('`') || input.contains('\0') {
-            return Err("Dynamic paths must be requested explicitly after resolving them".into());
-        } else {
-            base.join(input)
-        };
-        let normalized = normalize(&expanded)?;
-        if !normalized.starts_with(&self.home) {
-            return Err("Home imports cannot read outside the user's home".into());
+        let path = expand_home(&self.home, input, base)?;
+        if path.starts_with(&self.storage) {
+            return Err("Solar's private storage cannot be shared into a Sprite".into());
         }
-        if normalized.starts_with(self.home.join(".solar")) || normalized.starts_with(&self.storage)
-        {
-            return Err("Solar's private storage cannot be imported into another Sprite".into());
-        }
-        Ok(normalized)
-    }
-
-    fn target(&self, source: &Path) -> Result<PathBuf, String> {
-        let relative = source
-            .strip_prefix(&self.home)
-            .map_err(|_| "Home source is outside the user's home")?;
-        let aliases = [
-            (".config", "config"),
-            (".local/share", "data"),
-            (".local/state", "state"),
-            (".cache", "cache"),
-        ];
-        if relative == Path::new(".gitconfig") {
-            return Ok(self.storage.join("config/git/config"));
-        }
-        for (prefix, mapped) in aliases {
-            if let Ok(tail) = relative.strip_prefix(prefix) {
-                return Ok(self.storage.join(mapped).join(tail));
-            }
-        }
-        Ok(self.workspace.join(relative))
-    }
-
-    fn collect(
-        &mut self,
-        source: &Path,
-        dependency: bool,
-        visiting: &mut BTreeSet<PathBuf>,
-        depth: usize,
-    ) -> Result<(), String> {
-        self.visited += 1;
-        if self.visited > 1024 {
-            return Err(
-                "Select a smaller folder (at most 1024 files and folders inspected)".into(),
-            );
-        }
-        if depth > 24 {
-            return Err("Home import dependencies are too deeply nested".into());
-        }
-        let actual = source
-            .canonicalize()
-            .map_err(|_| format!("Cannot read {}", self.display(source)))?;
-        self.expand(
-            actual.to_str().ok_or("Home paths must be valid text")?,
-            &self.home,
-        )?;
-        if self.denied.iter().any(|root| actual.starts_with(root)) {
-            return Err("A requested file is in a project this Sprite cannot access".into());
-        }
-        if !visiting.insert(actual.clone()) {
-            self.warnings.insert(format!(
-                "Skipped a circular link at {}",
-                self.display(source)
-            ));
-            return Ok(());
-        }
-        let result = self.collect_inner(source, &actual, dependency, visiting, depth);
-        visiting.remove(&actual);
-        result
-    }
-
-    fn collect_inner(
-        &mut self,
-        source: &Path,
-        actual: &Path,
-        dependency: bool,
-        visiting: &mut BTreeSet<PathBuf>,
-        depth: usize,
-    ) -> Result<(), String> {
-        let metadata = std::fs::metadata(actual).map_err(|_| "Cannot inspect a home file")?;
-        if metadata.is_dir() {
-            let mut entries = std::fs::read_dir(actual)
-                .map_err(|_| "Cannot read a home folder")?
-                .take(MAX_FILES + 1)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_| "Cannot read a folder entry")?;
-            entries.sort_by_key(|entry| entry.file_name());
-            if entries.len() > MAX_FILES {
-                return Err("Select a smaller folder (at most 256 files per import)".into());
-            }
-            for entry in entries {
-                self.collect(
-                    &source.join(entry.file_name()),
-                    dependency,
-                    visiting,
-                    depth + 1,
-                )?;
-            }
-            return Ok(());
-        }
-        if !metadata.is_file() {
-            return Err("Only regular files and folders can be imported".into());
-        }
-        let target = self.target(source)?;
-        if self.files.iter().any(|f| f.target == target) {
-            return Ok(());
-        }
-        if self.files.len() >= MAX_FILES {
-            return Err("Select fewer files (at most 256 per import)".into());
-        }
-        if metadata.len() > MAX_FILE as u64 {
-            return Err(format!(
-                "{} exceeds the 5 MiB file limit",
-                self.display(source)
-            ));
-        }
-        // Capability-relative reads reject a swapped link escaping the home.
-        let home_dir = Dir::open_ambient_dir(&self.home, cap_std::ambient_authority())
-            .map_err(|_| "Cannot open the user's home")?;
-        let mut data = Vec::new();
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use cap_std::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
-        }
-        let file = home_dir
-            .open_with(
-                actual
-                    .strip_prefix(&self.home)
-                    .map_err(|_| "Invalid home source")?,
-                &options,
-            )
-            .map_err(|_| "Cannot open a home file")?;
-        if !file
-            .metadata()
-            .map_err(|_| "Cannot inspect opened home file")?
-            .is_file()
-        {
-            return Err("Only regular files can be imported".into());
-        }
-        file.take((MAX_FILE + 1) as u64)
-            .read_to_end(&mut data)
-            .map_err(|_| "Cannot read a home file")?;
-        if data.len() > MAX_FILE {
-            return Err("A home file grew beyond the import limit".into());
-        }
-        let text = std::str::from_utf8(&data).ok().map(str::to_owned);
-        if let Some(text) = &text {
-            data = self.rewrite(text).into_bytes();
-        }
-        if data.len() > MAX_FILE {
-            return Err("A rewritten profile exceeds the 5 MiB file limit".into());
-        }
-        self.total += data.len();
-        if self.total > MAX_TOTAL {
-            return Err("Select fewer files (20 MiB total per import)".into());
-        }
-        let previous = read_target(&self.storage, &target)?;
-        #[cfg(unix)]
-        let executable = {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.permissions().mode() & 0o111 != 0
-        };
-        #[cfg(not(unix))]
-        let executable = false;
-        self.files.push(PlannedFile {
-            source: self.display(source),
-            source_path: actual.to_owned(),
-            target,
-            data,
-            previous,
-            executable,
-            dependency,
-        });
-        if self.include_dependencies
-            && let Some(text) = text
-        {
-            self.dependencies(&text, source, visiting, depth)?;
-        }
-        Ok(())
+        Ok(path)
     }
 
     fn display(&self, path: &Path) -> String {
@@ -329,30 +268,115 @@ impl HomeImportPlan {
         )
     }
 
-    fn rewrite(&self, text: &str) -> String {
-        let mut prefixes = Vec::new();
-        for (prefix, mapped) in [
-            (".config", "config"),
-            (".local/share", "data"),
-            (".local/state", "state"),
-            (".cache", "cache"),
-            (".gitconfig", "config/git/config"),
-        ] {
-            let destination = self.storage.join(mapped).to_string_lossy().into_owned();
-            for from in [
-                format!("{}/{prefix}", self.home.display()),
-                format!("$HOME/{prefix}"),
-                format!("${{HOME}}/{prefix}"),
-                format!("~/{prefix}"),
-            ] {
-                prefixes.push((from, destination.clone()));
+    fn choose_destination(
+        &self,
+        source: &Path,
+        target: &Path,
+    ) -> Result<(PathBuf, Destination), String> {
+        let relative = source
+            .strip_prefix(&self.home)
+            .map_err(|_| "Invalid home source")?;
+        let direct = self.workspace.join(relative);
+        for index in 0..100 {
+            let candidate = if index == 0 {
+                direct.clone()
+            } else {
+                let prefix = if index == 1 {
+                    "shared/home".to_owned()
+                } else {
+                    format!("shared/home-{index}")
+                };
+                self.workspace.join(prefix).join(relative)
+            };
+            if self.links.iter().any(|link| {
+                candidate.starts_with(&link.destination) || link.destination.starts_with(&candidate)
+            }) {
+                continue;
+            }
+            if let Ok(snapshot) = destination(&self.workspace, &candidate, target) {
+                return Ok((candidate, snapshot));
             }
         }
-        prefixes.push((
-            self.home.to_string_lossy().into_owned(),
-            self.workspace.to_string_lossy().into_owned(),
-        ));
-        rewrite_path_prefixes(text, &prefixes)
+        Err("No unused workspace path is available for this share".into())
+    }
+
+    fn collect(
+        &mut self,
+        source: &Path,
+        dependency: bool,
+        visiting: &mut BTreeSet<PathBuf>,
+        depth: usize,
+    ) -> Result<(), String> {
+        if self.links.len() >= MAX_LINKS || depth > 24 {
+            return Err("Too many linked profile dependencies; request a smaller set".into());
+        }
+        let target = source
+            .canonicalize()
+            .map_err(|_| format!("Cannot find {}", self.display(source)))?;
+        self.expand(
+            target.to_str().ok_or("Home paths must be valid text")?,
+            &self.home,
+        )?;
+        let metadata = std::fs::metadata(&target).map_err(|_| "Cannot inspect a home source")?;
+        if !metadata.is_dir() && !metadata.is_file() {
+            return Err("Only regular files and folders can be shared".into());
+        }
+        if target == self.home || (metadata.is_dir() && self.storage.starts_with(&target)) {
+            return Err(
+                "Select specific files or folders, not the whole home or Solar storage".into(),
+            );
+        }
+        if denied_path(&target, metadata.is_dir(), &self.denied) {
+            return Err("A requested source overlaps a project this Sprite cannot access".into());
+        }
+        if self.links.iter().any(|link| {
+            link.requested == source
+                || (link.source_identity.directory && target.starts_with(&link.target))
+        }) {
+            return Ok(());
+        }
+        if !visiting.insert(target.clone()) {
+            self.warnings.insert(format!(
+                "Skipped a circular profile dependency at {}",
+                self.display(source)
+            ));
+            return Ok(());
+        }
+        let (destination, previous) = self.choose_destination(source, &target)?;
+        if destination
+            != self.workspace.join(
+                source
+                    .strip_prefix(&self.home)
+                    .map_err(|_| "Invalid home source")?,
+            )
+        {
+            self.warnings.insert(format!(
+                "{} uses {} because its usual workspace path is occupied",
+                self.display(source),
+                destination.display()
+            ));
+        }
+        self.links.push(PlannedLink {
+            requested: source.to_owned(),
+            target: target.clone(),
+            source_identity: identity(&metadata),
+            destination,
+            previous,
+            dependency,
+        });
+        if self.include_dependencies && metadata.is_file() && profile_file(source) {
+            self.warnings.insert("Linked profile contents are used as-is. Absolute host paths are not rewritten and may be blocked by workspace isolation.".into());
+            if metadata.len() > MAX_PROFILE as u64 {
+                self.warnings.insert(format!(
+                    "{} is too large for automatic dependency discovery",
+                    self.display(source)
+                ));
+            } else if let Some(text) = read_profile(&self.home, &target)? {
+                self.dependencies(&text, source, visiting, depth)?;
+            }
+        }
+        visiting.remove(&target);
+        Ok(())
     }
 
     fn dependencies(
@@ -369,8 +393,6 @@ impl HomeImportPlan {
                 self.home.to_string_lossy().into_owned(),
             ),
         ]);
-        // A deliberately small lexer: no evaluation, process substitution, globbing,
-        // commands, or network access. Unresolvable source directives are reported.
         for line in text.lines() {
             let words = shell_words(line);
             for word in &words {
@@ -387,18 +409,24 @@ impl HomeImportPlan {
                     continue;
                 }
                 let Some(raw) = expand_variables(&pair[1], &variables) else {
-                    self.warnings.insert(format!("{} contains a dynamic source directive; request its resolved file separately",self.display(source)));
+                    self.warnings.insert(format!(
+                        "{} has a dynamic include; request its resolved path separately",
+                        self.display(source)
+                    ));
                     continue;
                 };
                 if raw.contains(['*', '?', '`', '(', ')']) {
-                    self.warnings.insert(format!("{} contains a dynamic source directive; request its resolved file separately",self.display(source)));
+                    self.warnings.insert(format!(
+                        "{} has a dynamic include; request its resolved path separately",
+                        self.display(source)
+                    ));
                     continue;
                 }
                 let path = match self.expand(&raw, source.parent().unwrap_or(&self.home)) {
                     Ok(path) => path,
                     Err(_) => {
                         self.warnings.insert(format!(
-                            "{} references a source outside the home; it was not imported",
+                            "{} references a source outside the allowed home; it was not linked",
                             self.display(source)
                         ));
                         continue;
@@ -406,8 +434,8 @@ impl HomeImportPlan {
                 };
                 if !path.exists() {
                     self.warnings.insert(format!(
-                        "Referenced file {} was not found",
-                        self.display(&path)
+                        "An included path in {} was not found; check the profile and request it separately",
+                        self.display(source)
                     ));
                     continue;
                 }
@@ -418,167 +446,577 @@ impl HomeImportPlan {
     }
 
     pub fn apply(self, cancellation: &CancellationToken) -> Result<Value, String> {
-        let root = Dir::open_ambient_dir(&self.storage, cap_std::ambient_authority())
-            .map_err(|_| "Sprite storage is unavailable")?;
-        // Validate every replacement before changing any file.
-        for file in &self.files {
-            if cancellation.is_cancelled() {
-                return Err("Import cancelled".into());
-            }
-            if read_target(&self.storage, &file.target)? != file.previous {
-                return Err(
-                    "A Sprite file changed while approval was open. Request the import again."
-                        .into(),
-                );
-            }
+        Ok(self.apply_with_receipt(cancellation)?.commit())
+    }
+
+    pub fn apply_with_receipt(
+        self,
+        cancellation: &CancellationToken,
+    ) -> Result<HomeImportReceipt, String> {
+        self.validate_scope(&self.denied)?;
+        let mounts = self.links();
+        let root = Dir::open_ambient_dir(&self.workspace, cap_std::ambient_authority())
+            .map_err(|_| "Sprite workspace is unavailable")?;
+        // Validate every source and destination before creating any links.
+        for link in &self.links {
+            self.validate_link(link, cancellation, &BTreeMap::new())?;
         }
-        let mut copied = Vec::new();
-        for file in self.files {
-            if cancellation.is_cancelled() {
-                return Err(
-                    "Import cancelled; earlier completed copies remain in the Sprite".into(),
-                );
-            }
-            let relative = file
-                .target
-                .strip_prefix(&self.storage)
-                .map_err(|_| "Invalid Sprite destination")?;
-            let parent = relative.parent().ok_or("Invalid Sprite destination")?;
-            ensure_parents(&root, parent)?;
-            let directory = root
-                .open_dir(parent)
-                .map_err(|_| "Cannot open Sprite destination")?;
-            let temporary = format!(".solar-import-{}", uuid::Uuid::new_v4());
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            let result =
-                (|| {
-                    let mut output = directory
-                        .open_with(&temporary, &options)
-                        .map_err(|_| "Cannot create a private copy")?;
-                    #[cfg(unix)]
-                    {
-                        use cap_std::fs::PermissionsExt;
-                        output
-                            .set_permissions(cap_std::fs::Permissions::from_mode(
-                                if file.executable { 0o700 } else { 0o600 },
-                            ))
-                            .map_err(|_| "Cannot protect imported file")?;
-                    }
-                    output
-                        .write_all(&file.data)
-                        .map_err(|_| "Cannot write imported file")?;
-                    output.sync_all().map_err(|_| "Cannot save imported file")?;
-                    if cancellation.is_cancelled() {
-                        return Err("Import cancelled".into());
-                    }
-                    if read_target(&self.storage, &file.target)? != file.previous {
-                        return Err(
-                            "A Sprite file changed during import. Request the import again.".into(),
+        let mut created_links = Vec::new();
+        let result: Result<Value, String> = (|| {
+            let mut linked = Vec::new();
+            let mut created_parents = BTreeMap::new();
+            for link in &self.links {
+                self.validate_link(link, cancellation, &created_parents)?;
+                if link.previous.link.is_none() {
+                    let relative = link
+                        .destination
+                        .strip_prefix(&self.workspace)
+                        .map_err(|_| "Invalid workspace destination")?;
+                    for parent in ensure_parents(
+                        &root,
+                        relative.parent().ok_or("Invalid workspace destination")?,
+                    )? {
+                        let path = self.workspace.join(parent);
+                        created_parents.insert(
+                            path.clone(),
+                            identity(
+                                &std::fs::symlink_metadata(path)
+                                    .map_err(|_| "Cannot inspect created workspace folder")?,
+                            ),
                         );
                     }
-                    directory
-                        .rename(
-                            &temporary,
-                            &directory,
-                            relative.file_name().ok_or("Missing destination filename")?,
-                        )
-                        .map_err(|_| "Cannot finish imported file")?;
-                    Ok::<_, String>(())
-                })();
-            if result.is_err() {
-                let _ = directory.remove_file(&temporary);
+                    // Creation never unlinks or overwrites a destination.
+                    create_link(
+                        &root,
+                        &link.target,
+                        relative,
+                        link.source_identity.directory,
+                    )?;
+                    let metadata = root
+                        .symlink_metadata(relative)
+                        .map_err(|_| "Cannot verify the new workspace link")?;
+                    if !metadata.file_type().is_symlink() {
+                        return Err(
+                            "The workspace link was changed while it was being created".into()
+                        );
+                    }
+                    created_links.push(CreatedLink {
+                        path: relative.to_owned(),
+                        target: link.target.clone(),
+                        identity: cap_identity(&metadata),
+                    });
+                }
+                linked.push(json!({"source":self.display(&link.requested),"destination":link.destination,"directory":link.source_identity.directory,"writable":self.writable}));
             }
-            result?;
-            copied.push(json!({"source":file.source,"destination":file.target.to_string_lossy()}));
-        }
-        Ok(
-            json!({"copied":copied,"warnings":self.warnings,"message":"Approved files copied into this Sprite. No source files changed. Startup files take effect on the next shell command. Imported startup code is now executable by the Sprite."}),
-        )
-    }
-}
-
-fn normalize(path: &Path) -> Result<PathBuf, String> {
-    let mut output = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::ParentDir => {
-                if !output.pop() {
-                    return Err("Invalid home path".into());
+            if cancellation.is_cancelled() {
+                return Err("Share request cancelled".into());
+            }
+            Ok(
+                json!({"linked":linked,"warnings":self.warnings,"message":"Approved live links are available inside this Sprite's workspace. Original files stay in place; changes are visible through the links."}),
+            )
+        })();
+        match result {
+            Ok(result) => Ok(HomeImportReceipt {
+                root,
+                created: Some(created_links),
+                mounts,
+                result,
+            }),
+            Err(error) => {
+                if rollback_links(&root, &created_links) {
+                    Err(error)
+                } else {
+                    Err(format!(
+                        "{error}. Changed workspace entries were left untouched during rollback."
+                    ))
                 }
             }
-            Component::CurDir => {}
-            other => output.push(other.as_os_str()),
         }
     }
-    Ok(output)
+
+    fn validate_link(
+        &self,
+        link: &PlannedLink,
+        cancellation: &CancellationToken,
+        created: &BTreeMap<PathBuf, Identity>,
+    ) -> Result<(), String> {
+        if cancellation.is_cancelled() {
+            return Err("Share request cancelled".into());
+        }
+        let target = link
+            .requested
+            .canonicalize()
+            .map_err(|_| "A shared source changed while approval was open; request it again")?;
+        if target != link.target
+            || identity(&std::fs::metadata(&target).map_err(|_| "A shared source is unavailable")?)
+                != link.source_identity
+        {
+            return Err("A shared source was replaced or retargeted while approval was open; request it again".into());
+        }
+        let current = destination(&self.workspace, &link.destination, &link.target)?;
+        if current.link != link.previous.link
+            || !link
+                .previous
+                .parents
+                .iter()
+                .all(|entry| current.parents.contains(entry))
+            || current.parents.iter().any(|entry| {
+                !link.previous.parents.contains(entry) && created.get(&entry.0) != Some(&entry.1)
+            })
+        {
+            return Err(
+                "A workspace destination changed while approval was open; request it again".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
-fn ensure_parents(root: &Dir, path: &Path) -> Result<(), String> {
-    let mut child = PathBuf::new();
-    for component in path.components() {
-        if !matches!(component, Component::Normal(_)) {
-            return Err("Invalid private destination".into());
+/// Holds new links until Solar has persisted the corresponding access grants.
+/// Dropping or explicitly rolling back never removes pre-existing links.
+pub struct HomeImportReceipt {
+    root: Dir,
+    created: Option<Vec<CreatedLink>>,
+    mounts: Vec<WorkspaceMount>,
+    result: Value,
+}
+
+impl HomeImportReceipt {
+    pub fn mounts(&self) -> &[WorkspaceMount] {
+        &self.mounts
+    }
+
+    pub fn result(&self) -> &Value {
+        &self.result
+    }
+
+    pub fn commit(mut self) -> Value {
+        let _ = self.created.take();
+        std::mem::take(&mut self.result)
+    }
+
+    pub fn rollback(mut self) -> Result<(), String> {
+        if self
+            .created
+            .take()
+            .is_none_or(|links| rollback_links(&self.root, &links))
+        {
+            Ok(())
+        } else {
+            Err("Changed workspace entries were left untouched during share rollback".into())
         }
-        child.push(component);
-        match root.symlink_metadata(&child) {
-            Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
-            Ok(_) => return Err("A destination folder is a symbolic link or file".into()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                root.create_dir(&child)
-                    .map_err(|_| "Cannot create private destination")?;
+    }
+}
+
+impl Drop for HomeImportReceipt {
+    fn drop(&mut self) {
+        if let Some(links) = self.created.take() {
+            let _ = rollback_links(&self.root, &links);
+        }
+    }
+}
+
+struct CreatedLink {
+    path: PathBuf,
+    target: PathBuf,
+    identity: Identity,
+}
+
+fn cap_identity(metadata: &cap_std::fs::Metadata) -> Identity {
+    #[cfg(unix)]
+    use cap_std::fs::MetadataExt;
+    Identity {
+        directory: metadata.is_dir(),
+        #[cfg(unix)]
+        device: metadata.dev(),
+        #[cfg(unix)]
+        inode: metadata.ino(),
+        #[cfg(not(unix))]
+        created: metadata.created().ok().map(|time| time.into_std()),
+        #[cfg(not(unix))]
+        modified: if metadata.is_dir() {
+            None
+        } else {
+            metadata.modified().ok().map(|time| time.into_std())
+        },
+        #[cfg(not(unix))]
+        length: if metadata.is_dir() { 0 } else { metadata.len() },
+    }
+}
+
+fn rollback_links(root: &Dir, links: &[CreatedLink]) -> bool {
+    let mut complete = true;
+    for link in links.iter().rev() {
+        match root.symlink_metadata(&link.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(metadata)
+                if metadata.file_type().is_symlink()
+                    && cap_identity(&metadata) == link.identity
+                    && root.read_link_contents(&link.path).ok().as_ref() == Some(&link.target) =>
+            {
+                if root.remove_file(&link.path).is_err() {
+                    complete = false;
+                }
+            }
+            _ => complete = false,
+        }
+    }
+    complete
+}
+
+fn profile_file(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    name.starts_with(".zsh")
+        || name.starts_with(".bash")
+        || matches!(name, ".profile" | "config.fish")
+        || [".sh", ".zsh", ".bash", ".fish"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
+fn read_profile(home: &Path, path: &Path) -> Result<Option<String>, String> {
+    let root = Dir::open_ambient_dir(home, cap_std::ambient_authority())
+        .map_err(|_| "Cannot inspect profile dependencies")?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = root
+        .open_with(
+            path.strip_prefix(home)
+                .map_err(|_| "Invalid profile source")?,
+            &options,
+        )
+        .map_err(|_| "Cannot inspect profile dependencies")?;
+    if !file
+        .metadata()
+        .map_err(|_| "Cannot inspect a profile")?
+        .is_file()
+    {
+        return Err("Profile source is not a regular file".into());
+    }
+    let mut data = Vec::new();
+    file.take((MAX_PROFILE + 1) as u64)
+        .read_to_end(&mut data)
+        .map_err(|_| "Cannot inspect profile dependencies")?;
+    if data.len() > MAX_PROFILE {
+        return Ok(None);
+    }
+    Ok(String::from_utf8(data).ok())
+}
+
+fn destination(workspace: &Path, path: &Path, target: &Path) -> Result<Destination, String> {
+    let relative = path
+        .strip_prefix(workspace)
+        .map_err(|_| "A link destination escaped the workspace")?;
+    if relative.as_os_str().is_empty() {
+        return Err("Cannot replace the workspace itself".into());
+    }
+    let mut current = workspace.to_owned();
+    let mut parents = vec![(
+        workspace.to_owned(),
+        identity(&std::fs::symlink_metadata(workspace).map_err(|_| "Workspace unavailable")?),
+    )];
+    let components: Vec<_> = relative.components().collect();
+    for (index, part) in components.iter().enumerate() {
+        if !matches!(part, Component::Normal(_)) {
+            return Err("Invalid workspace destination".into());
+        }
+        current.push(part.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if index + 1 == components.len() => {
+                if !metadata.file_type().is_symlink() {
+                    return Err(
+                        "Workspace destination is already a Sprite-owned file or folder".into(),
+                    );
+                }
+                let value =
+                    std::fs::read_link(&current).map_err(|_| "Cannot inspect workspace link")?;
+                if value != target {
+                    return Err("Workspace destination is an unmanaged link".into());
+                }
+                let actual = current
+                    .canonicalize()
+                    .map_err(|_| "An existing workspace link is unavailable")?;
+                if actual != target {
+                    return Err("Workspace destination is already another share".into());
+                }
+                return Ok(Destination {
+                    link: Some((value, identity(&metadata))),
+                    parents,
+                });
+            }
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                parents.push((current.clone(), identity(&metadata)))
+            }
+            Ok(_) => return Err("Workspace link parents must be real private directories".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Destination {
+                    link: None,
+                    parents,
+                });
+            }
+            Err(_) => return Err("Cannot inspect workspace destination".into()),
+        }
+    }
+    Ok(Destination {
+        link: None,
+        parents,
+    })
+}
+
+fn ensure_parents(root: &Dir, relative: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut current = PathBuf::new();
+    let mut created = Vec::new();
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err("Invalid private workspace path".into());
+        }
+        current.push(component.as_os_str());
+        match root.symlink_metadata(&current) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err("Workspace link parents must be real private directories".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                root.create_dir(&current)
+                    .map_err(|_| "Cannot create a workspace folder")?;
+                created.push(current.clone());
                 #[cfg(unix)]
                 {
                     use cap_std::fs::PermissionsExt;
-                    root.set_permissions(&child, cap_std::fs::Permissions::from_mode(0o700))
-                        .map_err(|_| "Cannot protect private folder")?;
+                    root.set_permissions(&current, cap_std::fs::Permissions::from_mode(0o700))
+                        .map_err(|_| "Cannot protect workspace folder")?;
                 }
             }
-            Err(_) => return Err("Cannot inspect private destination".into()),
+            Err(_) => return Err("Cannot inspect workspace folder".into()),
         }
     }
-    Ok(())
+    Ok(created)
 }
 
-fn read_target(storage: &Path, target: &Path) -> Result<Option<Vec<u8>>, String> {
-    let root = Dir::open_ambient_dir(storage, cap_std::ambient_authority())
-        .map_err(|_| "Cannot open Sprite storage")?;
-    let relative = target
-        .strip_prefix(storage)
-        .map_err(|_| "Destination is outside Sprite storage")?;
-    let mut current = PathBuf::new();
-    for component in relative.components() {
-        if !matches!(component, Component::Normal(_)) {
-            return Err("Invalid destination".into());
+fn create_link(root: &Dir, target: &Path, relative: &Path, directory: bool) -> Result<(), String> {
+    #[cfg(unix)]
+    let result = {
+        let _ = directory;
+        root.symlink_contents(target, relative)
+    };
+    #[cfg(windows)]
+    let result = {
+        if directory {
+            root.symlink_dir(target, relative)
+        } else {
+            root.symlink_file(target, relative)
         }
-        current.push(component);
-        match root.symlink_metadata(&current) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err("Import destinations cannot contain symbolic links".into());
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err("Cannot inspect Sprite destination".into()),
-        }
-    }
-    let mut data = Vec::new();
-    let file = root
-        .open(relative)
-        .map_err(|_| "Cannot read existing Sprite file")?;
-    if !file
-        .metadata()
-        .map_err(|_| "Cannot inspect existing Sprite file")?
-        .is_file()
+    };
+    #[cfg(not(any(unix, windows)))]
     {
-        return Err("Import would replace a folder".into());
+        let _ = (root, target, relative, directory);
+        return Err("Live workspace links are not supported on this platform".into());
     }
-    file.take((MAX_FILE + 1) as u64)
-        .read_to_end(&mut data)
-        .map_err(|_| "Cannot read existing Sprite file")?;
-    if data.len() > MAX_FILE {
-        return Err("Existing Sprite file is too large to replace safely".into());
+    #[cfg(any(unix, windows))]
+    result.map_err(|_| {
+        "Cannot create the approved workspace link; its destination may have changed".into()
+    })
+}
+
+/// Bounded metadata-only discovery. No file is opened for content and symlink
+/// directories are never traversed, even if they point elsewhere inside home.
+pub fn search_user_home(
+    home: &Path,
+    denied: &[PathBuf],
+    args: &Value,
+    cancellation: &CancellationToken,
+) -> Result<Value, String> {
+    if cancellation.is_cancelled() {
+        return Err("Home search cancelled".into());
     }
-    Ok(Some(data))
+    let home = home
+        .canonicalize()
+        .map_err(|_| "The user's home is unavailable")?;
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 200)
+        .ok_or("Enter a filename or path search of 1 to 200 characters")?
+        .to_lowercase();
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(1, 100) as usize;
+    let base = expand_home(
+        &home,
+        args.get("path").and_then(Value::as_str).unwrap_or("."),
+        &home,
+    )?;
+    let actual = base
+        .canonicalize()
+        .map_err(|_| "The search folder is unavailable")?;
+    expand_home(
+        &home,
+        actual.to_str().ok_or("Home paths must be valid text")?,
+        &home,
+    )?;
+    let denied: Vec<_> = denied
+        .iter()
+        .map(|root| root.canonicalize().unwrap_or_else(|_| root.clone()))
+        .collect();
+    if denied.iter().any(|root| actual.starts_with(root)) {
+        return Err("The search folder is in an inaccessible project".into());
+    }
+    let mut current = home.clone();
+    for component in base
+        .strip_prefix(&home)
+        .map_err(|_| "Search escaped the home")?
+        .components()
+    {
+        current.push(component.as_os_str());
+        if std::fs::symlink_metadata(&current)
+            .map_err(|_| "Cannot inspect search folder")?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(
+                "Choose a real folder; discovery does not traverse symlink directories".into(),
+            );
+        }
+    }
+    let root = Dir::open_ambient_dir(&home, cap_std::ambient_authority())
+        .map_err(|_| "Cannot open the user's home")?;
+    let mut stack = vec![(base, 0usize)];
+    let mut visited = 0usize;
+    let mut truncated = false;
+    let mut matches = Vec::new();
+    while let Some((directory, depth)) = stack.pop() {
+        if cancellation.is_cancelled() {
+            return Err("Home search cancelled".into());
+        }
+        let relative = directory
+            .strip_prefix(&home)
+            .map_err(|_| "Search escaped the home")?;
+        let relative = if relative.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            relative
+        };
+        let entries = match root.read_dir(relative) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        let mut entries = entries
+            .take(513)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "Cannot inspect home names")?;
+        if entries.len() > 512 {
+            entries.truncate(512);
+            truncated = true;
+        }
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if cancellation.is_cancelled() {
+                return Err("Home search cancelled".into());
+            }
+            visited += 1;
+            if visited > MAX_SEARCH_VISITS {
+                truncated = true;
+                break;
+            }
+            let path = directory.join(entry.file_name());
+            let relative = path
+                .strip_prefix(&home)
+                .map_err(|_| "Search escaped the home")?;
+            if relative
+                .components()
+                .any(|part| part.as_os_str() == ".solar")
+            {
+                continue;
+            }
+            let kind = entry
+                .file_type()
+                .map_err(|_| "Cannot inspect a home name")?;
+            let checked = if kind.is_symlink() {
+                match path.canonicalize() {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                }
+            } else {
+                path.clone()
+            };
+            if !checked.starts_with(&home)
+                || checked
+                    .strip_prefix(&home)
+                    .unwrap_or(&checked)
+                    .components()
+                    .any(|part| part.as_os_str() == ".solar")
+                || denied.iter().any(|root| checked.starts_with(root))
+            {
+                continue;
+            }
+            let is_directory = kind.is_dir();
+            let candidate_allowed = !denied_path(
+                &checked,
+                is_directory || (kind.is_symlink() && checked.is_dir()),
+                &denied,
+            );
+            let text = relative.to_string_lossy().to_lowercase();
+            if candidate_allowed && name_matches(&query, &text) {
+                matches.push(json!({"path":format!("~/{}",relative.to_string_lossy()),"type":if kind.is_symlink(){"symlink"}else if is_directory{"directory"}else if kind.is_file(){"file"}else{"other"}}));
+                if matches.len() >= limit {
+                    truncated = true;
+                    break;
+                }
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if is_directory
+                && depth < 8
+                && !matches!(name.as_ref(), ".git" | "node_modules" | "target" | ".cache")
+            {
+                stack.push((path, depth + 1));
+            }
+        }
+        if truncated {
+            break;
+        }
+    }
+    Ok(
+        json!({"matches":matches,"inspected":visited,"truncated":truncated,"notice":"Names and file types only. Discovery does not grant access; request selected paths with pull_from_user_home for explicit approval."}),
+    )
+}
+
+fn name_matches(query: &str, path: &str) -> bool {
+    if !query.contains(['*', '?']) {
+        return path.contains(query);
+    }
+    let query: Vec<_> = query.chars().collect();
+    let path: Vec<_> = path.chars().collect();
+    let (mut pattern, mut text, mut star, mut retry) = (0, 0, None, 0);
+    while text < path.len() {
+        if pattern < query.len() && (query[pattern] == '?' || query[pattern] == path[text]) {
+            pattern += 1;
+            text += 1;
+        } else if pattern < query.len() && query[pattern] == '*' {
+            star = Some(pattern);
+            pattern += 1;
+            retry = text;
+        } else if let Some(position) = star {
+            retry += 1;
+            text = retry;
+            pattern = position + 1;
+        } else {
+            return false;
+        }
+    }
+    while pattern < query.len() && query[pattern] == '*' {
+        pattern += 1;
+    }
+    pattern == query.len()
 }
 
 fn shell_words(line: &str) -> Vec<String> {
@@ -666,373 +1104,410 @@ fn expand_variables(value: &str, variables: &BTreeMap<String, String>) -> Option
     Some(result)
 }
 
-// Match path components instead of substrings; scan the original only, so a
-// replacement below the real home is never rewritten again. Preserve quoted
-// literals and escape replacement paths for the surrounding shell quote style.
-fn rewrite_path_prefixes(text: &str, prefixes: &[(String, String)]) -> String {
-    let mut prefixes = prefixes.iter().collect::<Vec<_>>();
-    prefixes.sort_by_key(|(source, _)| std::cmp::Reverse(source.len()));
-    let mut result = String::with_capacity(text.len());
-    let mut quote = None;
-    let mut offset = 0;
-    while offset < text.len() {
-        let tail = &text[offset..];
-        let previous = text[..offset].chars().next_back();
-        let starts_word = previous.is_none_or(|c| {
-            c.is_whitespace()
-                || matches!(
-                    c,
-                    '\'' | '"' | '=' | '(' | ')' | '[' | ']' | ';' | ':' | ','
-                )
-        });
-        let replacement = starts_word
-            .then(|| {
-                prefixes.iter().find(|(source, _)| {
-                    if !tail.starts_with(source.as_str()) {
-                        return false;
-                    }
-                    if source.starts_with('$') && quote == Some('\'') {
-                        return false;
-                    }
-                    if source.starts_with('~') && quote.is_some() {
-                        return false;
-                    }
-                    tail[source.len()..].chars().next().is_none_or(|c| {
-                        c == '/'
-                            || c.is_whitespace()
-                            || matches!(c, '\'' | '"' | ';' | ')' | ']' | ',')
-                    })
-                })
-            })
-            .flatten();
-        if let Some((source, destination)) = replacement {
-            result.push_str(&quote_replacement(destination, quote));
-            offset += source.len();
-            continue;
-        }
-        let character = tail.chars().next().expect("nonempty tail");
-        result.push(character);
-        offset += character.len_utf8();
-        if character == '\\' && quote != Some('\'') {
-            if let Some(next) = text[offset..].chars().next() {
-                result.push(next);
-                offset += next.len_utf8();
-            }
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-        }
-    }
-    result
-}
-
-fn quote_replacement(value: &str, quote: Option<char>) -> String {
-    if quote == Some('\'') {
-        return value.replace('\'', "'\\''");
-    }
-    let escaped = value
-        .chars()
-        .flat_map(|c| {
-            if matches!(c, '\\' | '"' | '$' | '`') {
-                vec!['\\', c]
-            } else {
-                vec![c]
-            }
-        })
-        .collect::<String>();
-    if quote == Some('"') {
-        escaped
-    } else if value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
-    {
-        value.to_owned()
-    } else {
-        format!("\"{escaped}\"")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("user");
+        let storage = home.join(".solar/orbits/test");
+        let workspace = storage.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        (temporary, home, storage, workspace)
+    }
+
     #[test]
-    fn variable_expansion_respects_complete_names_and_rejects_execution() {
+    fn variable_expansion_is_static_and_uses_complete_names() {
         let variables = BTreeMap::from([
             ("HOME".into(), "/home/user".into()),
-            ("HOME_DIR".into(), "/home/user/profiles".into()),
-            ("ZSH".into(), "/home/user/zsh".into()),
-            ("ZSH_CUSTOM".into(), "/home/user/custom".into()),
+            ("HOME_DIR".into(), "/home/user/profile".into()),
         ]);
         assert_eq!(
             expand_variables("$HOME_DIR/secrets", &variables).as_deref(),
-            Some("/home/user/profiles/secrets")
+            Some("/home/user/profile/secrets")
         );
-        assert_eq!(
-            expand_variables("${ZSH_CUSTOM}/private.zsh", &variables).as_deref(),
-            Some("/home/user/custom/private.zsh")
-        );
-        for dynamic in [
+        for value in [
+            "$(touch bad)",
+            "`pwd`",
+            "${HOME:-/tmp}",
             "$HOME_SUFFIX/file",
-            "$(touch unwanted)",
-            "`pwd`/file",
-            "${HOME:-/tmp}/file",
-            "${HOME",
-            "$$/file",
         ] {
-            assert!(expand_variables(dynamic, &variables).is_none(), "{dynamic}");
+            assert!(expand_variables(value, &variables).is_none());
         }
     }
 
     #[test]
-    fn rewriting_matches_path_boundaries_and_preserves_literal_variables() {
-        let prefixes = vec![
-            ("$HOME/.config".into(), "/private/config".into()),
-            ("/home/user".into(), "/private/home".into()),
-        ];
-        let text = "source $HOME/.config/profile\nsource $HOME/.config-backup/profile\nsource /home/user/profile\nsource /home/user-two/profile\nsource '$HOME/.config/profile'\nsource \\$HOME/.config/profile\n";
+    fn folder_links_are_live_and_default_to_read_only() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::create_dir_all(home.join("notes/subfolder")).unwrap();
+        std::fs::write(home.join("notes/subfolder/file"), "first").unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes"]}),
+        )
+        .unwrap();
         assert_eq!(
-            rewrite_path_prefixes(text, &prefixes),
-            "source /private/config/profile\nsource $HOME/.config-backup/profile\nsource /private/home/profile\nsource /home/user-two/profile\nsource '$HOME/.config/profile'\nsource \\$HOME/.config/profile\n"
+            plan.links(),
+            vec![WorkspaceMount {
+                path: workspace.join("notes"),
+                target: home.join("notes"),
+                writable: false
+            }]
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rewritten_paths_keep_spaces_quotes_and_dollars_literal() {
-        let target = "/tmp/Sprite's home/$cache";
-        let prefixes = vec![("/home/user".into(), target.into())];
-        for argument in [
-            "/home/user/file",
-            "\"/home/user/file\"",
-            "'/home/user/file'",
-        ] {
-            let command = rewrite_path_prefixes(&format!("printf '%s' {argument}"), &prefixes);
-            let output = std::process::Command::new("/bin/sh")
-                .args(["-c", &command])
-                .output()
-                .unwrap();
-            assert!(output.status.success());
-            assert_eq!(
-                String::from_utf8(output.stdout).unwrap(),
-                format!("{target}/file"),
-                "{command}"
-            );
-        }
-    }
-
-    #[test]
-    fn longer_profile_variables_find_their_own_dependencies() {
-        let (_temporary, home, store, workspace) = fixture();
-        std::fs::create_dir_all(home.join("profiles")).unwrap();
-        std::fs::create_dir_all(home.join("custom")).unwrap();
-        std::fs::write(home.join("profiles/secrets"), "export FIRST=1").unwrap();
-        std::fs::write(home.join("custom/private.zsh"), "export SECOND=1").unwrap();
-        std::fs::write(home.join(".zshrc"), "HOME_DIR=\"$HOME/profiles\"\nZSH=\"$HOME/zsh\"\nZSH_CUSTOM=\"$HOME/custom\"\nsource \"$HOME_DIR/secrets\"\nsource \"${ZSH_CUSTOM}/private.zsh\"\n").unwrap();
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/.zshrc"]}),
-        )
-        .unwrap();
-        assert_eq!(plan.review()["files"].as_array().unwrap().len(), 3);
-        assert!(plan.review()["warnings"].as_array().unwrap().is_empty());
-    }
-
-    fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("user");
-        let store = home.join(".solar/orbits/one");
-        let workspace = store.join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        (tmp, home, store, workspace)
-    }
-    #[test]
-    fn dependencies_private_config_and_replacements_are_reviewed_without_contents() {
-        let (_tmp, home, store, workspace) = fixture();
-        std::fs::create_dir_all(home.join(".config/demo")).unwrap();
-        std::fs::write(
-            home.join(".zshrc"),
-            format!(
-                "source \"$HOME/.zshrc.secrets\"\nsource \"{}/.config/demo/profile\"\n",
-                home.display()
-            ),
-        )
-        .unwrap();
-        std::fs::write(home.join(".zshrc.secrets"), "export TOKEN=very-secret").unwrap();
-        std::fs::write(home.join(".config/demo/profile"), "export DEMO=1").unwrap();
-        std::fs::write(workspace.join(".zshrc"), "stub").unwrap();
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/.zshrc"]}),
-        )
-        .unwrap();
         let review = plan.review();
-        assert_eq!(review["files"].as_array().unwrap().len(), 3);
-        assert!(!review.to_string().contains("very-secret"));
-        assert!(review.to_string().contains("\"replace\":true"));
-        plan.apply(&CancellationToken::new()).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(workspace.join(".zshrc.secrets")).unwrap(),
-            "export TOKEN=very-secret"
-        );
+        assert_eq!(review["links"][0]["directory"], true);
+        assert_eq!(review["links"][0]["writable"], false);
+        assert!(!review.to_string().contains("first"));
+        let result = plan.apply(&CancellationToken::new()).unwrap();
+        assert_eq!(result["linked"].as_array().unwrap().len(), 1);
         assert!(
-            std::fs::read_to_string(workspace.join(".zshrc"))
-                .unwrap()
-                .contains(
-                    &store
-                        .join("config/demo/profile")
-                        .to_string_lossy()
-                        .to_string()
-                )
-        );
-        assert!(store.join("config/demo/profile").is_file());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(workspace.join(".zshrc.secrets"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-            assert_eq!(
-                std::fs::metadata(store.join("config/demo"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
-    }
-    #[test]
-    fn rejects_home_root_other_orbits_denied_projects_and_destination_changes() {
-        let (_tmp, home, store, workspace) = fixture();
-        std::fs::write(home.join("profile"), "source ~/.solar/orbits/two/token").unwrap();
-        for path in ["~", "~/../outside", "~/.solar/orbits/one/workspace"] {
-            assert!(
-                HomeImportPlan::prepare(&home, &workspace, &store, &[], &json!({"paths":[path]}))
-                    .is_err()
-            );
-        }
-        std::fs::create_dir_all(home.join("project")).unwrap();
-        std::fs::write(home.join("project/key"), "no").unwrap();
-        assert!(
-            HomeImportPlan::prepare(
-                &home,
-                &workspace,
-                &store,
-                &[home.join("project")],
-                &json!({"paths":["~/project/key"]})
-            )
-            .is_err()
-        );
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/profile"]}),
-        )
-        .unwrap();
-        std::fs::write(workspace.join("profile"), "changed").unwrap();
-        assert!(plan.apply(&CancellationToken::new()).is_err());
-        assert_eq!(
-            std::fs::read_to_string(workspace.join("profile")).unwrap(),
-            "changed"
-        );
-    }
-    #[test]
-    fn approval_cannot_survive_project_access_revocation() {
-        let (_tmp, home, store, workspace) = fixture();
-        let project = home.join("project");
-        std::fs::create_dir(&project).unwrap();
-        std::fs::write(project.join("profile"), "private project value").unwrap();
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/project/profile"]}),
-        )
-        .unwrap();
-        assert!(plan.validate_scope(&[]).is_ok());
-        assert!(plan.validate_scope(&[project]).is_err());
-        assert!(!workspace.join("project/profile").exists());
-    }
-
-    #[test]
-    fn dynamic_sources_are_not_executed_and_cancellation_writes_nothing() {
-        let (_tmp, home, store, workspace) = fixture();
-        std::fs::write(
-            home.join(".zshrc"),
-            "source $(touch evil)\nsource $UNKNOWN/file\n",
-        )
-        .unwrap();
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/.zshrc"]}),
-        )
-        .unwrap();
-        assert!(!plan.review()["warnings"].as_array().unwrap().is_empty());
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        assert!(plan.apply(&cancel).is_err());
-        assert!(!workspace.join(".zshrc").exists());
-        assert!(!home.join("evil").exists());
-    }
-    #[cfg(unix)]
-    #[test]
-    fn home_symlinks_are_copied_as_files_external_links_and_target_links_rejected() {
-        let (_tmp, home, store, workspace) = fixture();
-        std::fs::write(home.join("actual"), "copy").unwrap();
-        std::os::unix::fs::symlink(home.join("actual"), home.join("alias")).unwrap();
-        let plan = HomeImportPlan::prepare(
-            &home,
-            &workspace,
-            &store,
-            &[],
-            &json!({"paths":["~/alias"]}),
-        )
-        .unwrap();
-        plan.apply(&CancellationToken::new()).unwrap();
-        assert!(
-            !std::fs::symlink_metadata(workspace.join("alias"))
+            std::fs::symlink_metadata(workspace.join("notes"))
                 .unwrap()
                 .file_type()
                 .is_symlink()
         );
-        std::os::unix::fs::symlink("/etc/passwd", home.join("bad")).unwrap();
-        assert!(
-            HomeImportPlan::prepare(&home, &workspace, &store, &[], &json!({"paths":["~/bad"]}))
-                .is_err()
+        std::fs::write(home.join("notes/subfolder/file"), "updated").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("notes/subfolder/file")).unwrap(),
+            "updated"
         );
-        std::os::unix::fs::symlink(home.join("actual"), workspace.join("target")).unwrap();
-        std::fs::write(home.join("target"), "new").unwrap();
+    }
+
+    #[test]
+    fn profile_dependencies_are_reviewed_without_content_or_execution() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::create_dir_all(home.join("profiles")).unwrap();
+        std::fs::write(
+            home.join(".zshrc"),
+            "HOME_DIR=\"$HOME/profiles\"\nsource \"$HOME_DIR/secrets\"\nsource $(touch unwanted)\n",
+        )
+        .unwrap();
+        std::fs::write(home.join("profiles/secrets"), "TOKEN=super-private").unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/.zshrc"],"writable":true}),
+        )
+        .unwrap();
+        assert_eq!(plan.links().len(), 2);
+        assert!(plan.links().iter().all(|link| link.writable));
+        assert!(!plan.review().to_string().contains("super-private"));
+        assert!(!plan.review()["warnings"].as_array().unwrap().is_empty());
+        plan.apply(&CancellationToken::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("profiles/secrets")).unwrap(),
+            "TOKEN=super-private"
+        );
+        assert!(!home.join("unwanted").exists());
+    }
+
+    #[test]
+    fn existing_private_files_and_configuration_aliases_are_not_overwritten() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::write(home.join(".zshrc"), "source ~/.zshrc.secrets").unwrap();
+        std::fs::write(home.join(".zshrc.secrets"), "secret").unwrap();
+        std::fs::write(workspace.join(".zshrc"), "private stub").unwrap();
+        std::fs::create_dir_all(home.join(".config/app")).unwrap();
+        std::fs::create_dir(storage.join("config")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(storage.join("config"), workspace.join(".config")).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(storage.join("config"), workspace.join(".config"))
+            .unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/.zshrc","~/.config/app"]}),
+        )
+        .unwrap();
         assert!(
+            plan.links()
+                .iter()
+                .any(|link| link.path == workspace.join("shared/home/.zshrc"))
+        );
+        assert!(
+            plan.links()
+                .iter()
+                .any(|link| link.path == workspace.join("shared/home/.config/app"))
+        );
+        plan.apply(&CancellationToken::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join(".zshrc")).unwrap(),
+            "private stub"
+        );
+        assert_eq!(
+            workspace.join(".config").canonicalize().unwrap(),
+            storage.join("config")
+        );
+    }
+
+    #[test]
+    fn parent_and_child_requests_do_not_create_redundant_or_nested_links() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::create_dir_all(home.join("notes/subfolder")).unwrap();
+        std::fs::write(home.join("notes/subfolder/file"), "text").unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes/subfolder/file","~/notes"]}),
+        )
+        .unwrap();
+        assert_eq!(plan.links().len(), 1);
+        plan.apply(&CancellationToken::new()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("notes/subfolder/file")).unwrap(),
+            "text"
+        );
+    }
+
+    #[test]
+    fn whole_home_storage_and_denied_project_ancestors_are_rejected() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::create_dir_all(home.join("projects/secret")).unwrap();
+        std::fs::write(home.join("projects/secret/file"), "secret").unwrap();
+        for path in [
+            "~",
+            "~/..",
+            "~/.solar",
+            "~/projects",
+            "~/projects/secret/file",
+        ] {
+            assert!(
+                HomeImportPlan::prepare(
+                    &home,
+                    &workspace,
+                    &storage,
+                    &[home.join("projects/secret")],
+                    &json!({"paths":[path]})
+                )
+                .is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_and_destination_changes_invalidate_pending_approval() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::write(home.join("notes"), "one").unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes"]}),
+        )
+        .unwrap();
+        std::fs::rename(home.join("notes"), home.join("old-notes")).unwrap();
+        std::fs::write(home.join("notes"), "two").unwrap();
+        assert!(plan.apply(&CancellationToken::new()).is_err());
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes"]}),
+        )
+        .unwrap();
+        std::fs::write(workspace.join("notes"), "unrelated").unwrap();
+        assert!(plan.apply(&CancellationToken::new()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("notes")).unwrap(),
+            "unrelated"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_alias_and_destination_parent_retargets_are_rejected() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::write(home.join("one"), "one").unwrap();
+        std::fs::write(home.join("two"), "two").unwrap();
+        std::os::unix::fs::symlink(home.join("one"), home.join("alias")).unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/alias"]}),
+        )
+        .unwrap();
+        std::fs::remove_file(home.join("alias")).unwrap();
+        std::os::unix::fs::symlink(home.join("two"), home.join("alias")).unwrap();
+        assert!(plan.apply(&CancellationToken::new()).is_err());
+        std::fs::create_dir_all(home.join("notes/subfolder")).unwrap();
+        std::fs::write(home.join("notes/subfolder/file"), "one").unwrap();
+        std::fs::create_dir(workspace.join("notes")).unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes/subfolder/file"]}),
+        )
+        .unwrap();
+        std::fs::remove_dir(workspace.join("notes")).unwrap();
+        std::os::unix::fs::symlink(home.join("notes"), workspace.join("notes")).unwrap();
+        assert!(plan.apply(&CancellationToken::new()).is_err());
+        assert!(!home.join("notes/subfolder/file").is_symlink());
+    }
+
+    #[test]
+    fn revocation_and_cancellation_create_no_links() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::create_dir(home.join("notes")).unwrap();
+        let plan = HomeImportPlan::prepare(
+            &home,
+            &workspace,
+            &storage,
+            &[],
+            &json!({"paths":["~/notes"]}),
+        )
+        .unwrap();
+        assert!(plan.validate_scope(&[home.join("notes")]).is_err());
+        let token = CancellationToken::new();
+        token.cancel();
+        assert!(plan.apply(&token).is_err());
+        assert!(!workspace.join("notes").exists());
+    }
+
+    #[test]
+    fn rollback_removes_only_new_links_that_still_match_and_preserves_user_changes() {
+        let (_temporary, home, _, workspace) = fixture();
+        std::fs::write(home.join("source"), "original").unwrap();
+        let root = Dir::open_ambient_dir(&workspace, cap_std::ambient_authority()).unwrap();
+        let mut created = Vec::new();
+        for name in ["owned", "changed"] {
+            create_link(&root, &home.join("source"), Path::new(name), false).unwrap();
+            created.push(CreatedLink {
+                path: name.into(),
+                target: home.join("source"),
+                identity: cap_identity(&root.symlink_metadata(name).unwrap()),
+            });
+        }
+        std::fs::remove_file(workspace.join("changed")).unwrap();
+        std::fs::write(workspace.join("changed"), "user-created").unwrap();
+        assert!(!rollback_links(&root, &created));
+        assert!(!workspace.join("owned").exists());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("changed")).unwrap(),
+            "user-created"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("source")).unwrap(),
+            "original"
+        );
+    }
+
+    #[test]
+    fn uncommitted_receipts_roll_back_new_links_and_preserve_existing_ones() {
+        let (_temporary, home, storage, workspace) = fixture();
+        std::fs::write(home.join("new"), "new").unwrap();
+        std::fs::write(home.join("existing"), "existing").unwrap();
+        let root = Dir::open_ambient_dir(&workspace, cap_std::ambient_authority()).unwrap();
+        create_link(&root, &home.join("existing"), Path::new("existing"), false).unwrap();
+        let plan = || {
             HomeImportPlan::prepare(
                 &home,
                 &workspace,
-                &store,
+                &storage,
                 &[],
-                &json!({"paths":["~/target"]})
+                &json!({"paths":["~/new","~/existing"]}),
+            )
+            .unwrap()
+        };
+        let receipt = plan()
+            .apply_with_receipt(&CancellationToken::new())
+            .unwrap();
+        assert_eq!(receipt.mounts().len(), 2);
+        assert_eq!(receipt.result()["linked"].as_array().unwrap().len(), 2);
+        assert!(workspace.join("new").exists());
+        drop(receipt);
+        assert!(!workspace.join("new").exists());
+        assert!(workspace.join("existing").exists());
+        let receipt = plan()
+            .apply_with_receipt(&CancellationToken::new())
+            .unwrap();
+        receipt.rollback().unwrap();
+        assert!(!workspace.join("new").exists());
+        let result = plan()
+            .apply_with_receipt(&CancellationToken::new())
+            .unwrap()
+            .commit();
+        assert_eq!(result["linked"].as_array().unwrap().len(), 2);
+        assert!(workspace.join("new").exists());
+        assert!(workspace.join("existing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_search_skips_storage_denied_projects_and_symlink_traversal() {
+        let (_temporary, home, storage, _) = fixture();
+        std::fs::create_dir_all(home.join("allowed/child")).unwrap();
+        std::fs::create_dir(home.join("secret")).unwrap();
+        std::fs::create_dir(home.join(".ssh")).unwrap();
+        std::fs::write(
+            home.join("allowed/child/profile.txt"),
+            "SECRET_CONTENT_NEVER_RETURNED",
+        )
+        .unwrap();
+        std::fs::write(home.join("secret/private.txt"), "denied").unwrap();
+        std::fs::write(storage.join("profile-private.txt"), "storage").unwrap();
+        std::os::unix::fs::symlink(home.join("allowed"), home.join("alias")).unwrap();
+        // A special file matching the query proves discovery does not read contents.
+        let fifo =
+            std::ffi::CString::new(home.join(".ssh/profile-key").to_string_lossy().as_bytes())
+                .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let result = search_user_home(
+            &home,
+            &[home.join("secret")],
+            &json!({"query":"*profile*"}),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let text = result.to_string();
+        assert!(text.contains("allowed/child/profile.txt"));
+        assert!(text.contains(".ssh/profile-key"));
+        assert!(!text.contains("SECRET_CONTENT"));
+        assert!(!text.contains("profile-private"));
+        assert!(!text.contains("alias/child"));
+        assert!(!text.contains("private.txt"));
+        assert!(
+            search_user_home(
+                &home,
+                &[],
+                &json!({"query":"*","path":"alias/child"}),
+                &CancellationToken::new()
             )
             .is_err()
         );
+        let limited = search_user_home(
+            &home,
+            &[],
+            &json!({"query":"*","limit":1}),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(limited["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(limited["truncated"], true);
+    }
+
+    #[test]
+    fn cancelled_name_search_does_not_traverse() {
+        let (_temporary, home, _, _) = fixture();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(search_user_home(&home, &[], &json!({"query":"*"}), &cancellation).is_err());
     }
 }

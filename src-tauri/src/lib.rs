@@ -14,6 +14,8 @@ mod remote_logging;
 mod reset;
 mod routines;
 mod runs;
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+mod sharing;
 #[cfg(any(feature = "desktop", test))]
 mod storage_root;
 pub mod store;

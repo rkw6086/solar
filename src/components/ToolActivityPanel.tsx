@@ -72,13 +72,21 @@ export function ToolActivityPanel({ message, servers = [] }: { message: Message;
 
 export function ToolApprovalDetails({ name, args, servers = [] }: { name: string; args: unknown; servers?: McpServer[] }) {
   const view = presentApproval(name, args, servers);
-  const importReview = name === "pull_from_user_home" && args && typeof args === "object" ? args as { files?: { source: string; destination: string; bytes: number; replace: boolean; dependency: boolean }[]; warnings?: string[]; notice?: string } : undefined;
+  const importReview = name === "pull_from_user_home" && args && typeof args === "object" ? args as {
+    links?: { source: string; destination: string; directory: boolean; writable?: boolean; replace?: boolean }[];
+    files?: { source: string; destination: string; bytes: number; replace: boolean; dependency: boolean }[];
+    warnings?: string[]; notice?: string;
+  } : undefined;
   return <div className="tool-approval-details">
     <p><strong>{view.title}</strong>{view.category === "shell" ? "" : <span>{view.summary}</span>}</p>
     {view.command && <pre className="tool-command" aria-label="Command awaiting approval"><code>{view.command}</code></pre>}
     {view.directory && <p className="tool-directory"><span>Working folder</span>{view.directory}</p>}
-    {importReview && <section className="home-import-review" aria-label="Files awaiting import approval">
+    {importReview && <section className="home-import-review" aria-label="Workspace links awaiting approval">
       <p>{importReview.notice}</p>
+      {importReview.links && <p><strong>Your approval is required for every request.</strong> These links give this Sprite access to the original items on your computer.</p>}
+      <ul>{importReview.links?.map(link => <li key={link.destination}>
+        <strong>{link.source}</strong><span>{link.directory ? "Folder" : "File"} · {link.writable ? "Read & write · changes originals" : "Read-only"}</span><small>{link.destination}</small>
+      </li>)}</ul>
       <ul>{importReview.files?.map(file => <li key={file.destination}>
         <strong>{file.source}</strong><span>{file.replace ? "Replace existing copy" : "New private copy"}{file.dependency ? " · linked dependency" : ""} · {(file.bytes / 1024).toFixed(1)} KB</span>
         <small>{file.destination}</small>

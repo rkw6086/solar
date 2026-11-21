@@ -1,0 +1,8 @@
+.planet-art .planet-eyes { animation-delay: var(--planet-blink-delay, 0s); }
+.planet-rings, .planet-shine, .planet-freckles { pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .planet-art .planet-eyes, .planet-art.is-busy { animation: none; }
+}
+:root[data-motion="reduced"] .planet-art .planet-eyes,
+:root[data-motion="reduced"] .planet-art.is-busy { animation: none; }

@@ -132,11 +132,11 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
   if (cliVisible) return <Modal title={`${orbit.name}’s CLI sign-ins`}
     subtitle="Set up command-line tools for this Sprite." onClose={closeCli} dismissible={!cliOpening}>
     <div className="form-body orbit-cli-body">
-      <p className="orbit-cli-intro">This Sprite uses its own home and configuration folders. Solar does not automatically copy your personal CLI sign-ins. You can also ask this Sprite in chat to import specific home files or shell profiles; it will show the files for approval first.</p>
+      <p className="orbit-cli-intro">This Sprite uses its workspace and the configuration you explicitly shared. You can ask it to find and request additional home files or profiles; adding live links always needs your approval.</p>
       <ol className="orbit-cli-steps">
-        <li><strong>Open the Sprite’s terminal.</strong><span>It starts in this Sprite’s workspace, using the same private configuration as its shell commands.</span></li>
-        <li><strong>Sign in to the tools it needs.</strong><span>For GitLab, run <code>glab auth login --git-protocol https --insecure-storage</code> and follow the prompts for your GitLab host. This uses HTTPS for Git and keeps the login in the Sprite’s private configuration folder instead of your shared system keychain. Enter credentials in the terminal, not in chat.</span></li>
-        <li><strong>Return to Solar.</strong><span>Close the terminal when you’re finished, then ask {orbit.name} to try again. Each Sprite signs in separately.</span></li>
+        <li><strong>Open the Sprite’s terminal.</strong><span>It starts in this Sprite’s workspace, using the same private or explicitly shared configuration as its shell commands.</span></li>
+        <li><strong>Sign in to the tools it needs.</strong><span>For GitLab, run <code>glab auth login --git-protocol https --insecure-storage</code> and follow the prompts for your GitLab host. This uses HTTPS for Git and stores the login in the Sprite’s selected configuration instead of the system keychain. A writable shared configuration changes the original; a read-only one cannot save a new login. Enter credentials in the terminal, not in chat.</span></li>
+        <li><strong>Return to Solar.</strong><span>Close the terminal when you’re finished, then ask {orbit.name} to try again. Sign-ins stay separate unless you explicitly share their configuration.</span></li>
       </ol>
       {cliLoading && <p className="orbit-cli-loading" role="status"><LoaderCircle size={16} className="spin" />Preparing this Sprite’s terminal…</p>}
       {cliError && <p className="form-error" role="alert">{cliError}</p>}
@@ -147,7 +147,7 @@ export function OrbitSettingsPanel({ orbit, data, onClose, onChanged }: {
         <dl className="orbit-settings-summary">
           <div><dt>Shell</dt><dd>{cliSetup.shell}</dd></div>
           <div><dt>Home and workspace</dt><dd>{cliSetup.home}</dd></div>
-          <div><dt>Private configuration</dt><dd>{cliSetup.configDirectory}</dd></div>
+          <div><dt>Configuration</dt><dd>{cliSetup.configDirectory}</dd></div>
         </dl>
         <label className="orbit-cli-command-label" htmlFor="orbit-cli-command">{native ? "Run this in a terminal if it does not open automatically." : "Example setup command"}</label>
         <textarea id="orbit-cli-command" className="orbit-cli-command" readOnly value={cliSetup.command} rows={5} spellCheck={false}

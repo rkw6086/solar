@@ -148,3 +148,22 @@ test("terminal escape codes cannot disrupt a text output pane", () => {
   assert.equal(cleanOutput("\u001b]0;window title\u0007text"), "text");
   assert.equal(cleanOutput("step 1\rstep 2\r\n"), "step 1\nstep 2\n");
 });
+
+test("workspace link requests explain consent and do not display file payloads", () => {
+  const request = presentApproval("pull_from_user_home", { links: [{ source: "~/.kube", destination: "~/.kube", directory: true }], notice: "Approve this link" });
+  assert.equal(request.title, "Link items into the workspace");
+  assert.equal(request.summary, "1 item · requires your approval");
+  const result = presentTool(message("pull_from_user_home", {}, JSON.stringify({ linked: [{ source: "~/.config", destination: "~/.config" }], private: "do not render" })));
+  assert.equal(result.summary, "1 item · requires your approval");
+  assert(!JSON.stringify(result).includes("do not render"));
+  const legacy = presentTool(message("pull_from_user_home", {}, JSON.stringify({ copied: ["old-file"] })));
+  assert.equal(legacy.summary, "1 file · previously imported copies");
+});
+
+test("home discovery shows the search and count without private paths or contents", () => {
+  const view = presentTool(message("search_user_home", { query: "kube" }, JSON.stringify({ matches: [{ path: "/private/home/.kube" }], private: "hidden" })));
+  assert.equal(view.title, "Find files to request");
+  assert.equal(view.summary, "Names matching “kube” · home directory");
+  assert.equal(view.outcome, "1 match");
+  assert(!JSON.stringify(view).includes("/private/home"));
+});

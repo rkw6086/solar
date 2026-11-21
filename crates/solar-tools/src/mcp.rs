@@ -8,9 +8,13 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -18,6 +22,63 @@ use tokio::sync::Mutex;
 const MODERN_PROTOCOL: &str = "2026-07-28";
 const LEGACY_PROTOCOL: &str = "2025-11-25";
 const MAX_MESSAGE: usize = 2_097_152;
+
+fn subprocess_path(
+    command: &Path,
+    configured: Option<&str>,
+    inherited: OsString,
+) -> Result<OsString, String> {
+    let base = configured.map(OsString::from).unwrap_or(inherited);
+    if !command.is_absolute() {
+        return Ok(base);
+    }
+    let Some(directory) = command.parent() else {
+        return Ok(base);
+    };
+    let node = directory.join(if cfg!(windows) { "node.exe" } else { "node" });
+    if !executable_file(&node) {
+        return Ok(base);
+    }
+    let paths = std::iter::once(directory.to_owned())
+        .chain(std::env::split_paths(&base).filter(|path| path != directory));
+    std::env::join_paths(paths)
+        .map_err(|_| "The configured MCP executable directory cannot be represented in PATH".into())
+}
+
+fn executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // Test current-account execute permission; do not mutate any file mode.
+        unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn workspace_arguments(arguments: &[String], workspace: &Path) -> Result<Vec<OsString>, String> {
+    let workspace = workspace
+        .to_str()
+        .ok_or("MCP workspace arguments require a UTF-8 workspace path")?;
+    Ok(arguments
+        .iter()
+        .map(|value| {
+            OsString::from(
+                value
+                    .replace("{workspace}", workspace)
+                    .replace("${SOLAR_WORKSPACE}", workspace),
+            )
+        })
+        .collect())
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,14 +124,23 @@ pub struct McpServerInfo {
     pub tools: usize,
 }
 
+struct ScopedClient {
+    fingerprint: String,
+    generation: u64,
+    client: Arc<Mutex<McpClient>>,
+}
+
 pub struct McpManager {
     http: reqwest::Client,
     directory: PathBuf,
     clients: Mutex<HashMap<String, Arc<Mutex<McpClient>>>>,
+    scoped: Mutex<HashMap<(String, String), ScopedClient>>,
+    generation: Arc<AtomicU64>,
 }
 
 impl McpManager {
     pub async fn shutdown(&self) {
+        self.close_scoped().await;
         let clients = self.client_list().await;
         self.clients.lock().await.clear();
         for client in clients {
@@ -78,11 +148,86 @@ impl McpManager {
         }
     }
 
+    #[cfg(test)]
     pub fn new(http: reqwest::Client, directory: PathBuf) -> Self {
+        Self::with_generation(http, directory, Arc::new(AtomicU64::new(0)))
+    }
+
+    pub fn with_generation(
+        http: reqwest::Client,
+        directory: PathBuf,
+        generation: Arc<AtomicU64>,
+    ) -> Self {
         Self {
             http,
             directory,
             clients: Mutex::new(HashMap::new()),
+            scoped: Mutex::new(HashMap::new()),
+            generation,
+        }
+    }
+
+    pub async fn close_scoped(&self) {
+        let stale: Vec<_> = self
+            .scoped
+            .lock()
+            .await
+            .drain()
+            .map(|(_, value)| value.client)
+            .collect();
+        for client in stale {
+            client.lock().await.close().await;
+        }
+    }
+
+    pub async fn invalidate_before(&self, generation: u64) {
+        let stale = {
+            let mut clients = self.scoped.lock().await;
+            let keys: Vec<_> = clients
+                .iter()
+                .filter(|(_, value)| value.generation < generation)
+                .map(|(key, _)| key.clone())
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| clients.remove(&key).map(|value| value.client))
+                .collect::<Vec<_>>()
+        };
+        for client in stale {
+            client.lock().await.close().await;
+        }
+    }
+
+    async fn disconnect_scoped(&self, server_id: &str) {
+        let stale = {
+            let mut clients = self.scoped.lock().await;
+            let keys: Vec<_> = clients
+                .keys()
+                .filter(|(_, id)| id == server_id)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| clients.remove(&key).map(|value| value.client))
+                .collect::<Vec<_>>()
+        };
+        for client in stale {
+            client.lock().await.close().await;
+        }
+    }
+
+    async fn disconnect_orbit(&self, orbit_id: &str) {
+        let stale = {
+            let mut clients = self.scoped.lock().await;
+            let keys: Vec<_> = clients
+                .keys()
+                .filter(|(id, _)| id == orbit_id)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| clients.remove(&key).map(|value| value.client))
+                .collect::<Vec<_>>()
+        };
+        for client in stale {
+            client.lock().await.close().await;
         }
     }
 
@@ -109,24 +254,33 @@ impl McpManager {
         {
             return Err("This MCP id collides with an existing server's tool namespace".into());
         }
+        // Discovery is an explicit user operation, isolated to this service's
+        // own configuration home. It is never reused for Sprite tool calls.
         let mut client = McpClient::connect(
             config.clone(),
             self.http.clone(),
             allow_host_execution,
             &self.directory,
+            None,
         )
         .await?;
         client.load_tools().await?;
         let definitions = client.definitions();
-        self.clients
+        let previous = self
+            .clients
             .lock()
             .await
-            .insert(config.id, Arc::new(Mutex::new(client)));
+            .insert(config.id.clone(), Arc::new(Mutex::new(client)));
+        self.disconnect_scoped(&config.id).await;
+        if let Some(previous) = previous {
+            previous.lock().await.close().await;
+        }
         Ok(definitions)
     }
 
     pub async fn disconnect(&self, id: &str) -> Result<(), String> {
         let client = self.clients.lock().await.remove(id);
+        self.disconnect_scoped(id).await;
         if let Some(client) = client {
             client.lock().await.close().await;
         }
@@ -160,28 +314,105 @@ impl McpManager {
         result
     }
 
+    async fn scoped_client(
+        &self,
+        config: McpConfig,
+        context: &ToolContext,
+    ) -> Result<Arc<Mutex<McpClient>>, String> {
+        let fingerprint = match crate::shell_scope::fingerprint(context) {
+            Ok(value) => value,
+            Err(error) => {
+                self.disconnect_orbit(&context.orbit_id).await;
+                return Err(error);
+            }
+        };
+        let generation = self.generation.load(Ordering::SeqCst);
+        let key = (context.orbit_id.clone(), config.id.clone());
+        let mut clients = self.scoped.lock().await;
+        if clients
+            .get(&key)
+            .is_some_and(|value| value.fingerprint != fingerprint || value.generation != generation)
+        {
+            if let Some(old) = clients.remove(&key) {
+                old.client.lock().await.close().await;
+            }
+        }
+        if let Some(existing) = clients.get(&key) {
+            if existing.client.lock().await.connected {
+                return Ok(existing.client.clone());
+            }
+        }
+        clients.remove(&key);
+        let mut client = tokio::select! {
+            _ = context.cancellation.cancelled() => return Err("MCP tool cancelled".into()),
+            client = McpClient::connect(config, self.http.clone(), true, &self.directory, Some(context)) => client?,
+        };
+        tokio::select! {
+            _ = context.cancellation.cancelled() => { client.close().await; return Err("MCP tool cancelled".into()); },
+            result = client.load_tools() => result?,
+        }
+        client.generation = Some(generation);
+        let client = Arc::new(Mutex::new(client));
+        clients.insert(
+            key,
+            ScopedClient {
+                fingerprint,
+                generation,
+                client: client.clone(),
+            },
+        );
+        Ok(client)
+    }
+
     pub async fn call(
         &self,
         alias: &str,
         args: Value,
         context: &ToolContext,
     ) -> Result<ToolOutput, String> {
-        for client in self.client_list().await {
-            let mut client = tokio::select! {
+        for discovery in self.client_list().await {
+            let client = tokio::select! {
                 _ = context.cancellation.cancelled() => return Err("MCP tool cancelled".into()),
-                client = client.lock() => client,
+                client = discovery.lock() => client,
             };
-            let Some(tool) = client.tools.get(alias).cloned() else {
+            if !client.tools.contains_key(alias) {
                 continue;
-            };
+            }
             if !client.connected {
                 return Err("MCP server disconnected; reconnect it in settings".into());
             }
-            if client.is_stdio() && !context.allow_host_execution {
+            let local = client.is_stdio();
+            let config = client.config.clone();
+            drop(client);
+            let selected = if local {
+                if !context.allow_host_execution {
+                    self.disconnect_orbit(&context.orbit_id).await;
+                    return Err(
+                        "Local MCP executables require an explicit host-execution grant".into(),
+                    );
+                }
+                self.scoped_client(config, context).await?
+            } else {
+                // HTTP services execute remotely. The local workspace sandbox
+                // cannot constrain their filesystem or their account's rights.
+                discovery
+            };
+            let mut client = tokio::select! {
+                _ = context.cancellation.cancelled() => return Err("MCP tool cancelled".into()),
+                client = selected.lock() => client,
+            };
+            if local && client.generation != Some(self.generation.load(Ordering::SeqCst)) {
+                client.close().await;
                 return Err(
-                    "Local MCP executables require an explicit host-execution grant".into(),
+                    "Workspace access changed while the MCP session was starting; retry the tool"
+                        .into(),
                 );
             }
+            let tool = client
+                .tools
+                .get(alias)
+                .cloned()
+                .ok_or("This tool is not available in the Sprite's scoped MCP session")?;
             let call = client.rpc(
                 "tools/call",
                 json!({"name":tool.name,"arguments":args}),
@@ -190,10 +421,8 @@ impl McpManager {
             let result = tokio::select! {
                 result = call => result,
                 _ = context.cancellation.cancelled() => {
-                    // Closing a stdio transport kills its process group. Dropping the
-                    // HTTP response stream signals request-scoped cancellation.
                     client.close().await;
-                    return Err("MCP tool cancelled; reconnect local server before reuse".into());
+                    return Err("MCP tool cancelled".into());
                 }
             }
             .map_err(|error| client.redact_credentials(error))?;
@@ -221,6 +450,7 @@ struct McpClient {
     next_id: u64,
     tools: BTreeMap<String, RemoteTool>,
     connected: bool,
+    generation: Option<u64>,
 }
 
 enum Transport {
@@ -256,6 +486,7 @@ impl McpClient {
         http: reqwest::Client,
         allow_host: bool,
         directory: &Path,
+        context: Option<&ToolContext>,
     ) -> Result<Self, String> {
         let transport = match &config.transport {
             McpTransport::Stdio { command, args, env } => {
@@ -265,17 +496,67 @@ impl McpClient {
                             .into(),
                     );
                 }
-                let home = managed_subdirectory(directory, &config.id)?;
+                let home = if let Some(context) = context {
+                    let root = managed_subdirectory(&context.data_directory, "mcp")?;
+                    managed_subdirectory(&root, &config.id)?
+                } else {
+                    managed_subdirectory(directory, &config.id)?
+                };
+                let discovery_context = ToolContext {
+                    orbit_id: format!("mcp-discovery-{}", config.id),
+                    data_directory: home.clone(),
+                    workspace: home.clone(),
+                    allowed_roots: vec![],
+                    mounts: vec![],
+                    denied_roots: vec![],
+                    allow_host_execution: true,
+                    screen_share_allowed: false,
+                    cancellation: Default::default(),
+                    progress: None,
+                };
+                let process_context = context.unwrap_or(&discovery_context);
                 let environment = managed_environment(&home)?;
-                let mut command_builder = tokio::process::Command::new(command);
+                let arguments = workspace_arguments(args, &process_context.workspace)?;
+                for argument in &arguments {
+                    let argument = argument.to_string_lossy();
+                    let value = argument
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or(&argument);
+                    let path = Path::new(value);
+                    if path.is_absolute()
+                        && !crate::shell_scope::process_argument_path_allowed(
+                            Path::new(command),
+                            path,
+                            process_context,
+                            std::slice::from_ref(&home),
+                        )?
+                    {
+                        return Err("A local MCP path argument is outside its workspace or approved links. Use {workspace} for the server root, or share the required folder with the Sprite.".into());
+                    }
+                }
+                let mut command_builder = crate::shell_scope::command(
+                    Path::new(command),
+                    &arguments,
+                    process_context,
+                    &[home],
+                )?;
+                let path = subprocess_path(
+                    Path::new(command),
+                    env.get("PATH").map(String::as_str),
+                    std::env::var_os("PATH").unwrap_or_default(),
+                )?;
                 command_builder
-                    .args(args)
-                    .current_dir(&home)
+                    .current_dir(&process_context.workspace)
                     .env_clear()
-                    .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                     .envs(env)
-                    // Storage roots cannot be redirected by a server's secret environment.
+                    .env("PATH", path)
+                    // Service state and supplied credentials remain private;
+                    // the HOME visible to agent work is always its workspace.
                     .envs(environment)
+                    .env("HOME", &process_context.workspace)
+                    .env("USERPROFILE", &process_context.workspace)
+                    .env("SOLAR_WORKSPACE", &process_context.workspace)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::null())
@@ -328,6 +609,7 @@ impl McpClient {
             next_id: 0,
             tools: BTreeMap::new(),
             connected: true,
+            generation: None,
         };
         if !modern {
             client.initialize().await?;
@@ -829,6 +1111,115 @@ fn parameter_headers(schema: &Value, args: &Value) -> Result<Vec<(String, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_node_entrypoints_receive_only_the_adjacent_bin_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("node version/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let node = bin.join("node");
+        std::fs::write(&node, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let host = OsString::from("/usr/bin:/bin");
+        let original = host.clone();
+        let result = subprocess_path(&bin.join("npx"), None, host.clone()).unwrap();
+        assert_eq!(
+            std::env::split_paths(&result).collect::<Vec<_>>(),
+            vec![
+                bin.clone(),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin")
+            ]
+        );
+        assert_eq!(host, original);
+        assert_eq!(
+            subprocess_path(Path::new("npx"), None, host.clone()).unwrap(),
+            host
+        );
+        let explicit =
+            subprocess_path(&bin.join("npx"), Some("/custom/bin"), original.clone()).unwrap();
+        assert_eq!(
+            std::env::split_paths(&explicit).collect::<Vec<_>>(),
+            vec![bin.clone(), PathBuf::from("/custom/bin")]
+        );
+        std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            subprocess_path(&bin.join("npx"), None, original.clone()).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn workspace_placeholders_are_literal_single_arguments() {
+        let args = vec![
+            "--root={workspace}".into(),
+            "${SOLAR_WORKSPACE}/src".into(),
+            "$HOME/keep-literal".into(),
+            "$(do-not-run)".into(),
+        ];
+        let expanded =
+            workspace_arguments(&args, Path::new("/private/work space;literal")).unwrap();
+        assert_eq!(
+            expanded,
+            vec![
+                OsString::from("--root=/private/work space;literal"),
+                OsString::from("/private/work space;literal/src"),
+                OsString::from("$HOME/keep-literal"),
+                OsString::from("$(do-not-run)")
+            ]
+        );
+        assert_eq!(
+            workspace_arguments(
+                &["{workspace}".into()],
+                Path::new("/discovery/private-home")
+            )
+            .unwrap(),
+            vec![OsString::from("/discovery/private-home")]
+        );
+    }
+
+    fn scoped_context(root: &Path, id: &str) -> ToolContext {
+        let data = root.join(id);
+        let workspace = data.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        ToolContext {
+            orbit_id: id.into(),
+            data_directory: data,
+            workspace,
+            allowed_roots: vec![],
+            mounts: vec![],
+            denied_roots: vec![],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        }
+    }
+
+    async fn sandbox_available(context: &ToolContext) -> bool {
+        let mut probe = crate::shell_scope::command(
+            Path::new("/bin/sh"),
+            &["-c".into(), "exit 0".into()],
+            context,
+            &[],
+        )
+        .unwrap();
+        let output = probe.output().await.unwrap();
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr).to_lowercase();
+            if error.contains("operation not permitted")
+                || error.contains("permission denied")
+                || error.contains("no permissions to create")
+            {
+                eprintln!("Skipping live MCP process test: this host disables sandbox namespaces");
+                return false;
+            }
+            panic!("Sandbox probe failed: {error}");
+        }
+        true
+    }
     #[test]
     fn output_images_and_headers() {
         let output = parse_tool_result(json!({"content":[{"type":"text","text":"done"},{"type":"image","mimeType":"image/png","data":"aGk="}]})).unwrap();
@@ -849,6 +1240,9 @@ mod tests {
     #[tokio::test]
     async fn stdio_tool_round_trip_requires_host_grant() {
         let storage = tempfile::tempdir().unwrap();
+        if !sandbox_available(&scoped_context(storage.path(), "probe")).await {
+            return;
+        }
         let manager = McpManager::new(reqwest::Client::new(), storage.path().join("mcp"));
         let script = r#"test "$PWD" = "$HOME" || exit 10
 test -d "$XDG_CACHE_HOME" && test -d "$TMPDIR" || exit 11
@@ -881,6 +1275,7 @@ done"#;
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -894,6 +1289,101 @@ done"#;
         assert_eq!(output.content, "fixture result");
         manager.disconnect("fixture").await.unwrap();
         assert!(manager.definitions().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stdio_calls_use_distinct_sprite_processes_and_revocation_preserves_discovery() {
+        let storage = tempfile::tempdir().unwrap();
+        let first = scoped_context(storage.path(), "first");
+        let second = scoped_context(storage.path(), "second");
+        if !sandbox_available(&first).await {
+            return;
+        }
+        let outside = storage.path().join("not-shared.txt");
+        std::fs::write(&outside, "unshared private data").unwrap();
+        let script = r#"while IFS= read -r line; do
+id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+case "$line" in
+*'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}\n' "$id" ;;
+*'"method":"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"scope","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+*'"method":"tools/call"'*) if cat "$NOT_SHARED" >/dev/null 2>&1; then access=leaked; else access=blocked; fi
+printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s|%s|%s"}]}}\n' "$id" "$HOME" "$$" "$access" ;;
+esac
+done"#;
+        let manager = McpManager::new(reqwest::Client::new(), storage.path().join("services"));
+        manager
+            .connect(
+                McpConfig {
+                    id: "fixture".into(),
+                    name: "Fixture".into(),
+                    transport: McpTransport::Stdio {
+                        command: "/bin/sh".into(),
+                        args: vec!["-c".into(), script.into()],
+                        env: BTreeMap::from([(
+                            "NOT_SHARED".into(),
+                            outside.to_string_lossy().into_owned(),
+                        )]),
+                    },
+                },
+                true,
+            )
+            .await
+            .unwrap();
+        let one = manager
+            .call("mcp__fixture__scope", json!({}), &first)
+            .await
+            .unwrap()
+            .content;
+        let two = manager
+            .call("mcp__fixture__scope", json!({}), &second)
+            .await
+            .unwrap()
+            .content;
+        assert!(one.starts_with(&first.workspace.to_string_lossy().to_string()));
+        assert!(two.starts_with(&second.workspace.to_string_lossy().to_string()));
+        assert!(one.ends_with("|blocked") && two.ends_with("|blocked"));
+        assert_eq!(manager.scoped.lock().await.len(), 2);
+        let original = manager
+            .scoped
+            .lock()
+            .await
+            .get(&("first".into(), "fixture".into()))
+            .unwrap()
+            .client
+            .clone();
+        let other = manager
+            .scoped
+            .lock()
+            .await
+            .get(&("second".into(), "fixture".into()))
+            .unwrap()
+            .client
+            .clone();
+        assert!(!Arc::ptr_eq(&original, &other));
+        let next = manager.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        manager.invalidate_before(next).await;
+        assert!(manager.scoped.lock().await.is_empty());
+        assert!(!original.lock().await.connected);
+        assert_eq!(manager.definitions().await.len(), 1);
+        let fresh = manager
+            .call("mcp__fixture__scope", json!({}), &first)
+            .await
+            .unwrap()
+            .content;
+        assert!(fresh.starts_with(&first.workspace.to_string_lossy().to_string()));
+        let replacement = manager
+            .scoped
+            .lock()
+            .await
+            .get(&("first".into(), "fixture".into()))
+            .unwrap()
+            .client
+            .clone();
+        assert!(!Arc::ptr_eq(&original, &replacement));
+        // A delayed cleanup from an older generation cannot kill this process.
+        manager.invalidate_before(next).await;
+        assert_eq!(manager.scoped.lock().await.len(), 1);
+        manager.shutdown().await;
     }
 
     #[tokio::test]
@@ -964,6 +1454,7 @@ done"#;
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,

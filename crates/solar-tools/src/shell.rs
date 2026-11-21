@@ -7,8 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub fn definitions() -> Vec<ToolDefinition> {
     vec![definition(
         "shell_run",
-        "Run a command in the user's default shell with this Sprite's own interactive/login startup files and private CLI configuration. User-level credentials and SSH agents are not inherited. When authentication or profile setup is missing, request the specific needed files with pull_from_user_home (requires explicit user approval), or ask the user to use this Sprite's CLI sign-ins settings. Optional workingDirectory must be the Sprite workspace or an assigned project folder. Unassigned registered project folders are excluded from the shell, its startup files, and its descendants; other host access remains available. Output, time and process lifetime are bounded.",
-        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"An absolute assigned project path, or a path relative to the Sprite workspace. Defaults to the Sprite workspace."},"shell":{"type":"string","description":"Optional absolute shell executable path. Omit to use the user's configured default shell; only override when a task specifically requires another shell."},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
+        "Run a bounded command in the user's default interactive/login shell. Filesystem access is limited to the Sprite workspace, explicitly shared/project link targets, private tool state, and read-only installed runtime files. Use workspace link paths, not raw host paths. Unassigned projects remain excluded, even within a shared parent. Missing setup can be searched/requested with pull_from_user_home; sharing always requires user approval. Host SSH agents are not inherited. Shell access cannot bypass the filesystem scope or start host apps outside it.",
+        json!({"command":{"type":"string"},"workingDirectory":{"type":"string","description":"A path inside the Sprite workspace, including approved project/shared-folder links. Raw host paths and parent traversal are rejected."},"shell":{"type":"string","description":"Optional absolute shell executable path. Omit to use the user's configured default shell; only override when a task specifically requires another shell."},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":300}}),
         &["command"],
     )]
 }
@@ -17,6 +17,7 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
     if !context.allow_host_execution {
         return Err("Shell requires an explicit host-execution grant for this Sprite".into());
     }
+    crate::shell_scope::fingerprint(context)?;
     let explicit = args
         .get("shell")
         .map(|value| {
@@ -25,11 +26,7 @@ pub async fn execute(args: &Value, context: &ToolContext) -> Result<ToolOutput, 
                 .ok_or("shell must be an absolute executable path")
         })
         .transpose()?;
-    let session = crate::shell_session::ShellSession::resolve(
-        explicit,
-        &context.data_directory,
-        &context.workspace,
-    )?;
+    let session = crate::shell_session::ShellSession::resolve_for_context(explicit, context)?;
     execute_with_session(args, context, session).await
 }
 
@@ -48,35 +45,18 @@ async fn execute_with_session(
             .unwrap_or(60)
             .clamp(1, 300),
     );
-    let workspace = std::fs::canonicalize(&context.workspace).map_err(|e| e.to_string())?;
-    let working_directory = if let Some(path) = args.get("workingDirectory") {
-        let path = path
-            .as_str()
-            .ok_or("workingDirectory must be a string path")?;
-        let path = std::path::Path::new(path);
-        let candidate = if path.is_absolute() {
-            path.to_owned()
-        } else {
-            workspace.join(path)
-        };
-        let candidate = std::fs::canonicalize(candidate)
-            .map_err(|error| format!("Cannot open shell working directory: {error}"))?;
-        let allowed = std::iter::once(&workspace)
-            .chain(context.allowed_roots.iter())
-            .any(|root| std::fs::canonicalize(root).is_ok_and(|root| candidate.starts_with(root)));
-        if !allowed || !candidate.is_dir() {
-            return Err(
-                "Shell working directory must be inside the Sprite workspace or an assigned project"
-                    .into(),
-            );
-        }
-        candidate
-    } else {
-        workspace.clone()
-    };
+    let working_directory = crate::files::working_directory(
+        args.get("workingDirectory")
+            .map(|path| {
+                path.as_str()
+                    .ok_or("workingDirectory must be a string path")
+            })
+            .transpose()?
+            .unwrap_or("."),
+        context,
+    )?;
     let arguments = session.arguments(command, &working_directory)?;
-    let mut cmd =
-        crate::shell_scope::command(session.executable(), &arguments, &context.denied_roots)?;
+    let mut cmd = crate::shell_scope::command(session.executable(), &arguments, context, &[])?;
     session.apply_environment(&mut cmd);
     cmd.current_dir(working_directory)
         .stdin(Stdio::null())
@@ -253,6 +233,9 @@ mod tests {
         }
         std::fs::write(denied.join("private.txt"), "excluded project contents").unwrap();
         std::fs::write(allowed.join("visible.txt"), "allowed project contents").unwrap();
+        let project_link = workspace.join("project");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&allowed, &project_link).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&denied, workspace.join("alias")).unwrap();
         let context = ToolContext {
@@ -260,6 +243,11 @@ mod tests {
             workspace: workspace.clone(),
             data_directory: root.path().join("data"),
             allowed_roots: vec![allowed.clone()],
+            mounts: vec![crate::WorkspaceMount {
+                path: project_link.clone(),
+                target: allowed.canonicalize().unwrap(),
+                writable: true,
+            }],
             denied_roots: vec![denied.clone()],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -299,7 +287,7 @@ mod tests {
                 "excluded project contents"
             );
         }
-        let result = execute(&json!({"command":"cat visible.txt; printf updated > written.txt", "workingDirectory": allowed}), &context).await.unwrap();
+        let result = execute(&json!({"command":"cat visible.txt; printf updated > written.txt", "workingDirectory": project_link}), &context).await.unwrap();
         let output: Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(output["success"], true);
         assert!(
@@ -328,6 +316,7 @@ mod tests {
             workspace,
             data_directory: root.path().join("data"),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![denied.clone()],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -367,6 +356,7 @@ mod tests {
             workspace: workspace.clone(),
             data_directory: root.path().join("data"),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![denied],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -405,6 +395,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -473,11 +464,18 @@ mod tests {
                     "export RC_MARKER=private\ncd /\n",
                 )
                 .unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&bin, workspace.join("tools")).unwrap();
                 ToolContext {
                     orbit_id: name.into(),
                     data_directory: data,
-                    workspace,
+                    workspace: workspace.clone(),
                     allowed_roots: vec![],
+                    mounts: vec![crate::WorkspaceMount {
+                        path: workspace.join("tools"),
+                        target: bin.canonicalize().unwrap(),
+                        writable: false,
+                    }],
                     denied_roots: vec![],
                     allow_host_execution: true,
                     screen_share_allowed: false,
@@ -577,6 +575,7 @@ mod tests {
             data_directory: data.clone(),
             workspace: workspace.clone(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![denied],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -607,6 +606,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
@@ -637,15 +637,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_can_start_in_an_assigned_project_but_not_an_unassigned_folder() {
+    async fn shell_working_directory_requires_an_approved_workspace_alias() {
         let root = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
+        let project_link = root.path().join("project");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(project.path(), &project_link).unwrap();
         let context = ToolContext {
             orbit_id: "test".into(),
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![project.path().into()],
+            mounts: vec![crate::WorkspaceMount {
+                path: project_link.clone(),
+                target: project.path().canonicalize().unwrap(),
+                writable: true,
+            }],
             denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,
@@ -653,7 +661,7 @@ mod tests {
             progress: None,
         };
         let result = execute(
-            &json!({"command":"pwd", "workingDirectory":project.path()}),
+            &json!({"command":"pwd", "workingDirectory":"project"}),
             &context,
         )
         .await
@@ -661,7 +669,27 @@ mod tests {
         let result: Value = serde_json::from_str(&result.content).unwrap();
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
-            project.path().canonicalize().unwrap().to_string_lossy()
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join("project")
+                .to_string_lossy()
+        );
+        assert!(
+            execute(
+                &json!({"command":"pwd", "workingDirectory":project.path()}),
+                &context
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            execute(
+                &json!({"command":"pwd", "workingDirectory":"project/.."}),
+                &context
+            )
+            .await
+            .is_err()
         );
         assert!(
             execute(
@@ -679,6 +707,98 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn scope_hides_unshared_host_files_and_private_metadata_and_preserves_readonly() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("sprite");
+        let workspace = data.join("workspace");
+        let shared = root.path().join("shared");
+        let hidden = root.path().join("hidden");
+        for path in [&workspace, &shared, &hidden] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        std::fs::write(hidden.join("secret"), "host-only-secret").unwrap();
+        std::fs::write(data.join("metadata.db"), "private-app-metadata").unwrap();
+        std::fs::write(shared.join("note"), "readable-shared").unwrap();
+        std::os::unix::fs::symlink(&shared, workspace.join("reference")).unwrap();
+        let context = ToolContext {
+            orbit_id: "isolated".into(),
+            data_directory: data.clone(),
+            workspace: workspace.clone(),
+            allowed_roots: vec![hidden.clone()],
+            mounts: vec![crate::WorkspaceMount {
+                path: workspace.join("reference"),
+                target: shared.canonicalize().unwrap(),
+                writable: false,
+            }],
+            denied_roots: vec![],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        };
+        let quote =
+            |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"));
+        for command in [
+            format!("cat {}", quote(&hidden.join("secret"))),
+            format!("printf changed > {}", quote(&hidden.join("secret"))),
+            format!("cat {}", quote(&data.join("metadata.db"))),
+            "printf changed > reference/note".into(),
+            format!("printf changed > {}", quote(&shared.join("note"))),
+        ] {
+            let value: Value = serde_json::from_str(
+                &execute(&json!({"command":command}), &context)
+                    .await
+                    .unwrap()
+                    .content,
+            )
+            .unwrap();
+            assert_eq!(value["success"], false, "{command}");
+            assert!(
+                !value["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .contains("host-only-secret")
+            );
+            assert!(
+                !value["stdout"]
+                    .as_str()
+                    .unwrap()
+                    .contains("private-app-metadata")
+            );
+        }
+        let value: Value = serde_json::from_str(
+            &execute(
+                &json!({"command":"cat reference/note; printf kept > local.txt"}),
+                &context,
+            )
+            .await
+            .unwrap()
+            .content,
+        )
+        .unwrap();
+        assert_eq!(value["success"], true, "{value}");
+        assert!(
+            value["stdout"]
+                .as_str()
+                .unwrap()
+                .contains("readable-shared")
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("local.txt")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_to_string(shared.join("note")).unwrap(),
+            "readable-shared"
+        );
+        assert_eq!(
+            std::fs::read_to_string(hidden.join("secret")).unwrap(),
+            "host-only-secret"
+        );
+    }
+
     #[tokio::test]
     async fn cancellation_stops_an_owned_process_group() {
         let root = tempfile::tempdir().unwrap();
@@ -687,6 +807,7 @@ mod tests {
             workspace: root.path().into(),
             data_directory: root.path().into(),
             allowed_roots: vec![],
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: true,
             screen_share_allowed: false,

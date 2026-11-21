@@ -17,6 +17,7 @@ fn prepare(engine: &Engine, orbit_id: &str) -> Result<(OrbitCliSetup, PathBuf), 
     let root = engine.store.orbit_dir(orbit_id)?;
     let workspace = engine.workspace(orbit_id)?;
     secure_directory(&workspace)?;
+    engine.sync_workspace(orbit_id)?;
     let setup = solar_tools::orbit_shell_setup(&root, &workspace)?;
     let directory = root.join("shell");
     secure_directory(&directory)?;
@@ -134,7 +135,12 @@ mod tests {
         let setup = describe(&engine, "assistant").unwrap();
         let root = engine.store.orbit_dir("assistant").unwrap();
         assert_eq!(PathBuf::from(setup.home), root.join("workspace"));
-        assert_eq!(PathBuf::from(setup.config_directory), root.join("config"));
+        let config = PathBuf::from(setup.config_directory);
+        assert_eq!(config, root.join("workspace/.config"));
+        assert_eq!(
+            config.canonicalize().unwrap(),
+            root.join("config").canonicalize().unwrap()
+        );
         assert!(setup.command.contains("env -i"));
         assert!(!setup.command.contains("glab auth login"));
     }

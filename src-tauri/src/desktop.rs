@@ -435,7 +435,7 @@ pub(crate) fn open_full_chat(app: tauri::AppHandle, conversation_id: String) -> 
     .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn set_desktop_expanded(
+pub(crate) fn set_desktop_expanded(
     app: tauri::AppHandle,
     engine: AppState<'_>,
     expanded: bool,
@@ -446,6 +446,11 @@ fn set_desktop_expanded(
     }
     if expanded && !settings.desktop_enabled {
         return Err("Enable desktop companions in Settings before opening desktop Sprites".into());
+    }
+    if expanded {
+        crate::desktop_popup::cancel(&app);
+    } else {
+        crate::desktop_popup::dismiss_chats(&app);
     }
     if expanded {
         COMPANIONS_HIDDEN.store(false, Ordering::SeqCst);
@@ -1007,6 +1012,7 @@ fn create_companion(
     .accept_first_mouse(true)
     .build()
     .map_err(|e| e.to_string())?;
+    crate::desktop_popup::attach(&window);
     #[cfg(target_os = "macos")]
     {
         use objc2::{msg_send, runtime::AnyObject};
@@ -1219,9 +1225,29 @@ pub fn run() {
             // the transparent corners from intercepting clicks in other applications.
             tauri::async_runtime::spawn(async move {
                 let mut attention_ticks = 0u32;
+                let mut pointer_hover = std::collections::HashMap::new();
                 loop {
                     tokio::time::sleep(Duration::from_millis(40)).await;
-                    for (label, window) in app_handle.webview_windows() {
+                    let mut inside_companions = false;
+                    let mut chat_open = false;
+                    let windows = app_handle.webview_windows();
+                    pointer_hover.retain(|label, _| windows.contains_key(label));
+                    for (label, window) in windows {
+                        if (label.starts_with("chat-") || label == "attention")
+                            && window.is_visible().unwrap_or(false)
+                        {
+                            chat_open |= label.starts_with("chat-");
+                            if let (Ok(cursor), Ok(position), Ok(size)) = (
+                                window.cursor_position(),
+                                window.outer_position(),
+                                window.outer_size(),
+                            ) {
+                                inside_companions |= cursor.x >= f64::from(position.x)
+                                    && cursor.y >= f64::from(position.y)
+                                    && cursor.x < f64::from(position.x) + f64::from(size.width)
+                                    && cursor.y < f64::from(position.y) + f64::from(size.height);
+                            }
+                        }
                         if label == "attention" {
                             crate::desktop_attention::update_hit_region(&window);
                             continue;
@@ -1230,6 +1256,9 @@ pub fn run() {
                             continue;
                         }
                         if !window.is_visible().unwrap_or(false) {
+                            if pointer_hover.insert(label.clone(), false) != Some(false) {
+                                let _ = window.emit("solar://widget-hover", false);
+                            }
                             if let Ok(mut motion) = ORBIT_MOTION.lock() {
                                 let now = std::time::Instant::now();
                                 motion.hover(&label, false, now);
@@ -1269,14 +1298,24 @@ pub fn run() {
                                     scale,
                                 );
                             let inside = dx * dx + dy * dy <= radius * radius || launcher;
+                            inside_companions |= inside;
                             if let Ok(mut motion) = ORBIT_MOTION.lock() {
                                 // Native hit-testing remains authoritative if a
                                 // click-through webview never gets pointerleave.
                                 motion.hover(&label, inside, std::time::Instant::now());
                             }
+                            if pointer_hover.insert(label.clone(), inside) != Some(inside) {
+                                let _ = window.emit("solar://widget-hover", inside);
+                            }
                             let _ = window.set_ignore_cursor_events(!inside);
                         }
                     }
+                    crate::desktop_popup::pointer(
+                        &app_handle,
+                        crate::desktop_popup::pointer_state(),
+                        inside_companions,
+                        EXPANDED.load(Ordering::SeqCst) || chat_open,
+                    );
                     attention_ticks += 1;
                     if attention_ticks.is_multiple_of(10) {
                         let visibility_app = app_handle.clone();
@@ -1389,6 +1428,10 @@ pub fn run() {
             login_status,
             logout_provider,
             save_project,
+            crate::sharing::discover_home_shares,
+            crate::sharing::save_shared_folder,
+            crate::sharing::delete_shared_folder,
+            crate::sharing::choose_shared_directory,
             crate::project_location::choose_project_directory,
             crate::project_location::resolve_project_directory,
             create_conversation,

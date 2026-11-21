@@ -41,6 +41,22 @@ pub struct Project {
     pub description: String,
 }
 
+/// An explicitly selected live link, available to all or selected Sprites.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedFolder {
+    pub id: String,
+    pub name: String,
+    pub directory: String,
+    pub mount_path: String,
+    #[serde(default)]
+    pub all_sprites: bool,
+    #[serde(default)]
+    pub orbit_ids: Vec<String>,
+    #[serde(default)]
+    pub writable: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conversation {
@@ -251,6 +267,7 @@ pub struct Bootstrap {
     pub orbits: Vec<Orbit>,
     pub providers: Vec<ProviderView>,
     pub projects: Vec<Project>,
+    pub shared_folders: Vec<SharedFolder>,
     pub conversations: Vec<Conversation>,
     pub routines: Vec<Routine>,
     pub tasks: Vec<Task>,

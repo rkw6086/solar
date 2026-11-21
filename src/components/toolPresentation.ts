@@ -137,8 +137,15 @@ export function presentTool(message: Message, servers: McpServer[] = []): ToolPr
     return { ...base, category: "files", title: titles[name] || "File activity", summary: args.query ? `“${compact(args.query)}” · ${path}` : path, outcome: count !== undefined && activity.status === "completed" ? `${count} ${name === "files_search" ? "matches" : "items"}` : base.outcome };
   }
   if (name === "pull_from_user_home") {
+    const links = Array.isArray(result.linked) ? result.linked : Array.isArray(result.links) ? result.links : Array.isArray(args.links) ? args.links : undefined;
+    if (links) return { ...base, category: "files", title: "Link items into the workspace", summary: `${links.length} ${links.length === 1 ? "item" : "items"} · requires your approval` };
+    // Keep older conversation entries readable after the move from copies to links.
     const count = Array.isArray(result.copied) ? result.copied.length : Array.isArray(args.files) ? args.files.length : undefined;
-    return { ...base, category: "files", title: "Import into Sprite home", summary: count === undefined ? "Copy approved home files and their dependencies" : `${count} ${count === 1 ? "file" : "files"} · private copies for this Sprite` };
+    return { ...base, category: "files", title: "Request workspace access", summary: count === undefined ? "Ask to link selected home files or folders · approval always required" : `${count} ${count === 1 ? "file" : "files"} · previously imported copies` };
+  }
+  if (name === "search_user_home") {
+    const count = Array.isArray(result.matches) ? result.matches.length : undefined;
+    return { ...base, category: "files", title: "Find files to request", summary: compact(args.query, 180) ? `Names matching “${compact(args.query, 180)}” · home directory` : "Look for file and folder names in your home directory", outcome: count !== undefined && activity.status === "completed" ? `${count} ${count === 1 ? "match" : "matches"}` : base.outcome };
   }
   if (name.startsWith("memory_")) return { ...base, category: "memory", title: name === "memory_save" ? "Save a memory" : "Search memories", summary: args.query ? `“${compact(args.query)}”` : args.shared ? "Shared project memory" : "Private Sprite memory" };
   if (name === "orbit_delegate") return { ...base, category: "team", title: "Ask a teammate", summary: compact(args.task, 240) || "Delegating a focused task" };

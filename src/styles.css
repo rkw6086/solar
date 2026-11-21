@@ -2738,5 +2738,8 @@ legend {
 .orbit-widget .orbit-widget-name { position: absolute; top: calc(50% + var(--orbit-planet-size, 88px) / 2 - 8px); left: 50%; transform: translate(-50%, -3px); }
 .orbit-widget .character-button:hover .orbit-widget-name,
 .orbit-widget .character-button:focus-visible .orbit-widget-name { transform: translate(-50%, 0); }
+.orbit-widget[data-hovered="false"] .orbit-widget-name { opacity: 0; }
+.orbit-widget[data-hovered="true"] .orbit-widget-name,
+.orbit-widget .character-button:focus-visible .orbit-widget-name { opacity: 1; }
 
 .popup-planet { display: grid; place-items: center; }

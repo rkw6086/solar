@@ -1,0 +1,70 @@
+.shared-folders-panel { margin-top: 38px; padding-top: 26px; border-top: 1px solid var(--border, #2b383e); }
+.shared-folder-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.shared-folder-heading h2 { display: flex; align-items: center; gap: 9px; margin: 0 0 8px; font-size: 17px; }
+.shared-folder-heading p, .shared-folder-empty p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.shared-folder-heading > .button { flex-shrink: 0; }
+.shared-folders-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px; }
+.shared-folder-card { min-width: 0; padding: 20px; border: 1px solid var(--border, #2b383e); border-radius: 14px; background: #172127; }
+.shared-folder-card-top { display: flex; justify-content: space-between; align-items: center; color: #9fbeb5; gap: 10px; }
+.shared-folder-access { padding: 4px 8px; font-size: 10px; border-radius: 12px; background: #243d35; color: #b8d5c7; }
+.shared-folder-access.writable { color: #e4c190; background: #423425; }
+.shared-folder-card h3 { margin: 16px 0 8px; font-size: 16px; }
+.shared-folder-card > code, .shared-folder-location code { display: block; color: #a6b8b9; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.shared-folder-location { font-size: 10px; color: var(--muted); margin: 15px 0; }
+.shared-folder-people { display: flex; align-items: flex-start; gap: 7px; color: #bac8c5; font-size: 11px; line-height: 1.6; }
+.shared-folder-people svg { flex-shrink: 0; margin-top: 2px; }
+.shared-folder-card .button-row { margin-top: 18px; }
+.shared-folder-empty { display: flex; align-items: center; gap: 16px; padding: 24px; border-radius: 12px; border: 1px dashed #34454a; color: #b5c8c0; }
+.shared-folder-empty strong { font-size: 13px; }
+.shared-folder-discover-toggle { margin-top: 18px; }
+.shared-folder-picker { display: flex; gap: 8px; }
+.shared-folder-picker input { min-width: 0; flex: 1; }
+.shared-folder-picker .button { flex-shrink: 0; }
+.shared-folder-scope { border: 1px solid #33454a; border-radius: 10px; padding: 14px; margin: 0; }
+.shared-folder-scope legend { padding: 0 5px; font-size: 12px; color: #b9c7c5; }
+.shared-folder-scope label, .shared-folder-write { display: flex; align-items: flex-start; gap: 10px; font-size: 12px; line-height: 1.6; }
+.shared-folder-scope label + label { margin-top: 10px; }
+.shared-folder-scope input, .shared-folder-write input, .home-sharing-candidates input { flex: 0 0 auto; width: 15px; height: 15px; margin: 3px 0 0; accent-color: #81b7a2; }
+.shared-folder-scope small, .shared-folder-write small { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.shared-folder-members { border-top: 1px solid #33454a; padding-top: 12px; margin-top: 12px; display: flex; flex-wrap: wrap; gap: 9px 20px; }
+.shared-folder-members label + label { margin-top: 0; }
+.shared-folder-members p { color: var(--muted); margin: 0; font-size: 11px; }
+.shared-folder-write { background: #1b2a2f; padding: 14px; border-radius: 10px; }
+.shared-folder-write strong { font-weight: 500; }
+.shared-folder-advanced summary { cursor: pointer; font-size: 12px; color: #a4bbb2; }
+.shared-folder-advanced .field { margin-top: 14px; }
+.shared-folder-notice { display: flex; gap: 9px; align-items: flex-start; color: var(--muted); font-size: 11px; line-height: 1.7; margin: 0; }
+.shared-folder-notice svg { flex-shrink: 0; margin-top: 2px; color: #93b2a5; }
+.home-sharing-setup { padding: 22px; margin-top: 20px; border: 1px solid #34474b; border-radius: 14px; background: #142026; }
+.home-sharing-setup .shared-folder-heading { margin-bottom: 10px; }
+.home-sharing-setup .shared-folder-heading h2 { font-size: 16px; line-height: 1.5; }
+.home-sharing-setup .shared-folder-heading h2 svg { flex-shrink: 0; }
+.shared-folder-discovery-note { color: #95a9a8; font-size: 11px; line-height: 1.7; margin: 0 0 16px; }
+.home-sharing-candidates { display: grid; gap: 8px; max-height: 390px; overflow: auto; padding-right: 3px; margin-bottom: 16px; }
+.home-sharing-candidates > label { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid #314249; border-radius: 9px; background: #1a292e; cursor: pointer; }
+.home-sharing-candidates > label:has(input:checked) { border-color: #527d6d; background: #20382f; }
+.home-sharing-candidates > label.already-shared { cursor: default; }
+.home-sharing-candidates > label > span { display: block; min-width: 0; }
+.home-sharing-candidates strong { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; font-weight: 500; }
+.home-sharing-candidates em { display: inline-flex; align-items: center; gap: 3px; color: #a1ccb5; font-size: 10px; font-style: normal; }
+.home-sharing-candidates code { display: block; margin-top: 3px; color: #9ab3b0; font-size: 10px; overflow-wrap: anywhere; line-height: 1.7; }
+.home-sharing-candidates small { display: block; color: #a6b4b4; font-size: 11px; line-height: 1.6; margin-top: 3px; }
+.home-sharing-candidates small.shared-folder-sensitive { display: flex; gap: 5px; align-items: center; color: #d6ba8f; font-size: 10px; }
+.shared-folder-status { display: flex; gap: 9px; align-items: center; color: #a7bbb2; font-size: 12px; line-height: 1.7; }
+.shared-folder-setup-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.shared-folder-setup-actions > span { display: flex; align-items: center; gap: 6px; color: #a6cbb4; font-size: 11px; }
+.home-sharing-paths { margin-bottom: 16px; }
+.home-sharing-paths > p { font-size: 11px; line-height: 1.7; color: var(--muted); margin-top: 12px; }
+.home-sharing-paths .field:last-child { margin-bottom: 0; }
+@media (max-width: 600px) {
+  .shared-folder-heading, .shared-folder-picker { flex-direction: column; }
+  .shared-folder-picker .button { justify-content: center; }
+  .shared-folder-heading > .button { width: 100%; justify-content: center; }
+  .shared-folders-grid { grid-template-columns: 1fr; }
+  .home-sharing-setup { padding: 16px; }
+}
+.shared-folder-form { display: flex; flex-direction: column; gap: 18px; }
+.shared-folder-form > .field { margin-bottom: 0; }
+.home-sharing-setup > .form-error { margin: 14px 0; }
+.onboarding-visual-workspace { align-items: flex-start; }
+.onboarding-visual-workspace > .onboarding-setup-card { max-height: min(72vh, 950px); overflow: auto; }

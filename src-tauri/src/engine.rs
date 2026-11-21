@@ -20,6 +20,7 @@ pub struct Engine {
     pub(crate) active: Mutex<HashMap<String, CancellationToken>>,
     pub(crate) resetting_orbits: Mutex<HashSet<String>>,
     pub(crate) approvals: Mutex<HashMap<String, (Approval, oneshot::Sender<bool>)>>,
+    pub(crate) computer_action_gate: tokio::sync::Mutex<()>,
     pub(crate) sharing: Mutex<HashSet<String>>,
     pub(crate) orbit_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) model_active: Mutex<usize>,
@@ -32,6 +33,8 @@ pub struct Engine {
     pub(crate) desktop_expanded: std::sync::atomic::AtomicBool,
     pub(crate) attention: Mutex<crate::attention::AttentionQueue>,
     pub(crate) settings_write: Mutex<()>,
+    pub(crate) workspace_write: Mutex<()>,
+    pub(crate) sharing_write: Mutex<()>,
     pub(crate) routine_write: Mutex<()>,
     pub(crate) resetting: std::sync::atomic::AtomicBool,
     pub(crate) reset_operations: tokio::sync::RwLock<()>,
@@ -120,6 +123,7 @@ impl Engine {
             active: Mutex::new(HashMap::new()),
             resetting_orbits: Mutex::new(HashSet::new()),
             approvals: Mutex::new(HashMap::new()),
+            computer_action_gate: tokio::sync::Mutex::new(()),
             sharing: Mutex::new(HashSet::new()),
             orbit_locks: Mutex::new(HashMap::new()),
             model_active: Mutex::new(0),
@@ -130,6 +134,8 @@ impl Engine {
             desktop_expanded: std::sync::atomic::AtomicBool::new(false),
             attention: Mutex::new(crate::attention::AttentionQueue::default()),
             settings_write: Mutex::new(()),
+            workspace_write: Mutex::new(()),
+            sharing_write: Mutex::new(()),
             routine_write: Mutex::new(()),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_operations: tokio::sync::RwLock::new(()),
@@ -159,6 +165,13 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn invalidate_workspace_sessions(&self) {
+        let cleanup = self.tools.invalidate_workspace_sessions();
+        if let Ok(runtime) = background_runtime() {
+            runtime.spawn(cleanup);
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
@@ -192,6 +205,7 @@ impl Engine {
             orbits: self.store.list("orbits")?,
             providers,
             projects: self.store.list("projects")?,
+            shared_folders: self.store.list("shared_folders")?,
             conversations: self.store.list("conversations")?,
             routines: self.store.list("routines")?,
             tasks: self
@@ -347,25 +361,30 @@ impl Engine {
         if !orbit.provider_id.is_empty() {
             self.provider(&orbit.provider_id)?;
         }
-        if self
-            .store
-            .get::<Orbit>("orbits", &orbit.id)?
-            .is_some_and(|previous| {
-                !orbit.enabled
-                    || previous.provider_id != orbit.provider_id
-                    || previous.model != orbit.model
-                    || previous
-                        .project_ids
-                        .iter()
-                        .any(|project| !orbit.project_ids.contains(project))
-                    || (previous.autonomy == "trusted" && orbit.autonomy != "trusted")
-                    || (previous.autonomy == "workspace" && orbit.autonomy == "ask")
-            })
-        {
+        let previous = self.store.get::<Orbit>("orbits", &orbit.id)?;
+        if previous.as_ref().is_some_and(|previous| {
+            !orbit.enabled
+                || previous.provider_id != orbit.provider_id
+                || previous.model != orbit.model
+                || previous
+                    .project_ids
+                    .iter()
+                    .any(|project| !orbit.project_ids.contains(project))
+                || (previous.autonomy == "trusted" && orbit.autonomy != "trusted")
+                || (previous.autonomy == "workspace" && orbit.autonomy == "ask")
+        }) {
             self.cancel_orbit_tasks(&orbit.id)?;
         }
         self.store.put("orbits", &orbit.id, &orbit)?;
-        std::fs::create_dir_all(self.workspace(&orbit.id)?).map_err(|e| e.to_string())?;
+        if let Err(error) = self.sync_workspace(&orbit.id) {
+            if let Some(previous) = previous {
+                self.store.put("orbits", &orbit.id, &previous)?;
+                let _ = self.sync_workspace(&orbit.id);
+            } else {
+                self.store.remove("orbits", &orbit.id)?;
+            }
+            return Err(error);
+        }
         if !orbit.enabled {
             self.clear_orbit_attention(&orbit.id);
         }
@@ -379,12 +398,19 @@ impl Engine {
             .lock()
             .map_err(|_| "Sprite storage unavailable")?;
         self.orbit(orbit_id)?;
+        self.invalidate_workspace_sessions();
         for task in self.store.list::<Task>("tasks")? {
             if task.orbit_id == orbit_id {
                 self.stop_task(&task.id)?;
             }
         }
         self.store.remove("orbits", orbit_id)?;
+        let mut shares = self.shared_folders()?;
+        for share in &mut shares {
+            share.orbit_ids.retain(|id| id != orbit_id);
+        }
+        shares.retain(|share| share.all_sprites || !share.orbit_ids.is_empty());
+        self.store.replace_shared_folders(shares)?;
         *writes.entry(orbit_id.to_owned()).or_default() += 1;
         self.clear_orbit_attention(orbit_id);
         self.changed();
@@ -392,6 +418,7 @@ impl Engine {
     }
 
     fn cancel_orbit_tasks(&self, orbit_id: &str) -> Result<(), String> {
+        self.invalidate_workspace_sessions();
         for task in self.store.list::<Task>("tasks")? {
             if task.orbit_id == orbit_id {
                 self.stop_task(&task.id)?;
@@ -426,7 +453,13 @@ impl Engine {
     }
     pub(crate) fn workspace(&self, orbit_id: &str) -> Result<PathBuf, String> {
         validate_id(orbit_id)?;
-        Ok(self.store.orbit_dir(orbit_id)?.join("workspace"))
+        let path = self.store.orbit_dir(orbit_id)?.join("workspace");
+        let meta =
+            std::fs::symlink_metadata(&path).map_err(|_| "Sprite workspace is unavailable")?;
+        if !meta.is_dir() || meta.file_type().is_symlink() {
+            return Err("Sprite workspace must be a private real directory".into());
+        }
+        path.canonicalize().map_err(|e| e.to_string())
     }
 
     pub fn save_provider(&self, mut draft: ProviderDraft) -> Result<ProviderView, String> {
@@ -519,12 +552,14 @@ impl Engine {
         let location = crate::project_location::resolve(&project.directory)?;
         project.name = location.name;
         project.directory = location.directory;
-        let scope_changed = self
-            .store
-            .get::<Project>("projects", &project.id)?
+        self.validate_share_source(&project.directory)?;
+        let previous = self.store.get::<Project>("projects", &project.id)?;
+        let scope_changed = previous
+            .as_ref()
             .is_none_or(|previous| previous.directory != project.directory);
         self.store.put("projects", &project.id, &project)?;
         if scope_changed {
+            self.invalidate_workspace_sessions();
             // Existing shells captured their exclusions when launched. Stop
             // them after publishing the new scope so no old command retains
             // access to a newly registered or relocated project folder.
@@ -536,6 +571,15 @@ impl Engine {
             {
                 token.cancel();
             }
+        }
+        if let Err(error) = self.sync_all_workspaces() {
+            if let Some(previous) = previous {
+                self.store.put("projects", &project.id, &previous)?;
+            } else {
+                self.store.remove("projects", &project.id)?;
+            }
+            let _ = self.sync_all_workspaces();
+            return Err(error);
         }
         self.changed();
         Ok(project)

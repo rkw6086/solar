@@ -51,6 +51,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { memoryOrbitIds, memoryProjectIds, memoryScope } from "./components/memoryScope";
 import { OrbitSettingsPanel } from "./components/OrbitSettingsPanel";
+import { SharedFoldersPanel } from "./components/SharedFoldersPanel";
 import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
@@ -918,7 +919,7 @@ export function App() {
               <div className="page-content">
                 <PageHeading
                   title="Projects"
-                  description="Your project folders and the context that helps work move forward."
+                  description="Project context and shared folders, linked into your Sprites’ workspaces."
                 >
                   <button
                     className="button button-primary"
@@ -975,6 +976,7 @@ export function App() {
                     Solar names the project after its root folder.
                   </Empty>
                 )}
+                <SharedFoldersPanel data={data} refresh={refresh} />
               </div>
             )}
             {page === "connections" && (

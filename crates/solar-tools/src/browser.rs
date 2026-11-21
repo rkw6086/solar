@@ -7,8 +7,13 @@ use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
@@ -56,6 +61,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
 
 pub struct BrowserManager {
     sessions: HashMap<String, BrowserSession>,
+    generation: Arc<AtomicU64>,
 }
 
 impl BrowserManager {
@@ -63,9 +69,20 @@ impl BrowserManager {
         self.sessions.clear();
     }
 
+    pub fn invalidate_before(&mut self, generation: u64) {
+        self.sessions
+            .retain(|_, session| session.generation >= generation);
+    }
+
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::with_generation(Arc::new(AtomicU64::new(0)))
+    }
+
+    pub fn with_generation(generation: Arc<AtomicU64>) -> Self {
         Self {
             sessions: HashMap::new(),
+            generation,
         }
     }
 
@@ -75,26 +92,51 @@ impl BrowserManager {
         args: &Value,
         context: &ToolContext,
     ) -> Result<ToolOutput, String> {
+        if context.cancellation.is_cancelled() {
+            self.sessions.remove(&context.orbit_id);
+            return Err("Browser tool cancelled".into());
+        }
         if !context.allow_host_execution {
+            self.sessions.remove(&context.orbit_id);
             return Err("Browser automation launches a host browser and requires this Sprite's explicit host-execution grant".into());
         }
+        let scope = match crate::shell_scope::fingerprint(context) {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.sessions.remove(&context.orbit_id);
+                return Err(error);
+            }
+        };
+        let generation = self.generation.load(Ordering::SeqCst);
         let directory = profile_directory(context)?;
-        if self
-            .sessions
-            .get(&context.orbit_id)
-            .is_some_and(|session| session.directory != directory)
-        {
+        if self.sessions.get(&context.orbit_id).is_some_and(|session| {
+            session.directory != directory
+                || session.scope != scope
+                || session.generation != generation
+        }) {
             self.sessions.remove(&context.orbit_id);
         }
         if !self.sessions.contains_key(&context.orbit_id) {
-            let session = BrowserSession::launch(&directory, &context.data_directory).await?;
+            let session = tokio::select! {
+                _ = context.cancellation.cancelled() => return Err("Browser tool cancelled".into()),
+                session = BrowserSession::launch(&directory, context, scope, generation) => session?,
+            };
             self.sessions.insert(context.orbit_id.clone(), session);
+        }
+        if generation != self.generation.load(Ordering::SeqCst) {
+            self.sessions.remove(&context.orbit_id);
+            return Err(
+                "Workspace access changed while the browser was starting; retry the tool".into(),
+            );
         }
         let session = self
             .sessions
             .get_mut(&context.orbit_id)
             .ok_or("Browser session unavailable")?;
-        match name {
+        let result = tokio::select! {
+            biased;
+            _ = context.cancellation.cancelled() => Err("Browser tool cancelled".into()),
+            result = async { match name {
             "browser_open" | "browser_search" => {
                 let url = if name == "browser_search" {
                     let mut url = http_url("https://duckduckgo.com/")?;
@@ -164,7 +206,12 @@ impl BrowserManager {
                 })
             }
             _ => Err("Unknown browser operation".into()),
+        }} => result,
+        };
+        if context.cancellation.is_cancelled() {
+            self.sessions.remove(&context.orbit_id);
         }
+        result
     }
 }
 
@@ -280,6 +327,8 @@ fn prepare_browser_credentials(directory: &Path, without_keychain: bool) -> Resu
 
 struct BrowserSession {
     directory: PathBuf,
+    scope: String,
+    generation: u64,
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     session_id: String,
     next_id: u64,
@@ -289,22 +338,60 @@ struct BrowserSession {
 }
 
 impl BrowserSession {
-    async fn launch(directory: &Path, data_directory: &Path) -> Result<Self, String> {
-        let environment = managed_environment(data_directory)?;
+    async fn launch(
+        directory: &Path,
+        context: &ToolContext,
+        scope: String,
+        generation: u64,
+    ) -> Result<Self, String> {
+        let executable = browser_executable().ok_or("A compatible Chrome or Chromium installation is required. Set SOLAR_BROWSER_EXECUTABLE to its executable path if detection fails.")?;
+        Self::launch_executable(directory, context, scope, generation, &executable).await
+    }
+
+    async fn launch_executable(
+        directory: &Path,
+        context: &ToolContext,
+        scope: String,
+        generation: u64,
+        executable: &Path,
+    ) -> Result<Self, String> {
+        let environment = managed_environment(&context.data_directory)?;
         prepare_browser_credentials(directory, cfg!(target_os = "macos"))?;
         let active_port = directory.join("DevToolsActivePort");
         let _ = tokio::fs::remove_file(&active_port).await;
-        let executable = browser_executable().ok_or("A compatible Chrome or Chromium installation is required. Set SOLAR_BROWSER_EXECUTABLE to its executable path if detection fails.")?;
-        let mut command = tokio::process::Command::new(executable);
+        let mut arguments = vec![OsString::from(format!(
+            "--user-data-dir={}",
+            directory.display()
+        ))];
+        arguments.extend(
+            browser_flags(cfg!(target_os = "macos"))
+                .into_iter()
+                .map(OsString::from),
+        );
+        arguments.push("about:blank".into());
+        let mut command = crate::shell_scope::browser_command(
+            executable,
+            &arguments,
+            context,
+            &[directory.to_owned()],
+        )?;
         command
+            .current_dir(&context.workspace)
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .envs(environment)
-            .arg(format!("--user-data-dir={}", directory.display()))
-            .args(browser_flags(cfg!(target_os = "macos")))
-            .arg("about:blank")
+            .env("HOME", &context.workspace)
+            .env("USERPROFILE", &context.workspace)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        for key in ["LANG", "LC_ALL", "LC_CTYPE", "TZ"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        #[cfg(test)]
+        command.stderr(Stdio::inherit());
         #[cfg(unix)]
         command.process_group(0);
         let mut child = command
@@ -315,7 +402,7 @@ impl BrowserSession {
         for _ in 0..100 {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 return Err(format!(
-                    "Browser exited before remote control was ready ({status})"
+                    "Browser exited before remote control was ready ({status}). Check the browser's OS sandbox support; downloaded Chromium builds on Ubuntu may need an AppArmor profile. Solar does not disable Chromium's sandbox."
                 ));
             }
             if let Ok(port) = tokio::fs::read_to_string(&active_port).await {
@@ -335,6 +422,8 @@ impl BrowserSession {
             .map_err(|e| e.to_string())?;
         let mut browser = Self {
             directory: directory.to_owned(),
+            scope,
+            generation,
             socket,
             session_id: String::new(),
             next_id: 0,
@@ -486,12 +575,60 @@ mod tests {
             data_directory: root.into(),
             workspace: root.join("workspace"),
             allowed_roots: Vec::new(),
+            mounts: vec![],
             denied_roots: vec![],
             allow_host_execution: false,
             screen_share_allowed: false,
             cancellation: Default::default(),
             progress: None,
         }
+    }
+
+    #[tokio::test]
+    async fn real_chromium_keeps_its_sandbox_and_cannot_read_unshared_files() {
+        let Some(executable) = std::env::var_os("SOLAR_TEST_BROWSER_EXECUTABLE") else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut orbit = context(&root.path().join("sprite"), "first");
+        orbit.allow_host_execution = true;
+        std::fs::create_dir_all(&orbit.workspace).unwrap();
+        let profile = profile_directory(&orbit).unwrap();
+        let scope = crate::shell_scope::fingerprint(&orbit).unwrap();
+        let private = root.path().join("unshared.txt");
+        std::fs::write(&private, "UNSHARED-CONTENT-MUST-NOT-APPEAR").unwrap();
+        assert!(!browser_flags(cfg!(target_os = "macos")).contains(&"--no-sandbox"));
+        let mut browser =
+            BrowserSession::launch_executable(&profile, &orbit, scope, 0, Path::new(&executable))
+                .await
+                .unwrap();
+        browser
+            .call(
+                "Page.navigate",
+                json!({"url":"data:text/html,<title>Solar scope test</title><p>Ready</p>"}),
+            )
+            .await
+            .unwrap();
+        browser.wait_for_document(None).await.unwrap();
+        assert_eq!(
+            browser.evaluate("document.title").await.unwrap(),
+            "Solar scope test"
+        );
+        let url = url::Url::from_file_path(&private).unwrap();
+        browser
+            .call("Page.navigate", json!({"url":url.as_str()}))
+            .await
+            .unwrap();
+        browser.wait_for_document(None).await.unwrap();
+        let page = browser
+            .evaluate("document.body?.innerText || ''")
+            .await
+            .unwrap();
+        assert!(
+            !page
+                .to_string()
+                .contains("UNSHARED-CONTENT-MUST-NOT-APPEAR")
+        );
     }
 
     #[test]
@@ -519,6 +656,33 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(!orbit.data_directory.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn changed_workspace_link_is_rejected_before_launching_a_browser() {
+        let root = tempfile::tempdir().unwrap();
+        let approved = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut orbit = context(root.path(), "first");
+        orbit.allow_host_execution = true;
+        std::fs::create_dir_all(&orbit.workspace).unwrap();
+        let link = orbit.workspace.join("shared");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        orbit.mounts.push(crate::WorkspaceMount {
+            path: link,
+            target: approved.path().to_owned(),
+            writable: false,
+        });
+        let result = BrowserManager::new()
+            .execute(
+                "browser_open",
+                &json!({"url":"https://example.com"}),
+                &orbit,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(!orbit.data_directory.join("browser").exists());
     }
 
     #[cfg(unix)]

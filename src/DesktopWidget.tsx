@@ -58,6 +58,7 @@ export function DesktopWidget({
   const pendingToggles = useRef(0);
   const toggleQueue = useRef(Promise.resolve());
   const [failure, setFailure] = useState("");
+  const [hovered, setHovered] = useState(false);
   const [sunMood, setSunMood] = useState<"smile" | "yawn" | "neutral">("neutral");
   const [sunAntic, setSunAntic] = useState("");
   const [popupPhase, setPopupPhase] = useState("opening");
@@ -80,6 +81,19 @@ export function DesktopWidget({
     lastInteraction.current = now;
     void api("desktop_interaction", { hovered, focused }).catch(() => {});
   }
+
+  useEffect(() => {
+    if (!native || type !== "orbit") return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<boolean>("solar://widget-hover", ({ payload }) => setHovered(payload))
+      .then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(() => {});
+    return () => { disposed = true; unlisten?.(); };
+  }, [type]);
+
+  useEffect(() => {
+    if (!data.desktopExpanded) setHovered(false);
+  }, [data.desktopExpanded]);
 
   useEffect(() => {
     if (type !== "sun" || expanded || data.settings.reducedMotion) return;
@@ -197,6 +211,17 @@ export function DesktopWidget({
       } finally {
         pendingToggles.current -= 1;
         if (pendingToggles.current === 0) {
+          // An outside click can collapse the native group while this command
+          // is in flight. Settle against its current state once the queue is
+          // empty, rather than restoring an obsolete expansion label.
+          try {
+            const current = await api<{ desktopExpanded?: boolean }>("get_bootstrap");
+            if (pendingToggles.current === 0 && typeof current.desktopExpanded === "boolean") {
+              confirmedExpanded.current = current.desktopExpanded;
+            }
+          } catch { /* Keep the last confirmed state during shutdown. */ }
+        }
+        if (pendingToggles.current === 0) {
           expandedIntent.current = confirmedExpanded.current;
           setExpanded(confirmedExpanded.current);
         }
@@ -283,7 +308,7 @@ export function DesktopWidget({
     Boolean(data.attentionItems?.some((item) => item.orbitId === orbit.id)) ||
     data.approvals.some((approval) => approval.orbitId === orbit.id);
   return (
-    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`} style={{ "--orbit-planet-size": `${planetSize}px` } as CSSProperties} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
+    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`} data-hovered={hovered} style={{ "--orbit-planet-size": `${planetSize}px` } as CSSProperties} onPointerEnter={() => { if (!native) setHovered(true); interaction(true); }} onPointerLeave={() => { setHovered(false); interaction(false); }} onPointerMove={() => interaction()}>
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}

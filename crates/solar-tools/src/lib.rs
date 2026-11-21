@@ -1,9 +1,9 @@
 //! Local capabilities owned by Solar's permission broker.
 //!
 //! Callers authorize every operation before dispatch. File operations use
-//! directory capabilities. Shell commands require a host-execution grant and
-//! exclude unassigned registered projects from their process tree. Other host
-//! access remains available; MCP servers are separately authorized processes.
+//! directory capabilities. Agent-owned shells, browsers, and stdio MCP servers
+//! use the workspace filesystem allowlist. HTTP MCP services and native desktop
+//! automation are separate external authority boundaries.
 
 mod browser;
 mod files;
@@ -14,12 +14,16 @@ mod shell;
 mod shell_scope;
 mod shell_session;
 
-pub use home_import::HomeImportPlan;
+pub use home_import::{HomeImportPlan, search_user_home};
 pub use mcp::{McpConfig, McpServerInfo, McpTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 pub use shell_session::{OrbitShellSetup, orbit_shell_setup};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use tokio::sync::Mutex;
 pub use tokio_util::sync::CancellationToken;
 
@@ -37,6 +41,8 @@ pub struct ToolContext {
     pub data_directory: PathBuf,
     pub workspace: PathBuf,
     pub allowed_roots: Vec<PathBuf>,
+    /// Explicit live links anchored inside the Sprite workspace.
+    pub mounts: Vec<WorkspaceMount>,
     /// Registered project folders excluded from this task's access grants.
     /// Shell descendants must not read or write these trees.
     pub denied_roots: Vec<PathBuf>,
@@ -45,6 +51,13 @@ pub struct ToolContext {
     pub cancellation: CancellationToken,
     /// Bounded, coalesced display output. Never used as model context or logging.
     pub progress: Option<tokio::sync::watch::Sender<ToolProgress>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMount {
+    pub path: PathBuf,
+    pub target: PathBuf,
+    pub writable: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,8 +93,9 @@ impl ToolOutput {
 
 pub struct ToolBroker {
     http: reqwest::Client,
-    browser: Mutex<browser::BrowserManager>,
-    mcp: mcp::McpManager,
+    browser: Arc<Mutex<browser::BrowserManager>>,
+    mcp: Arc<mcp::McpManager>,
+    process_generation: Arc<AtomicU64>,
     native: Mutex<native::NativeBridge>,
 }
 
@@ -93,9 +107,17 @@ impl ToolBroker {
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
             .map_err(|e| e.to_string())?;
+        let process_generation = Arc::new(AtomicU64::new(0));
         Ok(Self {
-            browser: Mutex::new(browser::BrowserManager::new()),
-            mcp: mcp::McpManager::new(http.clone(), data_dir.join("mcp")),
+            browser: Arc::new(Mutex::new(browser::BrowserManager::with_generation(
+                process_generation.clone(),
+            ))),
+            mcp: Arc::new(mcp::McpManager::with_generation(
+                http.clone(),
+                data_dir.join("mcp"),
+                process_generation.clone(),
+            )),
+            process_generation,
             native: Mutex::new(native::NativeBridge::new()),
             http,
         })
@@ -105,6 +127,7 @@ impl ToolBroker {
         let mut result = Vec::new();
         result.extend(files::definitions());
         result.push(home_import::definition());
+        result.push(home_import::search_definition());
         result.extend(shell::definitions());
         result.extend(browser::definitions());
         result.extend(native::definitions());
@@ -136,6 +159,13 @@ impl ToolBroker {
         if name.starts_with("mcp__") {
             return self.mcp.call(name, args, context).await;
         }
+        if name.starts_with("browser_") {
+            let mut browser = tokio::select! {
+                _ = context.cancellation.cancelled() => return Err("Browser tool cancelled".into()),
+                browser = self.browser.lock() => browser,
+            };
+            return browser.execute(name, &args, context).await;
+        }
         if matches!(
             name,
             "screen_capture"
@@ -158,14 +188,6 @@ impl ToolBroker {
                 }
                 "shell_run" => shell::execute(&args, context).await,
                 "web_fetch" => self.fetch(&args).await,
-                "browser_open" | "browser_search" | "browser_inspect" | "browser_click"
-                | "browser_type" | "browser_screenshot" => {
-                    self.browser
-                        .lock()
-                        .await
-                        .execute(name, &args, context)
-                        .await
-                }
                 _ => Err(format!("Unknown tool {name}")),
             }
         };
@@ -208,6 +230,22 @@ impl ToolBroker {
     }
     pub async fn mcp_servers(&self) -> Vec<McpServerInfo> {
         self.mcp.servers().await
+    }
+
+    /// Mark existing child processes stale synchronously. Closing may then be
+    /// scheduled by sync engine commands without borrowing the broker. A
+    /// later-created session has the new generation and cannot be closed by
+    /// this older invalidation future.
+    pub fn invalidate_workspace_sessions(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let generation = self.process_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let browser = self.browser.clone();
+        let mcp = self.mcp.clone();
+        async move {
+            browser.lock().await.invalidate_before(generation);
+            mcp.invalidate_before(generation).await;
+        }
     }
     pub async fn start_screen_share(&self, orbit_id: &str) -> Result<ToolOutput, String> {
         self.native.lock().await.start_share(orbit_id).await

@@ -37,6 +37,25 @@ export interface Project {
   description: string;
 }
 
+export interface SharedFolder {
+  id: string;
+  name: string;
+  directory: string;
+  mountPath: string;
+  allSprites: boolean;
+  orbitIds: string[];
+  writable: boolean;
+}
+
+export interface HomeShareCandidate {
+  id: string;
+  name: string;
+  directory: string;
+  mountPath: string;
+  description: string;
+  sensitive: boolean;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -162,6 +181,7 @@ export interface Bootstrap {
   orbits: Orbit[];
   providers: Provider[];
   projects: Project[];
+  sharedFolders?: SharedFolder[];
   conversations: Conversation[];
   routines: Routine[];
   tasks: Task[];
@@ -177,6 +197,7 @@ export const emptyBootstrap: Bootstrap = {
   orbits: [],
   providers: [],
   projects: [],
+  sharedFolders: [],
   conversations: [],
   routines: [],
   tasks: [],
@@ -203,7 +224,7 @@ export const tools = [
   {
     id: "shell",
     name: "Shell",
-    description: "Run approved commands with host access",
+    description: "Run commands inside approved workspace access",
   },
   {
     id: "screen",

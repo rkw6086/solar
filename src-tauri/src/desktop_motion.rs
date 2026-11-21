@@ -8,6 +8,82 @@ use std::{
 pub(crate) const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const TRANSITION_DURATION: Duration = Duration::from_millis(320);
 
+/// Focus belongs to the whole companion group, not to one popup. In particular,
+/// moving from one Sprite/chat to another must not look like a click-away.
+#[derive(Default)]
+pub(crate) struct CompanionDismissal {
+    focused: HashSet<String>,
+    armed: bool,
+    revision: u64,
+    closing: Option<u64>,
+    buttons: u64,
+    clicks: Option<u64>,
+}
+
+impl CompanionDismissal {
+    pub fn focus(&mut self, label: &str, focused: bool) -> bool {
+        if focused {
+            let cancelled = self.cancel();
+            self.focused.insert(label.into());
+            self.armed = true;
+            cancelled
+        } else {
+            self.focused.remove(label);
+            // A native blur often arrives after the global outside-click
+            // sample. It must not undo the close that sample just requested.
+            if self.closing.is_none() {
+                self.revision = self.revision.wrapping_add(1);
+            }
+            false
+        }
+    }
+
+    pub fn remove(&mut self, label: &str) -> bool {
+        self.focused.remove(label);
+        self.cancel()
+    }
+
+    pub fn pending(&self) -> Option<u64> {
+        (self.armed && self.focused.is_empty() && self.closing.is_none()).then_some(self.revision)
+    }
+
+    pub fn pressed(&mut self, buttons: u64, clicks: Option<u64>) -> bool {
+        let pressed = buttons & !self.buttons != 0
+            || self
+                .clicks
+                .zip(clicks)
+                .is_some_and(|(before, after)| before != after);
+        self.buttons = buttons;
+        self.clicks = clicks;
+        pressed
+    }
+
+    pub fn begin(&mut self, expected: Option<u64>) -> Option<u64> {
+        if self.closing.is_some()
+            || expected.is_some_and(|revision| self.pending() != Some(revision))
+        {
+            return None;
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.closing = Some(self.revision);
+        Some(self.revision)
+    }
+
+    pub fn cancel(&mut self) -> bool {
+        self.revision = self.revision.wrapping_add(1);
+        self.closing.take().is_some()
+    }
+
+    pub fn finish(&mut self, revision: u64) -> bool {
+        if self.closing != Some(revision) {
+            return false;
+        }
+        self.closing = None;
+        self.armed = false;
+        true
+    }
+}
+
 /// The launcher button occupies a small circle near the sun window's lower
 /// right corner. Off-window points must never keep the whole system paused.
 pub(crate) fn launcher_hit(x: f64, y: f64, width: f64, height: f64, scale: f64) -> bool {
@@ -114,6 +190,70 @@ impl MotionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_can_move_between_companions_without_dismissing_the_group() {
+        let mut state = CompanionDismissal::default();
+        assert!(state.pending().is_none());
+        state.focus("chat-a", true);
+        state.focus("chat-a", false);
+        let old = state.pending().unwrap();
+        state.focus("orbit-b", true);
+        assert!(state.pending().is_none());
+        assert!(state.begin(Some(old)).is_none());
+        state.focus("orbit-b", false);
+        let revision = state.pending().unwrap();
+        let closing = state.begin(Some(revision)).unwrap();
+        assert!(state.finish(closing));
+        assert!(state.pending().is_none());
+    }
+
+    #[test]
+    fn outside_click_can_dismiss_without_native_focus_and_inside_click_cancels_it() {
+        let mut state = CompanionDismissal::default();
+        // Borderless macOS companions need not become the key window.
+        assert!(state.pressed(1, None));
+        let closing = state.begin(None).unwrap();
+        assert!(!state.pressed(1, None));
+        assert!(!state.pressed(0, None));
+        assert!(state.pressed(1, None));
+        assert!(state.cancel());
+        assert!(!state.finish(closing));
+    }
+
+    #[test]
+    fn native_blur_after_an_outside_click_does_not_cancel_dismissal() {
+        let mut state = CompanionDismissal::default();
+        state.focus("chat-a", true);
+        let closing = state.begin(None).unwrap();
+        assert!(!state.focus("chat-a", false));
+        assert!(state.finish(closing));
+    }
+
+    #[test]
+    fn short_trackpad_taps_are_detected_between_pointer_samples() {
+        let mut state = CompanionDismissal::default();
+        assert!(!state.pressed(0, Some(10)));
+        assert!(state.pressed(0, Some(11)));
+        assert!(!state.pressed(0, Some(11)));
+        assert!(state.pressed(1, Some(12)));
+        assert!(!state.pressed(1, Some(12)));
+    }
+
+    #[test]
+    fn stale_blur_and_closing_callbacks_cannot_dismiss_a_reopened_chat() {
+        let mut state = CompanionDismissal::default();
+        state.focus("chat-a", true);
+        state.focus("chat-a", false);
+        let blur = state.pending().unwrap();
+        let closing = state.begin(Some(blur)).unwrap();
+        assert!(state.focus("chat-b", true));
+        assert!(!state.finish(closing));
+        assert!(state.begin(Some(blur)).is_none());
+        state.remove("chat-b");
+        let next = state.begin(state.pending()).unwrap();
+        assert_ne!(next, closing);
+    }
     #[test]
     fn launcher_hover_is_bounded_to_its_button_at_any_scale() {
         for scale in [1.0, 1.5, 2.0] {

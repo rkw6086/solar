@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
   ArrowLeft, ArrowRight, Check, ChevronRight, Folder, Globe2, Heart,
@@ -13,6 +13,8 @@ import type { Bootstrap, Orbit, Project, Provider, Settings } from "../types";
 import { OrbitForm, ProjectForm, ProviderForm } from "../components/Forms";
 import { Planet } from "../components/Planet";
 import { StarBirth } from "./StarBirth";
+import { HomeSharingSetup } from "../components/SharedFoldersPanel";
+import type { HomeSharingPlan } from "../components/SharedFoldersPanel";
 import "./onboarding.css";
 
 const steps = ["birth", "welcome", "team", "desktop", "connection", "orbit", "workspace", "ready"] as const;
@@ -54,6 +56,12 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [effectsBusy, setEffectsBusy] = useState(false);
+  const [pendingHomeShares, setPendingHomeShares] = useState(0);
+  const homeSharingPlan = useRef<HomeSharingPlan | null>(null);
+  const updateHomeSharingPlan = useCallback((plan: HomeSharingPlan | null) => {
+    homeSharingPlan.current = plan;
+    setPendingHomeShares(plan?.count ?? 0);
+  }, []);
   const { ready: fullscreenReady, error: fullscreenError, leaveFullscreen } = useIntroFullscreen();
   const effectsEnabled = data.settings.soundEffects !== false;
   const [desktopDemoExpanded, setDesktopDemoExpanded] = useState(false);
@@ -187,6 +195,14 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
   const title = step === "orbit" && !data.orbits.length ? "Create your first Sprite" : labels[step];
   const next = steps[Math.min(index + 1, steps.length - 1)];
   const setupStep = ["connection", "orbit", "workspace"].includes(step);
+  async function continueSetup() {
+    if (busy) return;
+    if (step === "ready") { await finish(); return; }
+    if (step === "workspace" && homeSharingPlan.current?.count) {
+      if (!await homeSharingPlan.current.commit()) return;
+    }
+    await go(next);
+  }
 
   return <div className={`onboarding ${reducedMotion ? "onboarding-reduced" : ""} ${step === "birth" ? "onboarding-birth" : ""}`}>
     <header className="onboarding-topbar">
@@ -246,9 +262,9 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
           </>}
           {step === "workspace" && <>
             <p className="onboarding-lead">Make room for<br />something meaningful.</p>
-            <p>A project connects a folder with useful context. Only Sprites you explicitly give access can use its files and shared knowledge.</p>
-            <div className="onboarding-note"><ShieldCheck size={17} /><span>Creating a project does not grant every Sprite access. Choose members in their profiles.</span></div>
-            <Later>Manage folders and context in <strong>Projects</strong>, and access in <strong>Your Sprites</strong>.</Later>
+            <p>Projects and shared folders appear as links inside each Sprite’s workspace. Choose project access in Sprite profiles, and decide which familiar configuration folders all Sprites can use.</p>
+            <div className="onboarding-note"><ShieldCheck size={17} /><span>Nothing from your home is shared automatically. Select each item you want to include.</span></div>
+            <Later>Manage links and shared configuration in <strong>Projects → Shared folders</strong>, and project access in <strong>Your Sprites</strong>.</Later>
           </>}
           {step === "ready" && <>
             <p className="onboarding-lead">Start small.<br />Let good things grow.</p>
@@ -311,6 +327,7 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
             {data.projects.length ? <div className="onboarding-project-list">{data.projects.map((project) => <button type="button" key={project.id} onClick={() => setEditor({ kind: "project", value: project })}><Folder size={18} /><span><strong>{project.name}</strong><small>{project.directory}</small></span><ChevronRight size={14} /></button>)}</div> : <div className="onboarding-card-empty"><Folder size={30} /><h3>Pick a folder. Add some context.</h3><p>A project is optional. Every Sprite already has a private workspace.</p></div>}
             <button type="button" className="button button-primary" onClick={() => setEditor({ kind: "project" })}><Plus size={15} />Add a project</button>
             {selectedOrbit && data.projects.length > 0 && <button type="button" className="button button-secondary" onClick={editFirstOrbit}><Users size={15} />Choose {selectedOrbit.name}’s access</button>}
+            <HomeSharingSetup data={data} refresh={refresh} onBusyChange={setBusy} onPlanChange={updateHomeSharingPlan} />
           </div>}
           {step === "ready" && <div className="onboarding-setup-card onboarding-preferences">
             <div className="onboarding-ready-sun"><Planet sun color="#edb56d" name="Solar" size={104} /></div>
@@ -325,10 +342,10 @@ export function Onboarding({ data, onComplete, refresh, initialStep, onNavigate 
 
       <footer className="onboarding-footer">
         <div className="onboarding-footer-left"><button type="button" className="button button-quiet" disabled={busy} onClick={() => void go(steps[Math.max(0, index - 1)])}><ArrowLeft size={15} />Back</button><span>{index} / {steps.length - 1}</span></div>
-        <div className="onboarding-footer-status">{error || fullscreenError ? <span role="alert">{error || fullscreenError}</span> : <span>Your setup is saved as you go.</span>}</div>
+        <div className="onboarding-footer-status">{error || fullscreenError ? <span role="alert">{error || fullscreenError}</span> : <span>{step === "workspace" && pendingHomeShares ? `${pendingHomeShares} selected ${pendingHomeShares === 1 ? "item" : "items"} will be shared read-only.` : "Your setup is saved as you go."}</span>}</div>
         <div className="onboarding-footer-right">
           {setupStep && <button type="button" className="button button-quiet" disabled={busy} onClick={() => void go(next)}>Do this later</button>}
-          <button type="button" className="button button-primary" disabled={busy} onClick={() => step === "ready" ? void finish() : void go(next)}>{busy ? <LoaderCircle size={15} className="spin" /> : null}{step === "ready" ? "Open Solar" : step === "desktop" ? "Make it yours" : "Continue"}<ArrowRight size={15} /></button>
+          <button type="button" className="button button-primary" disabled={busy} onClick={() => void continueSetup()}>{busy ? <LoaderCircle size={15} className="spin" /> : null}{step === "ready" ? "Open Solar" : step === "workspace" && pendingHomeShares ? "Share & continue" : step === "desktop" ? "Make it yours" : "Continue"}<ArrowRight size={15} /></button>
         </div>
       </footer>
     </>}

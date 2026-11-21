@@ -1,5 +1,6 @@
-//! Widget chats dismiss after focus leaves them, except while their own native
-//! chooser or profile save is active. Each timer belongs to one window lifetime.
+//! Dismiss the complete companion group when the user clicks away. Native
+//! choosers and saves hold this open; moving between companions never closes it.
+use crate::desktop_motion::CompanionDismissal;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -8,161 +9,270 @@ use std::{
 use tauri::{Manager, WebviewWindow, WindowEvent};
 
 #[derive(Default)]
-pub(crate) struct PopupDismissals(Mutex<HashMap<String, Arc<Mutex<FocusState>>>>);
+pub(crate) struct PopupDismissals {
+    windows: Mutex<HashMap<String, Arc<Mutex<WindowState>>>>,
+    group: Mutex<CompanionDismissal>,
+}
 
-struct FocusState {
-    armed: bool,
-    focused: bool,
+#[derive(Default)]
+struct WindowState {
     holds: usize,
-    alive: bool,
-    revision: u64,
-    closing_revision: Option<u64>,
+    destroyed: bool,
 }
 
-impl Default for FocusState {
-    fn default() -> Self {
-        Self {
-            armed: false,
-            focused: false,
-            holds: 0,
-            alive: true,
-            revision: 0,
-            closing_revision: None,
+fn companion(label: &str) -> bool {
+    label == "sun" || label.starts_with("orbit-") || label.starts_with("chat-")
+}
+
+fn protected(app: &tauri::AppHandle) -> bool {
+    let Some(registry) = app.try_state::<PopupDismissals>() else {
+        return true;
+    };
+    registry
+        .windows
+        .lock()
+        .map(|windows| {
+            windows.values().any(|state| {
+                state
+                    .lock()
+                    .map(|state| !state.destroyed && state.holds > 0)
+                    .unwrap_or(true)
+            })
+        })
+        .unwrap_or(true)
+}
+
+fn native_group_focused(app: &tauri::AppHandle) -> bool {
+    app.webview_windows().into_iter().any(|(label, window)| {
+        companion(&label)
+            && window.is_visible().unwrap_or(false)
+            && window.is_focused().unwrap_or(true)
+    })
+}
+
+fn reopen_chats(app: &tauri::AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("chat-") {
+            crate::desktop::cancel_orbit_chat_dismissal(&window);
         }
     }
 }
 
-impl FocusState {
-    fn pending(&self) -> Option<u64> {
-        (self.alive && self.armed && !self.focused && self.holds == 0).then_some(self.revision)
-    }
-
-    fn focus(&mut self, focused: bool) -> Option<u64> {
-        self.revision += 1;
-        self.focused = focused;
-        self.armed |= focused;
-        self.pending()
-    }
-
-    fn acquire(&mut self) {
-        self.holds += 1;
-        self.revision += 1;
-    }
-
-    fn release(&mut self) -> Option<u64> {
-        self.holds = self.holds.saturating_sub(1);
-        self.revision += 1;
-        self.pending()
-    }
-
-    fn destroy(&mut self) {
-        self.alive = false;
-        self.revision += 1;
-        self.closing_revision = None;
-    }
-
-    fn can_close(&self, revision: u64, native_focused: bool) -> bool {
-        !native_focused && self.pending() == Some(revision)
-    }
-    fn begin_close(&mut self, revision: u64, native_focused: bool) -> bool {
-        if !self.can_close(revision, native_focused) || self.closing_revision == Some(revision) {
-            return false;
+pub(crate) fn cancel(app: &tauri::AppHandle) {
+    if let Some(registry) = app.try_state::<PopupDismissals>() {
+        let cancelled = registry
+            .group
+            .lock()
+            .map(|mut group| group.cancel())
+            .unwrap_or(false);
+        if cancelled {
+            reopen_chats(app);
         }
-        self.closing_revision = Some(revision);
-        true
-    }
-
-    fn cancel_animation(&mut self) -> bool {
-        self.closing_revision.take().is_some()
-    }
-
-    fn finish_close(&mut self, revision: u64, native_focused: bool) -> Option<bool> {
-        if self.closing_revision != Some(revision) {
-            return None;
-        }
-        self.closing_revision = None;
-        Some(self.can_close(revision, native_focused))
     }
 }
 
-fn schedule(window: WebviewWindow, state: Arc<Mutex<FocusState>>, revision: u64) {
+fn schedule_blur(app: tauri::AppHandle, revision: u64) {
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(120)).await;
-        let app = window.app_handle().clone();
-        let _ = app.run_on_main_thread(move || {
-            // Use this original handle rather than looking up a label that may
-            // already have been reused by a newly opened chat.
-            let focused = window.is_focused().unwrap_or(true);
-            let close = state
+        // NSWindow transfers focus in separate events. Let the new member of
+        // the companion group receive focus before interpreting the blur.
+        tokio::time::sleep(Duration::from_millis(160)).await;
+        let on_main = app.clone();
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, Some(revision), true));
+    });
+}
+
+fn dismiss(app: &tauri::AppHandle, expected: Option<u64>, collapse: bool) {
+    if protected(app) || (expected.is_some() && native_group_focused(app)) {
+        return;
+    }
+    let Some(registry) = app.try_state::<PopupDismissals>() else {
+        return;
+    };
+    let Some(revision) = registry
+        .group
+        .lock()
+        .ok()
+        .and_then(|mut group| group.begin(expected))
+    else {
+        return;
+    };
+    let chats: Vec<_> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("chat-"))
+        .map(|(_, window)| window)
+        .collect();
+    for window in &chats {
+        crate::desktop::dismiss_orbit_chat(window);
+    }
+    if collapse {
+        // This also handles an expansion with no open chat. The direct click
+        // evidence is authoritative even if macOS reports stale key focus.
+        if let Some(engine) = app.try_state::<Arc<crate::engine::Engine>>() {
+            let _ = crate::desktop::set_desktop_expanded(app.clone(), engine, false);
+        }
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(280)).await;
+        let on_main = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            if protected(&on_main) {
+                cancel(&on_main);
+                return;
+            }
+            let Some(registry) = on_main.try_state::<PopupDismissals>() else {
+                return;
+            };
+            let close = registry
+                .group
                 .lock()
-                .map(|mut state| state.begin_close(revision, focused))
+                .map(|mut group| group.finish(revision))
                 .unwrap_or(false);
             if close {
-                crate::desktop::dismiss_orbit_chat(&window);
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(280)).await;
-                    let app = window.app_handle().clone();
-                    let _ = app.run_on_main_thread(move || {
-                        let focused = window.is_focused().unwrap_or(true);
-                        let close = state
-                            .lock()
-                            .ok()
-                            .and_then(|mut state| state.finish_close(revision, focused));
-                        match close {
-                            Some(true) => {
-                                let _ = window.close();
-                            }
-                            Some(false) => crate::desktop::cancel_orbit_chat_dismissal(&window),
-                            None => {}
-                        }
-                    });
-                });
+                // Keep the original handles: a new popup using the same label
+                // must never be closed by an older transition.
+                for window in chats {
+                    let _ = window.close();
+                }
             }
         });
     });
 }
 
+/// A deliberate Sun contraction closes its chats as part of the same motion.
+pub(crate) fn dismiss_chats(app: &tauri::AppHandle) {
+    dismiss(app, None, false);
+}
+
+/// Called by the existing native hit-test loop. A click outside all visible
+/// companion regions works even for nonactivating macOS widget windows.
+pub(crate) fn pointer(
+    app: &tauri::AppHandle,
+    sample: Option<(u64, Option<u64>)>,
+    inside: bool,
+    active: bool,
+) {
+    let Some((buttons, clicks)) = sample else {
+        return;
+    };
+    let Some(registry) = app.try_state::<PopupDismissals>() else {
+        return;
+    };
+    let pressed = registry
+        .group
+        .lock()
+        .map(|mut group| group.pressed(buttons, clicks))
+        .unwrap_or(false);
+    if pressed && inside {
+        cancel(app);
+    } else if pressed && active {
+        let on_main = app.clone();
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, None, true));
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn pointer_state() -> Option<(u64, Option<u64>)> {
+    // Querying button state does not install an event tap or require screen
+    // recording/accessibility privileges. NSEvent is an AppKit class method.
+    use objc2::{class, msg_send};
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceCounterForEventType(state: i32, event_type: u32) -> u32;
+    }
+    let buttons: usize = unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
+    // Session mouse-down counters also detect a tap which is pressed and
+    // released entirely between two samples. No global event tap is installed.
+    let clicks = unsafe {
+        u64::from(CGEventSourceCounterForEventType(0, 1))
+            + u64::from(CGEventSourceCounterForEventType(0, 3))
+            + u64::from(CGEventSourceCounterForEventType(0, 25))
+    };
+    Some((buttons as u64, Some(clicks)))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn pointer_state() -> Option<(u64, Option<u64>)> {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetAsyncKeyState(key: i32) -> i16;
+    }
+    Some((
+        [1, 2, 4, 5, 6]
+            .into_iter()
+            .enumerate()
+            .fold(0, |mask, (index, key)| {
+                mask | if unsafe { GetAsyncKeyState(key) } < 0 {
+                    1 << index
+                } else {
+                    0
+                }
+            }),
+        None,
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn pointer_state() -> Option<(u64, Option<u64>)> {
+    None
+}
+
 pub(crate) fn attach(window: &WebviewWindow) {
-    if !window.label().starts_with("chat-") {
+    if !companion(window.label()) {
         return;
     }
-    let state = Arc::new(Mutex::new(FocusState::default()));
+    let state = Arc::new(Mutex::new(WindowState::default()));
     let registry = window.state::<PopupDismissals>();
-    let Ok(mut windows) = registry.0.lock() else {
+    let Ok(mut windows) = registry.windows.lock() else {
         return;
     };
     windows.insert(window.label().into(), state.clone());
     drop(windows);
+    cancel(window.app_handle());
     let original = window.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Focused(focused) => {
-            let (revision, cancel_animation) = state
+            let registry = original.state::<PopupDismissals>();
+            let (cancelled, pending) = registry
+                .group
                 .lock()
-                .map(|mut state| {
-                    let revision = state.focus(*focused);
-                    let cancel = *focused && state.cancel_animation();
-                    (revision, cancel)
+                .map(|mut group| {
+                    let cancelled = group.focus(original.label(), *focused);
+                    (cancelled, group.pending())
                 })
-                .unwrap_or((None, false));
-            if cancel_animation {
-                crate::desktop::cancel_orbit_chat_dismissal(&original);
+                .unwrap_or((false, None));
+            if cancelled {
+                reopen_chats(original.app_handle());
             }
-            if let Some(revision) = revision {
-                schedule(original.clone(), state.clone(), revision);
+            if let Some(revision) = pending {
+                schedule_blur(original.app_handle().clone(), revision);
             }
         }
         WindowEvent::Destroyed => {
             if let Ok(mut state) = state.lock() {
-                state.destroy();
+                state.destroyed = true;
             }
             let registry = original.state::<PopupDismissals>();
-            if let Ok(mut windows) = registry.0.lock()
+            let mut cancelled = false;
+            let mut pending = None;
+            if let Ok(mut windows) = registry.windows.lock()
                 && windows
                     .get(original.label())
                     .is_some_and(|current| Arc::ptr_eq(current, &state))
             {
                 windows.remove(original.label());
-            };
+                if let Ok(mut group) = registry.group.lock() {
+                    cancelled = group.remove(original.label());
+                    pending = group.pending();
+                }
+            }
+            if cancelled {
+                reopen_chats(original.app_handle());
+            }
+            if let Some(revision) = pending {
+                schedule_blur(original.app_handle().clone(), revision);
+            }
         }
         _ => {}
     });
@@ -170,7 +280,7 @@ pub(crate) fn attach(window: &WebviewWindow) {
 
 pub(crate) struct PopupHold {
     window: WebviewWindow,
-    state: Arc<Mutex<FocusState>>,
+    state: Arc<Mutex<WindowState>>,
 }
 
 /// No-op for the main app, other widgets, or an already destroyed popup.
@@ -179,18 +289,15 @@ pub(crate) fn hold(window: &WebviewWindow) -> Option<PopupHold> {
         return None;
     }
     let registry = window.try_state::<PopupDismissals>()?;
-    let state = registry.0.lock().ok()?.get(window.label())?.clone();
-    let cancel_animation = {
+    let state = registry.windows.lock().ok()?.get(window.label())?.clone();
+    {
         let mut state = state.lock().ok()?;
-        if !state.alive {
+        if state.destroyed {
             return None;
         }
-        state.acquire();
-        state.cancel_animation()
-    };
-    if cancel_animation {
-        crate::desktop::cancel_orbit_chat_dismissal(window);
+        state.holds += 1;
     }
+    cancel(window.app_handle());
     Some(PopupHold {
         window: window.clone(),
         state,
@@ -199,87 +306,20 @@ pub(crate) fn hold(window: &WebviewWindow) -> Option<PopupHold> {
 
 impl Drop for PopupHold {
     fn drop(&mut self) {
-        let revision = self.state.lock().ok().and_then(|mut state| state.release());
-        if let Some(revision) = revision {
-            schedule(self.window.clone(), self.state.clone(), revision);
+        let alive = self
+            .state
+            .lock()
+            .map(|mut state| {
+                state.holds = state.holds.saturating_sub(1);
+                !state.destroyed
+            })
+            .unwrap_or(false);
+        if alive && !protected(self.window.app_handle()) {
+            let registry = self.window.state::<PopupDismissals>();
+            let pending = registry.group.lock().ok().and_then(|group| group.pending());
+            if let Some(revision) = pending {
+                schedule_blur(self.window.app_handle().clone(), revision);
+            }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn initial_blur_is_ignored_until_the_popup_has_focus() {
-        let mut state = FocusState::default();
-        assert!(state.focus(false).is_none());
-        assert!(state.focus(true).is_none());
-        let revision = state.focus(false).unwrap();
-        assert!(state.can_close(revision, false));
-        assert!(!state.can_close(revision, true));
-    }
-
-    #[test]
-    fn refocus_and_destruction_invalidate_pending_close() {
-        let mut state = FocusState::default();
-        state.focus(true);
-        let revision = state.focus(false).unwrap();
-        state.focus(true);
-        assert!(!state.can_close(revision, false));
-        let revision = state.focus(false).unwrap();
-        state.destroy();
-        assert!(!state.can_close(revision, false));
-        // A replacement window has separate state even if it reuses a label.
-        assert!(FocusState::default().pending().is_none());
-    }
-
-    #[test]
-    fn final_animation_frame_rechecks_focus_and_protected_operations() {
-        let mut state = FocusState::default();
-        state.focus(true);
-        let revision = state.focus(false).unwrap();
-        assert!(state.begin_close(revision, false));
-        assert!(!state.begin_close(revision, false));
-        state.focus(true);
-        assert_eq!(state.finish_close(revision, true), Some(false));
-
-        let revision = state.focus(false).unwrap();
-        assert!(state.begin_close(revision, false));
-        state.acquire();
-        assert_eq!(state.finish_close(revision, false), Some(false));
-        let revision = state.release().unwrap();
-        assert!(state.begin_close(revision, false));
-        assert_eq!(state.finish_close(revision, false), Some(true));
-    }
-
-    #[test]
-    fn an_obsolete_animation_cannot_close_or_reopen_a_newer_one() {
-        let mut state = FocusState::default();
-        state.focus(true);
-        let old = state.focus(false).unwrap();
-        assert!(state.begin_close(old, false));
-        state.focus(true);
-        assert!(state.cancel_animation());
-        let next = state.focus(false).unwrap();
-        assert!(state.begin_close(next, false));
-        assert_eq!(state.finish_close(old, false), None);
-        assert_eq!(state.finish_close(next, false), Some(true));
-    }
-
-    #[test]
-    fn nested_holds_delay_dismissal_until_the_last_operation_finishes() {
-        let mut state = FocusState::default();
-        state.focus(true);
-        let revision = state.focus(false).unwrap();
-        state.acquire();
-        state.acquire();
-        assert!(!state.can_close(revision, false));
-        assert!(state.release().is_none());
-        let revision = state.release().unwrap();
-        assert!(state.can_close(revision, false));
-        state.focus(true);
-        state.acquire();
-        assert!(state.release().is_none());
     }
 }

@@ -84,6 +84,16 @@ pub(crate) struct ShellSession {
 }
 
 impl ShellSession {
+    pub(crate) fn resolve_for_context(
+        explicit: Option<&str>,
+        context: &crate::ToolContext,
+    ) -> Result<Self, String> {
+        if let Some(explicit) = explicit {
+            validate_shell_override(explicit, context)?;
+        }
+        Self::resolve(explicit, &context.data_directory, &context.workspace)
+    }
+
     pub(crate) fn resolve(
         explicit: Option<&str>,
         data_directory: &Path,
@@ -125,18 +135,39 @@ impl ShellSession {
             .into_iter()
             .map(|(key, value)| (key.into(), value.into_os_string()))
             .collect();
-        let config_directory = PathBuf::from(
+        let private_config = PathBuf::from(
             environment
                 .get(OsStr::new("XDG_CONFIG_HOME"))
                 .ok_or("Sprite configuration directory is unavailable")?
                 .as_os_str(),
         );
-        let glab_directory = managed_subdirectory(&config_directory, "glab-cli")?;
-        let git_directory = managed_subdirectory(&config_directory, "git")?;
+        let glab_directory = managed_subdirectory(&private_config, "glab-cli")?;
+        let git_directory = managed_subdirectory(&private_config, "git")?;
         remove_keychain_git_helpers(&git_directory.join("config"))?;
-        let gcm_directory = managed_subdirectory(&config_directory, "gcm")?;
+        let gcm_directory = managed_subdirectory(&private_config, "gcm")?;
         let gcm_store = managed_subdirectory(&gcm_directory, "store")?;
         let (private_bin, ssh_config) = initialize_ssh(data_directory, &home)?;
+        // Retain private configuration on disk, but address selected live
+        // configuration through its workspace alias. Never initialize,
+        // rewrite, chmod, or sanitize files through a shared alias.
+        let config_directory = workspace_alias(&home, ".config", &private_config);
+        for (variable, alias, fallback) in [
+            ("XDG_CONFIG_HOME", ".config", "config"),
+            ("XDG_CACHE_HOME", ".cache", "cache"),
+            ("XDG_DATA_HOME", ".local/share", "data"),
+            ("XDG_STATE_HOME", ".local/state", "state"),
+            ("TMPDIR", ".tmp", "tmp"),
+            ("TMP", ".tmp", "tmp"),
+            ("TEMP", ".tmp", "tmp"),
+        ] {
+            let target = workspace_alias(&home, alias, &data_directory.join(fallback));
+            environment.insert(variable.into(), target.into_os_string());
+        }
+        environment.insert("APPDATA".into(), config_directory.as_os_str().to_owned());
+        environment.insert(
+            "LOCALAPPDATA".into(),
+            workspace_alias(&home, ".local/share", &data_directory.join("data")).into_os_string(),
+        );
         for (key, value) in &inherited {
             if safe_locale_key(key) || key == "TERM" {
                 environment.insert(key.clone(), value.clone());
@@ -153,14 +184,27 @@ impl ShellSession {
         environment.insert("USERPROFILE".into(), home.as_os_str().to_owned());
         environment.insert("SHELL".into(), executable.as_os_str().to_owned());
         environment.insert("ZDOTDIR".into(), home.as_os_str().to_owned());
-        environment.insert("GLAB_CONFIG_DIR".into(), glab_directory.into_os_string());
+        environment.insert(
+            "GLAB_CONFIG_DIR".into(),
+            if config_directory == private_config {
+                glab_directory
+            } else {
+                config_directory.join("glab-cli")
+            }
+            .into_os_string(),
+        );
         environment.insert("GLAB_USE_KEYRING".into(), "false".into());
         // GCM otherwise defaults to Keychain on macOS. Its file store stays
         // inside this Orbit, matching Solar's explicit file-storage preference.
         environment.insert("GCM_CREDENTIAL_STORE".into(), "plaintext".into());
         environment.insert(
             "GCM_PLAINTEXT_STORE_PATH".into(),
-            gcm_store.into_os_string(),
+            if config_directory == private_config {
+                gcm_store
+            } else {
+                config_directory.join("gcm/store")
+            }
+            .into_os_string(),
         );
         environment.insert(
             "XDG_CONFIG_DIRS".into(),
@@ -169,7 +213,14 @@ impl ShellSession {
         environment.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
         environment.insert(
             "GIT_CONFIG_GLOBAL".into(),
-            git_directory.join("config").into_os_string(),
+            if home.join(".gitconfig").exists() {
+                home.join(".gitconfig")
+            } else if config_directory == private_config {
+                git_directory.join("config")
+            } else {
+                config_directory.join("git/config")
+            }
+            .into_os_string(),
         );
         environment.insert(
             "GIT_SSH_COMMAND".into(),
@@ -179,7 +230,7 @@ impl ShellSession {
             )
             .into(),
         );
-        initialize_shell_profiles(&home, &config_directory, &private_bin)?;
+        initialize_shell_profiles(&home, &private_config, &private_bin)?;
         Ok(Self {
             executable,
             family,
@@ -246,6 +297,46 @@ impl ShellSession {
     }
 }
 
+fn validate_shell_override(explicit: &str, context: &crate::ToolContext) -> Result<(), String> {
+    let path = Path::new(explicit);
+    if executable_family(path).is_none() {
+        return Err(
+            "Shell must be an absolute executable path to bash, zsh, sh, dash, ksh, or fish".into(),
+        );
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| "The requested shell is unavailable")?;
+    let account_default = current_account().and_then(|account| account.shell.canonicalize().ok());
+    if account_default.as_deref() == Some(canonical.as_path()) {
+        return Ok(());
+    }
+    let installed = [
+        "/bin",
+        "/usr/bin",
+        "/usr/local/bin",
+        "/usr/local/Cellar",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/Cellar",
+        "/opt/local/bin",
+        "/nix/store",
+        "/home/linuxbrew/.linuxbrew/bin",
+        "/home/linuxbrew/.linuxbrew/Cellar",
+    ]
+    .iter()
+    .any(|root| {
+        Path::new(root)
+            .canonicalize()
+            .is_ok_and(|root| canonical.starts_with(root))
+    });
+    if installed {
+        return Ok(());
+    }
+    crate::files::workspace_executable(explicit, context).map_err(|_| {
+        "Shell overrides must use the account default, an installed system shell, or an approved workspace executable".into()
+    })
+}
+
 fn safe_locale_key(key: &OsStr) -> bool {
     matches!(
         key.to_str(),
@@ -302,6 +393,15 @@ fn executable_path(
     std::env::join_paths(paths).map_err(|_| "Cannot construct the Sprite executable path".into())
 }
 
+fn workspace_alias(home: &Path, relative: &str, fallback: &Path) -> PathBuf {
+    let alias = home.join(relative);
+    if std::fs::symlink_metadata(&alias).is_ok() {
+        alias
+    } else {
+        fallback.to_owned()
+    }
+}
+
 fn initialize_shell_profiles(
     home: &Path,
     config_directory: &Path,
@@ -346,16 +446,35 @@ fn initialize_bash_profile(home: &Path, path_prefix: &str) -> Result<(), String>
 const SSH_KEYCHAIN_OPTIONS: &str = "-o IgnoreUnknown=UseKeychain -o UseKeychain=no";
 
 fn initialize_ssh(data_directory: &Path, home: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let ssh = managed_directory(&home.join(".ssh"))?;
-    let config = ssh.join("config");
+    let alias = home.join(".ssh");
+    let shared =
+        std::fs::symlink_metadata(&alias).is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let ssh = if shared {
+        alias
+    } else {
+        managed_directory(&alias)?
+    };
+    let shell = managed_subdirectory(data_directory, "shell")?;
+    // A shared .ssh may be read-only or lack a config file. Keep generated
+    // defaults private instead of adding files or changing shared modes.
+    let config = if shared {
+        if ssh.join("config").is_file() {
+            ssh.join("config")
+        } else {
+            shell.join("ssh_config")
+        }
+    } else {
+        ssh.join("config")
+    };
     let contents = format!(
         "# Solar's private SSH defaults.\nHost *\n    IdentityAgent none\n    IdentitiesOnly yes\n    IdentityFile {}\n    IdentityFile {}\n    UserKnownHostsFile {}\n    IgnoreUnknown UseKeychain\n    UseKeychain no\n",
         ssh_config_path(&ssh.join("id_ed25519"))?,
         ssh_config_path(&ssh.join("id_rsa"))?,
         ssh_config_path(&ssh.join("known_hosts"))?,
     );
-    write_private_file_if_missing(&config, contents.as_bytes(), 0o600)?;
-    let shell = managed_subdirectory(data_directory, "shell")?;
+    if !shared || config.starts_with(&shell) {
+        write_private_file_if_missing(&config, contents.as_bytes(), 0o600)?;
+    }
     let private_bin = managed_subdirectory(&shell, "bin")?;
     for name in ["ssh", "scp", "sftp"] {
         let executable = Path::new("/usr/bin").join(name);
@@ -794,6 +913,123 @@ fn current_account() -> Option<Account> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn production_shell_overrides_require_installation_or_workspace_authority() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let external = root.path().join("unshared");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&external).unwrap();
+        let custom = external.join("bash");
+        std::fs::write(&custom, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&custom, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut context = crate::ToolContext {
+            orbit_id: "override-test".into(),
+            data_directory: root.path().join("data"),
+            workspace: workspace.clone(),
+            allowed_roots: vec![external],
+            mounts: vec![],
+            denied_roots: vec![],
+            allow_host_execution: true,
+            screen_share_allowed: false,
+            cancellation: Default::default(),
+            progress: None,
+        };
+        assert!(
+            ShellSession::resolve_for_context(custom.to_str(), &context)
+                .err()
+                .unwrap()
+                .contains("Shell overrides")
+        );
+        let alias = workspace.join("bash");
+        symlink(&custom, &alias).unwrap();
+        assert!(ShellSession::resolve_for_context(alias.to_str(), &context).is_err());
+        context.mounts.push(crate::WorkspaceMount {
+            path: alias.clone(),
+            target: custom.canonicalize().unwrap(),
+            writable: false,
+        });
+        assert_eq!(
+            ShellSession::resolve_for_context(alias.to_str(), &context)
+                .unwrap()
+                .executable(),
+            alias.as_path()
+        );
+        assert!(validate_shell_override("/bin/sh", &context).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_profiles_and_config_are_live_aliases_and_never_rewritten_or_chmodded() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("sprite");
+        let home = data.join("workspace");
+        let config = root.path().join("shared-config");
+        let ssh = root.path().join("shared-ssh");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(config.join("git")).unwrap();
+        std::fs::create_dir_all(&ssh).unwrap();
+        let zshrc = root.path().join("shared-zshrc");
+        let git = config.join("git/config");
+        std::fs::write(&zshrc, "export SHARED_PROFILE=one\n").unwrap();
+        std::fs::write(&git, "[credential]\n helper = osxkeychain\n").unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host example\n HostName example.invalid\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&zshrc, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o444)).unwrap();
+        symlink(&config, home.join(".config")).unwrap();
+        symlink(&ssh, home.join(".ssh")).unwrap();
+        symlink(&zshrc, home.join(".zshrc")).unwrap();
+        let ssh_mode = std::fs::metadata(&ssh).unwrap().permissions().mode();
+        let config_mode = std::fs::metadata(&config).unwrap().permissions().mode();
+        let session = ShellSession::for_test("/bin/sh", &data, &home, vec![]).unwrap();
+        assert_eq!(session.config_directory, home.join(".config"));
+        assert_eq!(
+            environment_value(&session.environment, "XDG_CONFIG_HOME"),
+            Some(home.join(".config").as_os_str())
+        );
+        assert_eq!(
+            environment_value(&session.environment, "GLAB_CONFIG_DIR"),
+            Some(home.join(".config/glab-cli").as_os_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&zshrc).unwrap(),
+            "export SHARED_PROFILE=one\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&git).unwrap(),
+            "[credential]\n helper = osxkeychain\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ssh.join("config")).unwrap(),
+            "Host example\n HostName example.invalid\n"
+        );
+        assert_eq!(
+            std::fs::metadata(&ssh).unwrap().permissions().mode(),
+            ssh_mode
+        );
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode(),
+            config_mode
+        );
+        assert_eq!(
+            std::fs::metadata(&zshrc).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
+        assert_eq!(
+            std::fs::metadata(&git).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
+        assert_eq!(std::fs::read_link(home.join(".config")).unwrap(), config);
+        assert_eq!(std::fs::read_link(home.join(".ssh")).unwrap(), ssh);
+    }
 
     fn private_root() -> tempfile::TempDir {
         tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap()

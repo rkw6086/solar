@@ -14,6 +14,7 @@ import type {
   Orbit,
   Provider,
   Settings,
+  SharedFolder,
 } from "./types";
 
 export const native = isTauri();
@@ -32,6 +33,7 @@ function initialPreview(): PreviewState {
     orbits: [],
     providers: [],
     projects: [],
+    sharedFolders: [],
     conversations: [],
     routines: [],
     tasks: [],
@@ -335,6 +337,26 @@ async function previewCommand(
     }
     case "choose_project_directory":
       throw new Error("Folder selection is available in the desktop app. Paste a folder path to preview a project here.");
+    case "choose_shared_directory":
+      throw new Error("Folder selection is available in the desktop app. Paste a folder path to preview sharing here.");
+    case "discover_home_shares":
+      // The browser preview cannot inspect the computer's home directory.
+      return [];
+    case "save_shared_folder": {
+      const folder = args.folder as SharedFolder;
+      if (!folder.name.trim() || !folder.directory.trim()) throw new Error("Choose a folder and give it a name.");
+      const mountPath = folder.mountPath.trim() || `shared/${folder.id}`;
+      if (mountPath.startsWith("/") || mountPath.split(/[\\/]/).some(part => !part || part === "." || part === "..")) throw new Error("The workspace link must be a relative path without parent shortcuts.");
+      if (!folder.allSprites && !folder.orbitIds.length) throw new Error("Choose at least one Sprite, or share with all Sprites.");
+      const saved = { ...folder, name: folder.name.trim(), directory: folder.directory.trim(), mountPath };
+      preview.sharedFolders = replaceById(preview.sharedFolders ?? [], saved);
+      savePreview();
+      return saved;
+    }
+    case "delete_shared_folder":
+      preview.sharedFolders = (preview.sharedFolders ?? []).filter(folder => folder.id !== args.id);
+      savePreview();
+      return;
     case "resolve_project_directory":
       return previewProjectLocation(requiredString(args, "directory"));
     case "save_project": {
