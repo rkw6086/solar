@@ -5,6 +5,12 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+## [0.1.6]
+
+### Fixed
+
+- Recheck GitHub's temporary artifact deletion before declaring cleanup complete, allowing its API to catch up after a successful delete while still failing if artifacts remain.
+
 ## [0.1.5]
 
 ### Fixed

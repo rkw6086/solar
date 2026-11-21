@@ -13,9 +13,11 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import tempfile
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 import urllib.error
 import urllib.parse
@@ -111,6 +113,10 @@ class GitHub:
     def api_request(self, method, path, body=None, upload=None, missing_ok=False):
         headers = {"Authorization": "Bearer " + self.config.token,
                    "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10"}
+        if method == "GET":
+            # Release/retention decisions must not reuse an intermediary's
+            # cached response after a successful mutation.
+            headers.update({"Cache-Control": "no-cache", "Pragma": "no-cache"})
         url, data, stream = self.api + path, None, None
         if upload is not None:
             if method != "POST" or not re.fullmatch(r"/releases/[1-9][0-9]*/assets\?name=[A-Za-z0-9_.%-]+", path):
@@ -535,6 +541,25 @@ def cleanup_stage_tag(client, tag, commit):
         print("Internal beta staging ref cleanup deferred; verified public downloads remain available.")
 
 
+def confirm_artifact_deleted(client, artifact):
+    # GitHub's artifact metadata can briefly lag a successful DELETE. Poll
+    # only fresh GETs, never repeat the mutation or silently accept a failure.
+    for delay in (0, 0.5, 1, 2, 4, 8):
+        if delay:
+            time.sleep(delay)
+        path = f"/actions/artifacts/{artifact['id']}?solar_delete_check={secrets.token_hex(8)}"
+        remaining = client.request("GET", path, missing_ok=True)
+        if remaining is None:
+            return
+        if (remaining.get("id") != artifact["id"]
+                or remaining.get("name") != artifact["name"]
+                or remaining.get("workflow_run", {}).get("id") != artifact.get("workflow_run", {}).get("id")):
+            raise PublishError("Actions artifact identity changed while confirming deletion; no further writes made.")
+        if remaining.get("expired"):
+            return
+    raise PublishError("Actions artifact deletion was not confirmed after bounded fresh checks.")
+
+
 def prune_artifacts(client, before_delete=None):
     # Never touch PR outputs or artifacts from another workflow. The one-day
     # upload retention is the fallback if publication or cleanup is interrupted.
@@ -554,14 +579,13 @@ def prune_artifacts(client, before_delete=None):
         current = client.request("GET", f"/actions/artifacts/{artifact['id']}", missing_ok=True)
         if current is None or current.get("expired"):
             continue
-        if current.get("name") != artifact["name"] or current.get("workflow_run", {}).get("id") != run_id:
+        if (current.get("id") != artifact["id"] or current.get("name") != artifact["name"]
+                or current.get("workflow_run", {}).get("id") != run_id):
             raise PublishError("Actions artifact changed before cleanup.")
         if before_delete:
             before_delete()
         client.request("DELETE", f"/actions/artifacts/{artifact['id']}")
-        remaining = client.request("GET", f"/actions/artifacts/{artifact['id']}", missing_ok=True)
-        if remaining is not None and not remaining.get("expired"):
-            raise PublishError("Actions artifact deletion was not confirmed.")
+        confirm_artifact_deleted(client, current)
 
 
 def retain_latest(client):

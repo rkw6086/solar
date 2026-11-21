@@ -627,5 +627,77 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(opener.calls[0].get_header('Content-length'),str(self.dmg.stat().st_size))
 
 
+
+    def artifact_cleanup_with_lag(self, replies):
+        artifact = {'id': 42, 'name': 'solar-macos', 'expired': False, 'workflow_run': {'id': 123}}
+        self.client.artifacts[42] = copy.deepcopy(artifact)
+        self.client.runs[123] = {'status': 'completed', 'event': 'workflow_dispatch', 'path': '.github/workflows/build.yml'}
+        original = self.client.request
+        calls = []
+        pending = iter(replies)
+        def request(method, path, body=None, upload=None, missing_ok=False):
+            calls.append((method, path))
+            if method == 'GET' and path.startswith('/actions/artifacts/42?solar_delete_check='):
+                return next(pending)
+            return original(method, path, body, upload, missing_ok)
+        self.client.request = request
+        return artifact, calls
+
+    def test_artifact_cleanup_waits_for_fresh_deletion_without_repeating_delete(self):
+        stale = {'id': 42, 'name': 'solar-macos', 'expired': False, 'workflow_run': {'id': 123}}
+        _, calls = self.artifact_cleanup_with_lag([copy.deepcopy(stale), copy.deepcopy(stale), None])
+        with patch.object(MODULE.time, 'sleep') as sleep:
+            MODULE.prune_artifacts(self.client)
+        self.assertEqual(sum(method == 'DELETE' for method, _ in calls), 1)
+        reads = [path for method, path in calls if method == 'GET' and 'solar_delete_check=' in path]
+        self.assertEqual(len(reads), 3)
+        self.assertEqual(len(set(reads)), 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.5, 1])
+
+    def test_artifact_cleanup_accepts_expiry_after_a_stale_read(self):
+        stale = {'id': 42, 'name': 'solar-macos', 'expired': False, 'workflow_run': {'id': 123}}
+        expired = {**stale, 'expired': True}
+        _, calls = self.artifact_cleanup_with_lag([stale, expired])
+        with patch.object(MODULE.time, 'sleep'):
+            MODULE.prune_artifacts(self.client)
+        self.assertEqual(sum(method == 'DELETE' for method, _ in calls), 1)
+
+    def test_artifact_cleanup_fails_after_bounded_persistent_visibility(self):
+        stale = {'id': 42, 'name': 'solar-macos', 'expired': False, 'workflow_run': {'id': 123}}
+        _, calls = self.artifact_cleanup_with_lag([copy.deepcopy(stale) for _ in range(6)])
+        with patch.object(MODULE.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(MODULE.PublishError, 'not confirmed after bounded fresh checks'):
+                MODULE.prune_artifacts(self.client)
+        self.assertEqual(sum(method == 'DELETE' for method, _ in calls), 1)
+        self.assertEqual(sum('solar_delete_check=' in path for _, path in calls), 6)
+        self.assertEqual(sleep.call_count, 5)
+
+    def test_artifact_cleanup_stops_if_identity_changes_even_when_expired(self):
+        stale = {'id': 42, 'name': 'solar-macos', 'expired': False, 'workflow_run': {'id': 123}}
+        for change in [{'id': 43}, {'name': 'unrelated'}, {'workflow_run': {'id': 999}}]:
+            with self.subTest(change=change):
+                _, calls = self.artifact_cleanup_with_lag([{**stale, **change, 'expired': True}])
+                with patch.object(MODULE.time, 'sleep'):
+                    with self.assertRaisesRegex(MODULE.PublishError, 'identity changed'):
+                        MODULE.prune_artifacts(self.client)
+                self.assertEqual(sum(method == 'DELETE' for method, _ in calls), 1)
+
+    def test_authenticated_api_reads_disable_intermediary_caching(self):
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self,*args): self.close()
+        class Opener:
+            def __init__(self): self.request = None
+            def open(self, request, timeout):
+                self.request = request
+                return Response(b'{}')
+        opener = Opener()
+        client = MODULE.GitHub(self.config, opener)
+        client.api_request('GET', '/actions/artifacts/42?solar_delete_check=unique')
+        self.assertEqual(opener.request.get_header('Cache-control'), 'no-cache')
+        self.assertEqual(opener.request.get_header('Pragma'), 'no-cache')
+        self.assertTrue(opener.request.full_url.endswith('?solar_delete_check=unique'))
+
+
 if __name__ == '__main__':
     unittest.main()
