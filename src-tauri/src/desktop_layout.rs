@@ -28,6 +28,90 @@ pub(crate) struct Rect {
     pub height: f64,
 }
 
+/// The collapsed sun has exactly four resting places on its chosen display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DockCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+fn normalized_bounds(bounds: Rect) -> Rect {
+    Rect {
+        x: if bounds.x.is_finite() { bounds.x } else { 0.0 },
+        y: if bounds.y.is_finite() { bounds.y } else { 0.0 },
+        width: if bounds.width.is_finite() {
+            bounds.width.max(1.0)
+        } else {
+            SUN_SIZE
+        },
+        height: if bounds.height.is_finite() {
+            bounds.height.max(1.0)
+        } else {
+            SUN_SIZE
+        },
+    }
+}
+
+fn finite_offset(origin: f64, offset: f64) -> f64 {
+    let position = origin + offset;
+    if position.is_finite() {
+        position
+    } else {
+        origin
+    }
+}
+
+/// Return a flush corner position for the complete 192-point sun window.
+/// On a display smaller than that window, retain the requested edge alignment
+/// rather than adding padding or inventing a free-form resting position.
+pub(crate) fn corner_position(bounds: Rect, corner: DockCorner) -> (f64, f64) {
+    let bounds = normalized_bounds(bounds);
+    let right = finite_offset(bounds.x, bounds.width - SUN_SIZE);
+    let bottom = finite_offset(bounds.y, bounds.height - SUN_SIZE);
+    match corner {
+        DockCorner::TopLeft => (bounds.x, bounds.y),
+        DockCorner::TopRight => (right, bounds.y),
+        DockCorner::BottomLeft => (bounds.x, bottom),
+        DockCorner::BottomRight => (right, bottom),
+    }
+}
+
+/// Choose by sun-window position, with stable top/left preference for ties.
+pub(crate) fn nearest_corner(bounds: Rect, sun: (f64, f64)) -> DockCorner {
+    let bounds = normalized_bounds(bounds);
+    let sun = (
+        if sun.0.is_finite() {
+            sun.0
+        } else {
+            finite_offset(bounds.x, (bounds.width - SUN_SIZE) / 2.0)
+        },
+        if sun.1.is_finite() {
+            sun.1
+        } else {
+            finite_offset(bounds.y, (bounds.height - SUN_SIZE) / 2.0)
+        },
+    );
+    let mut closest = DockCorner::TopLeft;
+    let mut distance = f64::INFINITY;
+    for corner in [
+        DockCorner::TopLeft,
+        DockCorner::TopRight,
+        DockCorner::BottomLeft,
+        DockCorner::BottomRight,
+    ] {
+        let position = corner_position(bounds, corner);
+        let candidate = (sun.0 - position.0).hypot(sun.1 - position.1);
+        if candidate < distance {
+            closest = corner;
+            distance = candidate;
+        }
+    }
+    closest
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Layout {
     pub sun: (f64, f64),
@@ -72,20 +156,7 @@ pub(crate) fn orbit_layout_at(
     count: usize,
     elapsed_seconds: f64,
 ) -> Layout {
-    let bounds = Rect {
-        x: if bounds.x.is_finite() { bounds.x } else { 0.0 },
-        y: if bounds.y.is_finite() { bounds.y } else { 0.0 },
-        width: if bounds.width.is_finite() {
-            bounds.width.max(1.0)
-        } else {
-            SUN_SIZE
-        },
-        height: if bounds.height.is_finite() {
-            bounds.height.max(1.0)
-        } else {
-            SUN_SIZE
-        },
-    };
+    let bounds = normalized_bounds(bounds);
     let padding_x = EDGE_PADDING.min(((bounds.width - SUN_SIZE) / 2.0).max(0.0));
     let padding_y = EDGE_PADDING.min(((bounds.height - SUN_SIZE) / 2.0).max(0.0));
     let available_width = bounds.width - padding_x * 2.0;
@@ -190,6 +261,136 @@ mod tests {
 
     fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
         (a.0 - b.0).hypot(a.1 - b.1)
+    }
+
+    #[test]
+    fn collapsed_corners_are_flush_to_each_display_edge() {
+        for bounds in [
+            screen(),
+            Rect {
+                x: -1920.0,
+                y: -1080.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+        ] {
+            for corner in [
+                DockCorner::TopLeft,
+                DockCorner::TopRight,
+                DockCorner::BottomLeft,
+                DockCorner::BottomRight,
+            ] {
+                let position = corner_position(bounds, corner);
+                assert_inside(position, SUN_SIZE, bounds);
+                if matches!(corner, DockCorner::TopLeft | DockCorner::BottomLeft) {
+                    assert_eq!(position.0, bounds.x);
+                } else {
+                    assert_eq!(position.0 + SUN_SIZE, bounds.x + bounds.width);
+                }
+                if matches!(corner, DockCorner::TopLeft | DockCorner::TopRight) {
+                    assert_eq!(position.1, bounds.y);
+                } else {
+                    assert_eq!(position.1 + SUN_SIZE, bounds.y + bounds.height);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn release_position_selects_nearest_corner_with_stable_ties() {
+        let bounds = Rect {
+            x: -1000.0,
+            y: 200.0,
+            width: 1000.0,
+            height: 800.0,
+        };
+        for corner in [
+            DockCorner::TopLeft,
+            DockCorner::TopRight,
+            DockCorner::BottomLeft,
+            DockCorner::BottomRight,
+        ] {
+            let anchor = corner_position(bounds, corner);
+            assert_eq!(nearest_corner(bounds, anchor), corner);
+            let nearby = (anchor.0 + 12.0, anchor.1 + 12.0);
+            assert_eq!(nearest_corner(bounds, nearby), corner);
+        }
+        let center = (
+            bounds.x + (bounds.width - SUN_SIZE) / 2.0,
+            bounds.y + (bounds.height - SUN_SIZE) / 2.0,
+        );
+        assert_eq!(nearest_corner(bounds, center), DockCorner::TopLeft);
+        assert_eq!(
+            nearest_corner(bounds, (-9000.0, 9000.0)),
+            DockCorner::BottomLeft
+        );
+        assert_eq!(
+            nearest_corner(bounds, (9000.0, -9000.0)),
+            DockCorner::TopRight
+        );
+    }
+
+    #[test]
+    fn expansion_fits_every_path_without_changing_its_saved_corner() {
+        let bounds = Rect {
+            x: -1280.0,
+            y: 28.0,
+            width: 1280.0,
+            height: 772.0,
+        };
+        for corner in [
+            DockCorner::TopLeft,
+            DockCorner::TopRight,
+            DockCorner::BottomLeft,
+            DockCorner::BottomRight,
+        ] {
+            let saved = corner_position(bounds, corner);
+            for count in [1, 6, 18, 64] {
+                for seconds in [0.0, 30.0, 60.0, 90.0, 120.0] {
+                    let expanded = orbit_layout_at(bounds, saved, count, seconds);
+                    assert_ne!(expanded.sun, saved);
+                    assert_inside(expanded.sun, SUN_SIZE, bounds);
+                    for planet in expanded.planets {
+                        assert_inside(planet, PLANET_SIZE, bounds);
+                    }
+                    assert_eq!(corner_position(bounds, corner), saved);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn small_or_invalid_dock_bounds_keep_finite_edge_aligned_positions() {
+        let tiny = Rect {
+            x: -300.0,
+            y: -200.0,
+            width: 80.0,
+            height: 120.0,
+        };
+        assert_eq!(corner_position(tiny, DockCorner::TopLeft), (-300.0, -200.0));
+        assert_eq!(
+            corner_position(tiny, DockCorner::BottomRight),
+            (-412.0, -272.0)
+        );
+        for bounds in [
+            tiny,
+            Rect {
+                x: f64::NAN,
+                y: f64::INFINITY,
+                width: -10.0,
+                height: f64::NAN,
+            },
+            Rect {
+                x: f64::MAX,
+                y: f64::MAX,
+                width: f64::MAX,
+                height: f64::MAX,
+            },
+        ] {
+            let corner = nearest_corner(bounds, (f64::NAN, f64::INFINITY));
+            let position = corner_position(bounds, corner);
+            assert!(position.0.is_finite() && position.1.is_finite());
+        }
     }
 
     #[test]

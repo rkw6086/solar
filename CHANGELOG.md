@@ -7,6 +7,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Added
 
+- Four-corner desktop docking: the collapsed sun sits flush against the usable screen edge, moves inward on expansion, and returns to its saved corner when gathered.
 - Manual clean macOS build checks with pinned Rust tooling and visible native compiler diagnostics.
 - More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
 - A larger visiting rocket, a passing comet, and a friendly flying saucer around the idle sun, with quiet, occasional animations and reduced-motion support.

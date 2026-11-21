@@ -22,6 +22,19 @@ static COMPANIONS_HIDDEN: AtomicBool = AtomicBool::new(false);
 static QUITTING: AtomicBool = AtomicBool::new(false);
 static ANIMATING: AtomicBool = AtomicBool::new(false);
 static ANIMATION_EPOCH: AtomicU64 = AtomicU64::new(0);
+static SUN_DRAGGING: AtomicBool = AtomicBool::new(false);
+static RELAYOUT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SUN_DRAG_MOVED_AT: LazyLock<Mutex<std::time::Instant>> =
+    LazyLock::new(|| Mutex::new(std::time::Instant::now()));
+static SUN_ANCHOR: LazyLock<Mutex<Option<SunAnchor>>> = LazyLock::new(|| Mutex::new(None));
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SunAnchor {
+    corner: crate::desktop_layout::DockCorner,
+    monitor_name: Option<String>,
+    monitor_origin: (i32, i32),
+}
+
 static ORBIT_MOTION: LazyLock<Mutex<crate::desktop_motion::MotionState>> =
     LazyLock::new(|| Mutex::new(crate::desktop_motion::MotionState::default()));
 static READY_WIDGETS: LazyLock<Mutex<std::collections::HashSet<String>>> =
@@ -108,7 +121,10 @@ fn start_orbital_clock(app: tauri::AppHandle) {
             if QUITTING.load(Ordering::SeqCst) {
                 return;
             }
-            if !EXPANDED.load(Ordering::SeqCst) || ANIMATING.load(Ordering::SeqCst) {
+            if !EXPANDED.load(Ordering::SeqCst)
+                || ANIMATING.load(Ordering::SeqCst)
+                || SUN_DRAGGING.load(Ordering::SeqCst)
+            {
                 continue;
             }
             let tick_app = app.clone();
@@ -477,7 +493,8 @@ pub(crate) fn set_desktop_expanded(
     }
     ensure_sun(&app)?;
     // Duplicate state updates must not restart an in-flight transition.
-    if EXPANDED.load(Ordering::SeqCst) == expanded {
+    let relayout = RELAYOUT_REQUESTED.swap(false, Ordering::SeqCst);
+    if EXPANDED.load(Ordering::SeqCst) == expanded && !relayout {
         return Ok(());
     }
     EXPANDED.store(expanded, Ordering::SeqCst);
@@ -488,7 +505,7 @@ pub(crate) fn set_desktop_expanded(
         let sun = app
             .get_webview_window("sun")
             .ok_or("Desktop sun is unavailable")?;
-        let (bounds, formation_scale) = desktop_screen(&app, &sun);
+        let (bounds, formation_scale, anchor_point) = anchored_geometry(&app)?;
         let sun_position = sun
             .outer_position()
             .map_err(|e| e.to_string())?
@@ -506,11 +523,14 @@ pub(crate) fn set_desktop_expanded(
                 std::time::Instant::now(),
             );
         }
-        let layout = crate::desktop_layout::orbit_layout(
-            bounds,
-            (sun_position.x, sun_position.y),
-            if expanded { orbits.len() } else { 0 },
-        );
+        let layout = if expanded {
+            crate::desktop_layout::orbit_layout(bounds, anchor_point, orbits.len())
+        } else {
+            crate::desktop_layout::Layout {
+                sun: anchor_point,
+                planets: Vec::new(),
+            }
+        };
         let sun_start = (sun_position.x, sun_position.y);
         let sun_target = layout.sun;
         let origin = if expanded {
@@ -833,6 +853,8 @@ pub(crate) fn attention_is_visible(app: &tauri::AppHandle, item: &AttentionItem)
 }
 
 fn hide_companions(app: &tauri::AppHandle) {
+    SUN_DRAGGING.store(false, Ordering::SeqCst);
+    RELAYOUT_REQUESTED.store(false, Ordering::SeqCst);
     SUN_REQUESTED.store(false, Ordering::SeqCst);
     EXPANDED.store(false, Ordering::SeqCst);
     ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst);
@@ -887,38 +909,183 @@ fn show_launcher(app: &tauri::AppHandle) -> Result<(), String> {
     window.set_focus().map_err(|e| e.to_string())
 }
 
-fn desktop_screen(
+fn monitor_geometry(monitor: &tauri::Monitor) -> (crate::desktop_layout::Rect, f64) {
+    let scale = monitor.scale_factor();
+    let area = monitor.work_area();
+    (
+        crate::desktop_layout::Rect {
+            x: f64::from(area.position.x) / scale,
+            y: f64::from(area.position.y) / scale,
+            width: f64::from(area.size.width) / scale,
+            height: f64::from(area.size.height) / scale,
+        },
+        scale,
+    )
+}
+
+fn fallback_geometry() -> (crate::desktop_layout::Rect, f64) {
+    (
+        crate::desktop_layout::Rect {
+            x: 0.0,
+            y: 28.0,
+            width: 1440.0,
+            height: 872.0,
+        },
+        1.0,
+    )
+}
+
+fn anchor_for_monitor(
+    monitor: Option<&tauri::Monitor>,
+    corner: crate::desktop_layout::DockCorner,
+) -> SunAnchor {
+    SunAnchor {
+        corner,
+        monitor_name: monitor.and_then(|monitor| monitor.name().cloned()),
+        monitor_origin: monitor
+            .map(|monitor| (monitor.position().x, monitor.position().y))
+            .unwrap_or((0, 0)),
+    }
+}
+
+fn load_sun_anchor(app: &tauri::AppHandle) -> Result<SunAnchor, String> {
+    let mut saved = SUN_ANCHOR
+        .lock()
+        .map_err(|_| "Desktop anchor is unavailable")?;
+    if let Some(anchor) = &*saved {
+        return Ok(anchor.clone());
+    }
+    let engine = app.state::<Arc<Engine>>();
+    let anchor = if let Some(anchor) = engine.store.get::<SunAnchor>("desktop", "sun_anchor")? {
+        anchor
+    } else {
+        let old = engine.store.get::<(f64, f64)>("desktop", "sun")?;
+        let monitors = app.available_monitors().unwrap_or_default();
+        let monitor = old
+            .and_then(|point| {
+                monitors.iter().find(|monitor| {
+                    let (bounds, _) = monitor_geometry(monitor);
+                    point.0 + 96.0 >= bounds.x
+                        && point.0 + 96.0 < bounds.x + bounds.width
+                        && point.1 + 96.0 >= bounds.y
+                        && point.1 + 96.0 < bounds.y + bounds.height
+                })
+            })
+            .cloned()
+            .or_else(|| app.primary_monitor().ok().flatten());
+        let (bounds, _) = monitor
+            .as_ref()
+            .map(monitor_geometry)
+            .unwrap_or_else(fallback_geometry);
+        let corner = old
+            .map(|point| crate::desktop_layout::nearest_corner(bounds, point))
+            .unwrap_or(crate::desktop_layout::DockCorner::BottomRight);
+        let anchor = anchor_for_monitor(monitor.as_ref(), corner);
+        engine.store.put("desktop", "sun_anchor", &anchor)?;
+        anchor
+    };
+    *saved = Some(anchor.clone());
+    Ok(anchor)
+}
+
+fn anchored_geometry(
     app: &tauri::AppHandle,
-    sun: &tauri::WebviewWindow,
-) -> (crate::desktop_layout::Rect, f64) {
+) -> Result<(crate::desktop_layout::Rect, f64, (f64, f64)), String> {
+    let anchor = load_sun_anchor(app)?;
+    let monitors = app.available_monitors().unwrap_or_default();
+    let monitor = monitors
+        .iter()
+        .find(|monitor| {
+            (monitor.position().x, monitor.position().y) == anchor.monitor_origin
+                && monitor.name().cloned() == anchor.monitor_name
+        })
+        .or_else(|| {
+            monitors.iter().find(|monitor| {
+                anchor.monitor_name.is_some() && monitor.name().cloned() == anchor.monitor_name
+            })
+        })
+        .cloned()
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let (bounds, scale) = monitor
+        .as_ref()
+        .map(monitor_geometry)
+        .unwrap_or_else(fallback_geometry);
+    let point = crate::desktop_layout::corner_position(bounds, anchor.corner);
+    Ok((bounds, scale, point))
+}
+
+fn finish_sun_drag(app: &tauri::AppHandle) -> Result<(), String> {
+    if !SUN_DRAGGING.swap(false, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let sun = app
+        .get_webview_window("sun")
+        .ok_or("Desktop sun is unavailable")?;
     let monitor = sun
         .current_monitor()
         .ok()
         .flatten()
         .or_else(|| app.primary_monitor().ok().flatten());
-    if let Some(monitor) = monitor {
-        let scale = monitor.scale_factor();
-        let area = monitor.work_area();
-        (
-            crate::desktop_layout::Rect {
-                x: f64::from(area.position.x) / scale,
-                y: f64::from(area.position.y) / scale,
-                width: f64::from(area.size.width) / scale,
-                height: f64::from(area.size.height) / scale,
-            },
-            scale,
-        )
-    } else {
-        (
-            crate::desktop_layout::Rect {
-                x: 0.0,
-                y: 28.0,
-                width: 1440.0,
-                height: 872.0,
-            },
-            1.0,
-        )
+    let (bounds, scale) = monitor
+        .as_ref()
+        .map(monitor_geometry)
+        .unwrap_or_else(fallback_geometry);
+    let point = sun
+        .outer_position()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let anchor = anchor_for_monitor(
+        monitor.as_ref(),
+        crate::desktop_layout::nearest_corner(bounds, (point.x, point.y)),
+    );
+    let engine = app.state::<Arc<Engine>>();
+    engine.store.put("desktop", "sun_anchor", &anchor)?;
+    *SUN_ANCHOR
+        .lock()
+        .map_err(|_| "Desktop anchor is unavailable")? = Some(anchor);
+    RELAYOUT_REQUESTED.store(true, Ordering::SeqCst);
+    set_desktop_expanded(app.clone(), engine, EXPANDED.load(Ordering::SeqCst))
+}
+
+#[tauri::command]
+fn begin_desktop_sun_drag(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "sun" {
+        return Err("Only the sun moves the desktop system".into());
     }
+    load_sun_anchor(window.app_handle())?;
+    ANIMATION_EPOCH.fetch_add(1, Ordering::SeqCst);
+    ANIMATING.store(false, Ordering::SeqCst);
+    SUN_DRAGGING.store(true, Ordering::SeqCst);
+    *SUN_DRAG_MOVED_AT
+        .lock()
+        .map_err(|_| "Desktop drag state is unavailable")? = std::time::Instant::now();
+    if let Err(error) = window.start_dragging() {
+        SUN_DRAGGING.store(false, Ordering::SeqCst);
+        RELAYOUT_REQUESTED.store(true, Ordering::SeqCst);
+        let app = window.app_handle();
+        let _ = set_desktop_expanded(app.clone(), app.state(), EXPANDED.load(Ordering::SeqCst));
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn snap_desktop_sun(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "sun" {
+        return Err("Only the sun moves the desktop system".into());
+    }
+    if let Some((buttons, _)) = crate::desktop_popup::pointer_state() {
+        if buttons & 1 != 0 {
+            return Ok(());
+        }
+    } else if SUN_DRAG_MOVED_AT
+        .lock()
+        .map(|last| last.elapsed() < Duration::from_millis(400))
+        .unwrap_or(true)
+    {
+        return Ok(());
+    }
+    finish_sun_drag(window.app_handle())
 }
 
 fn position_window(
@@ -938,28 +1105,27 @@ fn position_window(
 }
 
 fn align_companions(app: &tauri::AppHandle) -> Result<(), String> {
-    if ANIMATING.load(Ordering::SeqCst) || launcher_open(app) {
+    if ANIMATING.load(Ordering::SeqCst) || SUN_DRAGGING.load(Ordering::SeqCst) || launcher_open(app)
+    {
         return Ok(());
     }
     let Some(sun) = app.get_webview_window("sun") else {
         return Ok(());
     };
-    let (bounds, formation_scale) = desktop_screen(app, &sun);
+    let (bounds, formation_scale, anchor_point) = anchored_geometry(app)?;
     let (orbits, elapsed) = ORBIT_MOTION
         .lock()
         .map(|motion| (motion.roster.clone(), motion.elapsed.as_secs_f64()))
         .map_err(|_| "Desktop motion is unavailable")?;
-    let p = sun
-        .outer_position()
-        .map_err(|e| e.to_string())?
-        .to_logical::<f64>(formation_scale);
     let expanded = EXPANDED.load(Ordering::SeqCst);
-    let layout = crate::desktop_layout::orbit_layout_at(
-        bounds,
-        (p.x, p.y),
-        if expanded { orbits.len() } else { 0 },
-        elapsed,
-    );
+    let layout = if expanded {
+        crate::desktop_layout::orbit_layout_at(bounds, anchor_point, orbits.len(), elapsed)
+    } else {
+        crate::desktop_layout::Layout {
+            sun: anchor_point,
+            planets: Vec::new(),
+        }
+    };
     position_window(&sun, layout.sun, formation_scale)?;
     if expanded {
         for (orbit, target) in orbits.iter().zip(layout.planets) {
@@ -1003,7 +1169,11 @@ fn create_companion(
     y: f64,
 ) -> Result<(), String> {
     let size = if label == "sun" { 192.0 } else { 112.0 };
-    let (x, y) = clamp_to_screen(app, x, y, size, size);
+    let (x, y) = if label == "sun" {
+        (x, y)
+    } else {
+        clamp_to_screen(app, x, y, size, size)
+    };
     READY_WIDGETS
         .lock()
         .map_err(|_| "Widget state unavailable")?
@@ -1062,21 +1232,16 @@ fn create_companion(
             motion.hover(&owned_label, false, now);
             motion.hover(&format!("focus:{owned_label}"), false, now);
         }
-        if (owned_label == "sun" && matches!(event, WindowEvent::Moved(_)))
-            || matches!(event, WindowEvent::ScaleFactorChanged { .. })
-        {
-            let _ = align_companions(&app_for_event);
-            if owned_label == "sun" {
-                if let (Some(engine), Some(sun)) = (
-                    app_for_event.try_state::<Arc<Engine>>(),
-                    app_for_event.get_webview_window("sun"),
-                ) {
-                    if let (Ok(point), Ok(scale)) = (sun.outer_position(), sun.scale_factor()) {
-                        let point = point.to_logical::<f64>(scale);
-                        let _ = engine.store.put("desktop", "sun", &(point.x, point.y));
-                    }
+        if owned_label == "sun" && matches!(event, WindowEvent::Moved(_)) {
+            if SUN_DRAGGING.load(Ordering::SeqCst) {
+                if let Ok(mut moved) = SUN_DRAG_MOVED_AT.lock() {
+                    *moved = std::time::Instant::now();
                 }
+            } else {
+                let _ = align_companions(&app_for_event);
             }
+        } else if matches!(event, WindowEvent::ScaleFactorChanged { .. }) {
+            let _ = align_companions(&app_for_event);
         }
     });
     Ok(())
@@ -1101,31 +1266,19 @@ pub(crate) fn ensure_sun(app: &tauri::AppHandle) -> Result<(), String> {
             .map_err(|_| "Widget state unavailable")?
             .contains("sun")
         {
+            if !EXPANDED.load(Ordering::SeqCst)
+                && !ANIMATING.load(Ordering::SeqCst)
+                && !SUN_DRAGGING.load(Ordering::SeqCst)
+                && !RELAYOUT_REQUESTED.load(Ordering::SeqCst)
+            {
+                let (_, scale, point) = anchored_geometry(app)?;
+                position_window(&window, point, scale)?;
+            }
             window.show().map_err(|e| e.to_string())?;
         }
         return Ok(());
     }
-    let saved = app
-        .state::<Arc<Engine>>()
-        .store
-        .get::<(f64, f64)>("desktop", "sun")
-        .ok()
-        .flatten();
-    let (x, y) = saved.unwrap_or_else(|| {
-        app.primary_monitor()
-            .ok()
-            .flatten()
-            .map(|m| {
-                let area = m.work_area();
-                let scale = m.scale_factor();
-                (
-                    f64::from(area.position.x) / scale + f64::from(area.size.width) / scale - 235.0,
-                    f64::from(area.position.y) / scale + f64::from(area.size.height) / scale
-                        - 245.0,
-                )
-            })
-            .unwrap_or((100.0, 100.0))
-    });
+    let (_, _, (x, y)) = anchored_geometry(app)?;
     create_companion(app, "sun", "sun", x, y)
 }
 
@@ -1260,6 +1413,19 @@ pub fn run() {
                         };
                         #[cfg(target_os = "macos")]
                         let had_widget_hover = pointer_hover.values().any(|hovered| *hovered);
+                        if SUN_DRAGGING.load(Ordering::SeqCst) {
+                            let released = crate::desktop_popup::pointer_state()
+                                .map(|(buttons, _)| buttons & 1 == 0)
+                                .unwrap_or_else(|| {
+                                    SUN_DRAG_MOVED_AT
+                                        .lock()
+                                        .map(|last| last.elapsed() >= Duration::from_millis(400))
+                                        .unwrap_or(false)
+                                });
+                            if released {
+                                let _ = finish_sun_drag(&frame_app);
+                            }
+                        }
                         let mut inside_companions = false;
                         let mut chat_open = false;
                         let windows = frame_app.webview_windows();
@@ -1338,6 +1504,9 @@ pub fn run() {
                                     && !main.is_minimized().unwrap_or(false);
                                 if open != launcher_open(&visibility_app) {
                                     set_launcher_presence(&visibility_app, open);
+                                }
+                                if !open && !EXPANDED.load(Ordering::SeqCst) {
+                                    let _ = align_companions(&visibility_app);
                                 }
                             }
                         });
@@ -1471,6 +1640,8 @@ pub fn run() {
             open_external_url,
             open_full_chat,
             desktop_interaction,
+            begin_desktop_sun_drag,
+            snap_desktop_sun,
             popup_ready,
             set_desktop_expanded,
             toggle_desktop_expanded,

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LoaderCircle, Sun } from "lucide-react";
 import { api, native } from "./api";
 import { useSolar } from "./useSolar";
@@ -33,9 +32,9 @@ function useCharacterDrag() {
     ) {
       dragged.current = true;
       start.current = null;
-      void getCurrentWindow()
-        .startDragging()
-        .catch(() => {});
+      void api("begin_desktop_sun_drag")
+        .catch(() => {})
+        .finally(() => { void api("snap_desktop_sun").catch(() => {}); });
     }
   }
   function wasClick() {
