@@ -18,6 +18,8 @@ class BuildLogTests(unittest.TestCase):
             "(node:123) [DEP0005] DeprecationWarning: Buffer() is deprecated",
             "(node:123) ExperimentalWarning: experimental API",
             "(!) Some chunks are larger than 500 kB after minification.",
+            "        Warn --no-sign flag detected: Signing will be skipped.",
+            "       Error failed to build application",
             "\x1b[33mwarning:\x1b[0m unused variable",
         ]
         self.assertEqual(len(build_log.diagnostics("\n".join(lines))), len(lines))

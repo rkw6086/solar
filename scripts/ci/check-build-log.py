@@ -6,7 +6,7 @@ import sys
 
 DIAGNOSTIC = re.compile(
     r"\b(?:warning(?:\[[^\]]+\])?|error(?:\[[^\]]+\])?|"
-    r"DeprecationWarning|ExperimentalWarning):|^\s*\(!\)",
+    r"DeprecationWarning|ExperimentalWarning):|^\s*\(!\)|^\s*(?:Warn|Error)\s",
     re.IGNORECASE,
 )
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")

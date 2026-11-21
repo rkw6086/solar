@@ -42,5 +42,5 @@ jobs:
           set -euo pipefail
           [[ ! -e "$CARGO_TARGET_DIR" ]] || { echo 'Clean build target already exists.' >&2; exit 1; }
           cargo fmt --all -- --check
-          corepack pnpm tauri build --ci --target aarch64-apple-darwin --no-bundle --no-sign -- --locked 2>&1 | tee "$RUNNER_TEMP/solar-clean-build.log"
+          corepack pnpm tauri build --ci --target aarch64-apple-darwin --no-bundle -- --locked 2>&1 | tee "$RUNNER_TEMP/solar-clean-build.log"
           python3 scripts/ci/check-build-log.py "$RUNNER_TEMP/solar-clean-build.log"
