@@ -441,8 +441,8 @@ export function GroupForm({
         onSubmit={(event) => {
           event.preventDefault();
           void status.submit(async () => {
-            if (!participants.length)
-              throw new Error("Choose at least one Sprite.");
+            if (participants.length < 2)
+              throw new Error("Choose at least two Sprites for a group chat.");
             const conversation = await api<Conversation>(
               "create_conversation",
               {
@@ -525,7 +525,7 @@ export function GroupForm({
             </select>
           </label>
         </div>
-        <FormFooter {...status} label="Start conversation" onClose={onClose} />
+        <FormFooter {...status} label="Create group" onClose={onClose} />
       </form>
     </Modal>
   );

@@ -207,7 +207,7 @@ export function Chat({
           <button
             className="icon-button"
             onClick={onBack}
-            aria-label="Back to conversations"
+            aria-label="Back to Solar system"
           >
             <ArrowLeft size={18} />
           </button>

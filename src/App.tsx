@@ -55,6 +55,7 @@ import { SharedFoldersPanel } from "./components/SharedFoldersPanel";
 import { SolarSystem } from "./components/SolarSystem";
 import { Modal } from "./components/Modal";
 import { Chat } from "./components/Chat";
+import { conversationSidebar } from "./components/conversationSidebar";
 import { ResetSolar } from "./components/ResetSolar";
 import {
   GroupForm,
@@ -69,7 +70,7 @@ import {
 type Page =
   | "home"
   | "orbits"
-  | "conversations"
+  | "chat"
   | "projects"
   | "connections"
   | "memory"
@@ -91,7 +92,6 @@ type Dialog =
 const navigation: { id: Page; label: string; icon: typeof Sun }[] = [
   { id: "home", label: "Solar system", icon: Sun },
   { id: "orbits", label: "Your Sprites", icon: OrbitIcon },
-  { id: "conversations", label: "Conversations", icon: MessageCircle },
   { id: "projects", label: "Projects", icon: Folder },
   { id: "memory", label: "Memory", icon: Layers3 },
   { id: "routines", label: "Routines", icon: Clock3 },
@@ -169,6 +169,10 @@ export function App() {
     (conversation) => conversation.id === conversationId,
   );
   const running = data.tasks.filter(activeTask);
+  const sidebarChats = conversationSidebar(data.orbits, data.conversations);
+  const canCreateGroup = data.orbits.filter(orbit => orbit.enabled).length >= 2;
+  const currentParticipants = [...new Set(currentConversation?.orbitIds ?? [])];
+  const selectedDirectOrbit = page === "chat" && currentParticipants.length === 1 ? currentParticipants[0] : undefined;
   const pendingLoginKey = Object.entries(logins)
     .filter(([, value]) => value.pending)
     .map(([providerId]) => providerId)
@@ -182,7 +186,7 @@ export function App() {
     void listen<{ conversationId: string }>(
       "solar://navigate",
       ({ payload }) => {
-        setPage("conversations");
+        setPage("chat");
         setConversationId(payload.conversationId);
         void refresh();
       },
@@ -320,11 +324,7 @@ export function App() {
   }
   async function startChat(orbit: Orbit) {
     try {
-      const previous = data.conversations.find(
-        (conversation) =>
-          conversation.orbitIds.length === 1 &&
-          conversation.orbitIds[0] === orbit.id,
-      );
+      const previous = selectedDirectOrbit === orbit.id ? currentConversation : sidebarChats.directMessages.find(item => item.orbit.id === orbit.id)?.conversation;
       const conversation =
         previous ??
         (await api<Conversation>("create_conversation", {
@@ -333,7 +333,7 @@ export function App() {
           title: orbit.name,
           projectId: undefined,
         }));
-      setPage("conversations");
+      setPage("chat");
       setConversationId(conversation.id);
       await refresh();
     } catch (failure) {
@@ -422,66 +422,86 @@ export function App() {
             solar<span className="brand-dot">.</span>
           </span>
         </button>
-        <div className="workspace-chip">
-          <span className="workspace-avatar">Y</span>
-          <span>
-            Your workspace<small>Local · Personal</small>
-          </span>
-          <LockKeyhole size={13} />
-        </div>
-        <span className="nav-label">WORKSPACE</span>
-        <nav aria-label="Workspace navigation">
-          {navigation.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              aria-label={label}
-              className={`nav-item ${page === id ? "selected" : ""}`}
-              onClick={() => go(id)}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-              {id === "orbits" && (
-                <span className="nav-count">{data.orbits.length}</span>
-              )}
-
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-team">
-          <div className="sidebar-section-heading">
-            <span className="nav-label">YOUR TEAM</span>
-            <button
-              className="icon-button"
-              onClick={() => setDialog({ kind: "orbit" })}
-              title="Create a Sprite"
-              aria-label="Create a Sprite"
-            >
-              <Plus size={15} />
-            </button>
+        <div className="sidebar-scroll" role="region" tabIndex={0} aria-label="Workspace and chats">
+          <div className="workspace-chip">
+            <span className="workspace-avatar">Y</span>
+            <span>
+              Your workspace<small>Local · Personal</small>
+            </span>
+            <LockKeyhole size={13} />
           </div>
-          {data.orbits.slice(0, 5).map((orbit) => (
+          <span className="nav-label">WORKSPACE</span>
+          <nav aria-label="Workspace navigation">
+            {navigation.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                aria-label={label}
+                className={`nav-item ${page === id ? "selected" : ""}`}
+                onClick={() => go(id)}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+                {id === "orbits" && (
+                  <span className="nav-count">{data.orbits.length}</span>
+                )}
+
+              </button>
+            ))}
+          </nav>
+          <section className="sidebar-chats" aria-label="Chats">
+            <h2 className="sidebar-chat-heading">Direct messages</h2>
+            <nav className="sidebar-chat-list" aria-label="Direct messages">
+              {sidebarChats.directMessages.map(({ orbit }) => (
+                <button
+                  className={`sidebar-chat ${selectedDirectOrbit === orbit.id ? "selected" : ""}`}
+                  aria-label={`Chat with ${orbit.name}`}
+                  aria-current={selectedDirectOrbit === orbit.id ? "page" : undefined}
+                  title={orbit.name}
+                  key={orbit.id}
+                  onClick={() => void startChat(orbit)}
+                >
+                  <Planet identity={orbit.avatarSeed || orbit.id} color={orbit.color} name={orbit.name} size={32} />
+                  <span className="sidebar-chat-name">{orbit.name}</span>
+                  <span aria-hidden="true" className={`tiny-dot ${running.some(task => task.orbitId === orbit.id) ? "working" : ""}`} />
+                </button>
+              ))}
+            </nav>
+            {!sidebarChats.directMessages.length && (
+              <button className="sidebar-chat sidebar-chat-add" aria-label="Create your first Sprite" onClick={() => setDialog({ kind: "orbit" })}>
+                <Plus size={18} />
+                <span className="sidebar-chat-name">Create your first Sprite</span>
+              </button>
+            )}
+            <div className="sidebar-chat-divider" role="separator" />
+            <h2 className="sidebar-chat-heading">Groups</h2>
+            <nav className="sidebar-chat-list" aria-label="Group chats">
+              {sidebarChats.groups.map(conversation => (
+                <button
+                  className={`sidebar-chat ${page === "chat" && conversation.id === conversationId ? "selected" : ""}`}
+                  aria-current={page === "chat" && conversation.id === conversationId ? "page" : undefined}
+                  aria-label={`Open group ${conversation.title || "Group chat"}`}
+                  title={conversation.title || "Group chat"}
+                  key={conversation.id}
+                  onClick={() => { setPage("chat"); setConversationId(conversation.id); setSearch(""); }}
+                >
+                  <span className="sidebar-group-avatar" aria-hidden="true"><Users size={16} /></span>
+                  <span className="sidebar-chat-name">{conversation.title || "Group chat"}</span>
+                  {running.some(task => task.conversationId === conversation.id) && <span aria-hidden="true" className="tiny-dot working" />}
+                </button>
+              ))}
+            </nav>
+            {!sidebarChats.groups.length && <p className="sidebar-chat-empty">No group chats yet</p>}
             <button
-              className="sidebar-orbit"
-              aria-label={`Chat with ${orbit.name}`}
-              key={orbit.id}
-              onClick={() => void startChat(orbit)}
+              className="sidebar-chat sidebar-chat-add"
+              onClick={() => setDialog({ kind: "group" })}
+              disabled={!canCreateGroup}
+              aria-label="New group"
+              title={canCreateGroup ? "Create a group chat" : "Create at least two enabled Sprites to start a group"}
             >
-              <Planet identity={orbit.avatarSeed || orbit.id} color={orbit.color} name={orbit.name} size={32} />
-              <span>{orbit.name}</span>
-              <span
-                className={`tiny-dot ${running.some((task) => task.orbitId === orbit.id) ? "working" : ""}`}
-              />
+              <Plus size={17} />
+              <span className="sidebar-chat-name">New group</span>
             </button>
-          ))}
-          {!data.orbits.length && (
-            <button
-              className="sidebar-orbit"
-              onClick={() => setDialog({ kind: "orbit" })}
-            >
-              <Plus size={18} />
-              <span>Create your first Sprite</span>
-            </button>
-          )}
+          </section>
         </div>
         <div className="sidebar-bottom">
           <button
@@ -519,7 +539,7 @@ export function App() {
             Workspace
             <ChevronRight size={12} />
             <span>
-              {navigation.find((item) => item.id === page)?.label ??
+              {page === "chat" ? currentConversation?.title || "Chat" : navigation.find((item) => item.id === page)?.label ??
                 (page === "connections" ? "Connections" : "Settings")}
             </span>
           </div>
@@ -535,7 +555,7 @@ export function App() {
               onClick={() => {
                 const pending = data.approvals[0];
                 const task = data.tasks.find(task => task.id === pending?.taskId);
-                if (task) { setPage("conversations"); setConversationId(task.conversationId); }
+                if (task) { setPage("chat"); setConversationId(task.conversationId); }
               }}
             >
               <Bell size={17} />
@@ -839,82 +859,22 @@ export function App() {
                 </div>
               </div>
             )}
-            {page === "conversations" &&
-              (currentConversation ? (
-                <Chat
-                  conversation={currentConversation}
-                  data={data}
-                  onBack={() => setConversationId(null)}
-                  onConnections={() => go("connections")}
-                  onOrbitChanged={() => { setConversationId(null); void refresh(); }}
-                />
-              ) : (
-                <div className="page-content">
-                  <PageHeading
-                    title="Conversations"
-                    description="Pick up where you left off, with one Sprite or the whole team."
-                  >
-                    <button
-                      className="button button-primary"
-                      disabled={!data.orbits.length}
-                      onClick={() => setDialog({ kind: "group" })}
-                    >
-                      <Plus size={16} />
-                      New group chat
-                    </button>
-                  </PageHeading>
-                  <SolarSystem
-                    orbits={data.orbits}
-                    onSelectOrbit={(orbit) => void startChat(orbit)}
-                    onCreateOrbit={() => setDialog({ kind: "orbit" })}
-                    reducedMotion={data.settings.reducedMotion}
-                    compact
-                  />
-                  {data.conversations.length ? (
-                    <div className="conversation-list">
-                      {data.conversations.map((conversation) => (
-                        <button
-                          key={conversation.id}
-                          className="conversation-row"
-                          onClick={() => setConversationId(conversation.id)}
-                        >
-                          <div className="conversation-planets">
-                            {conversation.orbitIds
-                              .slice(0, 3)
-                              .map((orbitId) => (
-                                <Planet
-                                  identity={data.orbits.find((orbit) => orbit.id === orbitId)?.avatarSeed || orbitId}
-                                  key={orbitId}
-                                  color={
-                                    data.orbits.find(
-                                      (orbit) => orbit.id === orbitId,
-                                    )?.color
-                                  }
-                                  size={43}
-                                />
-                              ))}
-                          </div>
-                          <div>
-                            <h3>{conversation.title}</h3>
-                            <p>
-                              {conversation.orbitIds.map(orbitName).join(", ")}
-                            </p>
-                          </div>
-                          <time>
-                            {new Date(
-                              conversation.createdAt,
-                            ).toLocaleDateString([], {
-                              month: "short",
-                              day: "numeric",
-                            })}
-                          </time>
-                          <ChevronRight size={18} />
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
+            {page === "chat" && (currentConversation ? (
+              <Chat
+                key={currentConversation.id}
+                conversation={currentConversation}
+                data={data}
+                onBack={() => go("home")}
+                onConnections={() => go("connections")}
+                onOrbitChanged={() => { go("home"); void refresh(); }}
+              />
+            ) : (
+              <div className="page-content">
+                <Empty icon={<MessageCircle size={24} />} title="Choose a chat" action={<button className="button button-primary" onClick={() => go("home")}>Go to your Solar system</button>}>
+                  Pick a direct message or group from the sidebar.
+                </Empty>
+              </div>
+            ))}
             {page === "projects" && (
               <div className="page-content">
                 <PageHeading
@@ -1569,7 +1529,7 @@ export function App() {
           onCreated={(conversation) => {
             setDialog(null);
             setConversationId(conversation.id);
-            setPage("conversations");
+            setPage("chat");
             void refresh();
           }}
         />

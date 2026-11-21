@@ -7,6 +7,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Added
 
+- Scrollable chat sidebar with direct messages, group chats, and a New group action, replacing the Conversations tab.
 - Four-corner desktop docking: the collapsed sun sits flush against the usable screen edge, moves inward on expansion, and returns to its saved corner when gathered.
 - Manual clean macOS build checks with pinned Rust tooling and visible native compiler diagnostics.
 - More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
