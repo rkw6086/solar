@@ -20,6 +20,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 - Show a hand pointer over clickable desktop companions even while Solar is unfocused.
 - Workspace-anchored file access and process filesystem allowlists restrict unshared host data; permission changes cancel work and invalidate cached sessions.
 - Expanded desktop Sprites remain visible until the sun is clicked; idle time and clicks elsewhere no longer gather them. Clicking away from a chat still returns it to its planet.
+- Keep expanded Sprites orbiting while the pointer is over the sun; only Sprite selection and open chats pause their motion.
 - Remove text labels beneath desktop companions and the separate arrow launcher button; right-clicking the sun still opens Solar.
 - Read widget hover in native window coordinates across mixed-density Mac displays, keep companion windows from taking keyboard focus, and toggle expansion against native state on the first click.
 

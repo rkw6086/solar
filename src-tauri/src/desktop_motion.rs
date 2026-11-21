@@ -134,9 +134,15 @@ impl MotionState {
         } else {
             self.hovering.remove(label)
         };
-        if hovering || changed {
+        if Self::pauses_orbits(label) && (hovering || changed) {
             self.activity(now);
         }
+    }
+    fn pauses_orbits(label: &str) -> bool {
+        label
+            .strip_prefix("focus:")
+            .unwrap_or(label)
+            .starts_with("orbit-")
     }
     pub fn is_hovered(&self, label: &str) -> bool {
         self.hovering.contains(label)
@@ -163,7 +169,8 @@ impl MotionState {
         if !expanded {
             return false;
         }
-        if chat_open || !self.hovering.is_empty() || reduced_motion {
+        let selecting_sprite = self.hovering.iter().any(|label| Self::pauses_orbits(label));
+        if chat_open || selecting_sprite || reduced_motion {
             return false;
         }
         self.elapsed += delta;
@@ -324,6 +331,23 @@ mod tests {
             false
         ));
         assert_eq!(state.elapsed, elapsed + FRAME_INTERVAL);
+    }
+
+    #[test]
+    fn hovering_the_sun_after_expansion_keeps_the_planets_orbiting() {
+        let now = Instant::now();
+        let mut state = MotionState::new(now);
+        state.hover("focus:sun", true, now);
+        for frame in 1..=120 {
+            let time = now + FRAME_INTERVAL * frame;
+            state.hover("sun", true, time);
+            assert!(state.tick(time, true, false, false));
+        }
+        assert_eq!(state.elapsed, FRAME_INTERVAL * 120);
+        assert!(state.is_hovered("sun"));
+        state.hover("orbit-a", true, now + FRAME_INTERVAL * 121);
+        assert!(!state.tick(now + FRAME_INTERVAL * 122, true, false, false));
+        assert_eq!(state.elapsed, FRAME_INTERVAL * 120);
     }
 
     #[test]
