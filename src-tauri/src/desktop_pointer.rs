@@ -33,21 +33,13 @@ impl PointerGeometry {
         self.x >= 0.0 && self.y >= 0.0 && self.x < self.width && self.y < self.height
     }
 
-    pub fn contains_widget(self, radius: f64, sun: bool) -> bool {
+    pub fn contains_widget(self, radius: f64) -> bool {
         if !self.contains_window() {
             return false;
         }
         let dx = self.x - self.width / 2.0;
         let dy = self.y - self.height / 2.0;
         dx * dx + dy * dy <= radius * radius
-            || (sun
-                && crate::desktop_motion::launcher_hit(
-                    self.x,
-                    self.y,
-                    self.width,
-                    self.height,
-                    1.0,
-                ))
     }
 }
 
@@ -106,11 +98,11 @@ mod tests {
             let mouse = (origin.0 + 96.0, origin.1 + 96.0);
             let point = PointerGeometry::from_appkit(mouse, origin, (192.0, 192.0)).unwrap();
             assert_eq!((point.x, point.y), (96.0, 96.0));
-            assert!(point.contains_widget(60.0, true));
+            assert!(point.contains_widget(60.0));
             let away =
                 PointerGeometry::from_appkit((mouse.0 + 200.0, mouse.1), origin, (192.0, 192.0))
                     .unwrap();
-            assert!(!away.contains_widget(60.0, true));
+            assert!(!away.contains_widget(60.0));
         }
     }
 
@@ -120,11 +112,11 @@ mod tests {
             PointerGeometry::from_appkit((10.0, 190.0), (0.0, 0.0), (192.0, 192.0)).unwrap();
         assert_eq!(point.y, 2.0);
         assert!(point.contains_window());
-        assert!(!point.contains_widget(60.0, true));
-        let launcher =
+        assert!(!point.contains_widget(60.0));
+        let former_launcher =
             PointerGeometry::from_appkit((168.0, 24.0), (0.0, 0.0), (192.0, 192.0)).unwrap();
-        assert!(launcher.contains_widget(60.0, true));
-        assert!(!launcher.contains_widget(60.0, false));
+        assert!(former_launcher.contains_window());
+        assert!(!former_launcher.contains_widget(60.0));
     }
 
     #[test]

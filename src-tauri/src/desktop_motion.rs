@@ -100,17 +100,6 @@ impl CompanionDismissal {
     }
 }
 
-/// The launcher button occupies a small circle near the sun window's lower
-/// right corner. Off-window points must never keep the whole system paused.
-pub(crate) fn launcher_hit(x: f64, y: f64, width: f64, height: f64, scale: f64) -> bool {
-    if x < 0.0 || y < 0.0 || x > width || y > height {
-        return false;
-    }
-    let dx = x - (width - 24.0 * scale);
-    let dy = y - (height - 23.0 * scale);
-    dx * dx + dy * dy <= (16.0 * scale).powi(2)
-}
-
 pub(crate) fn transition_progress(elapsed: Duration, reduced_motion: bool) -> f64 {
     if reduced_motion {
         return 1.0;
@@ -329,35 +318,6 @@ mod tests {
         let next = state.begin(state.pending(), true, true).unwrap().revision;
         assert_ne!(next, closing);
     }
-    #[test]
-    fn launcher_hover_is_bounded_to_its_button_at_any_scale() {
-        for scale in [1.0, 1.5, 2.0] {
-            let size = 192.0 * scale;
-            assert!(launcher_hit(
-                168.0 * scale,
-                169.0 * scale,
-                size,
-                size,
-                scale
-            ));
-            assert!(!launcher_hit(
-                200.0 * scale,
-                200.0 * scale,
-                size,
-                size,
-                scale
-            ));
-            assert!(!launcher_hit(
-                150.0 * scale,
-                150.0 * scale,
-                size,
-                size,
-                scale
-            ));
-            assert!(!launcher_hit(-1.0, 169.0 * scale, size, size, scale));
-        }
-    }
-
     #[test]
     fn only_idle_expansions_collapse_and_chats_get_a_fresh_thirty_seconds() {
         let now = Instant::now();

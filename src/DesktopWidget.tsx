@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowUpRight, LoaderCircle, Sun } from "lucide-react";
+import { LoaderCircle, Sun } from "lucide-react";
 import { api, native } from "./api";
 import { useSolar } from "./useSolar";
 import { activeTask, errorText } from "./types";
@@ -59,7 +59,6 @@ export function DesktopWidget({
   const pendingToggles = useRef(0);
   const toggleQueue = useRef(Promise.resolve());
   const [failure, setFailure] = useState("");
-  const [hovered, setHovered] = useState(false);
   const [popupPhase, setPopupPhase] = useState("opening");
   const [popupOrigin, setPopupOrigin] = useState({ x: 206, y: 216 });
   const lastInteraction = useRef(0);
@@ -81,70 +80,6 @@ export function DesktopWidget({
     lastInteraction.current = now;
     void api("desktop_interaction", { hovered, focused }).catch(() => {});
   }
-
-  useEffect(() => {
-    if (!native || type === "chat") return;
-    let disposed = false;
-    let pending = false;
-    let revision = 0;
-    let available = true;
-    let expiry: ReturnType<typeof setTimeout> | undefined;
-    let unlisten: (() => void) | undefined;
-    const accept = (value: boolean) => {
-      if (disposed) return;
-      clearTimeout(expiry);
-      const inside = value && !document.hidden;
-      setHovered(inside);
-      // An interrupted native event stream cannot leave a label pinned open.
-      if (inside) expiry = setTimeout(() => setHovered(false), 650);
-    };
-    const refresh = async () => {
-      if (pending || disposed || !available || document.hidden) return;
-      pending = true;
-      const requestedAt = revision;
-      try {
-        const inside = await api<boolean>("widget_pointer_hover");
-        if (requestedAt === revision) accept(inside);
-      } catch {
-        available = false;
-        if (requestedAt === revision) accept(false);
-      } finally {
-        pending = false;
-      }
-    };
-    void listen<boolean>("solar://widget-hover", ({ payload }) => {
-      revision += 1;
-      accept(payload);
-    })
-      .then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(() => {});
-    const visibility = () => { revision += 1; accept(false); void refresh(); };
-    document.addEventListener("visibilitychange", visibility);
-    const timer = setInterval(() => { void refresh(); }, 200);
-    void refresh();
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-      clearTimeout(expiry);
-      document.removeEventListener("visibilitychange", visibility);
-      unlisten?.();
-    };
-  }, [type]);
-
-  useEffect(() => {
-    if (type === "orbit" && !data.desktopExpanded) setHovered(false);
-  }, [type, data.desktopExpanded]);
-
-  useEffect(() => {
-    if (type === "chat") return;
-    const clearHover = () => setHovered(false);
-    const visibility = () => { if (document.hidden) clearHover(); };
-    window.addEventListener("blur", clearHover);
-    document.addEventListener("visibilitychange", visibility);
-    return () => {
-      window.removeEventListener("blur", clearHover);
-      document.removeEventListener("visibilitychange", visibility);
-    };
-  }, [type]);
 
   useEffect(() => {
     if (type !== "chat" || loading) return;
@@ -298,7 +233,7 @@ export function DesktopWidget({
 
   if (type === "sun")
     return (
-      <div className={`sun-widget ${sunAntic.className}`} data-hovered={hovered} onPointerEnter={() => { if (!native) setHovered(true); interaction(true); }} onPointerLeave={() => { setHovered(false); interaction(false); }} onPointerMove={() => interaction()}>
+      <div className={`sun-widget ${sunAntic.className}`} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
         <SunVisitors kind={sunAntic.visitor} />
         <button
           className="character-button sun-character"
@@ -313,17 +248,6 @@ export function DesktopWidget({
           }}
         >
           <Planet sun color="#e8aa62" size={100} name="Solar sun" mood={sunAntic.mood} />
-          <span className="sun-widget-label" hidden={!hovered} aria-hidden="true">
-            {expanded ? "Gather Sprites" : "Your Sprites"}
-          </span>
-        </button>
-        <button
-          className="widget-launcher"
-          title="Open Solar"
-          aria-label="Open Solar launcher"
-          onClick={() => void api("open_launcher")}
-        >
-          <ArrowUpRight size={15} />
         </button>
         {failure && <span className="widget-error">{failure}</span>}
       </div>
@@ -346,14 +270,13 @@ export function DesktopWidget({
     Boolean(data.attentionItems?.some((item) => item.orbitId === orbit.id)) ||
     data.approvals.some((approval) => approval.orbitId === orbit.id);
   return (
-    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`} data-hovered={hovered} style={{ "--orbit-planet-size": `${planetSize}px` } as CSSProperties} onPointerEnter={() => { if (!native) setHovered(true); interaction(true); }} onPointerLeave={() => { setHovered(false); interaction(false); }} onPointerMove={() => interaction()}>
+    <div className={`orbit-widget ${needsAttention ? "needs-attention" : ""}`} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
         onFocus={() => interaction(undefined, true)}
         onBlur={() => interaction(undefined, false)}
         onClick={() => {
-          setHovered(false);
           void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
             setFailure(errorText(reason)),
           );
@@ -364,12 +287,6 @@ export function DesktopWidget({
         }}
       >
         <Planet color={orbit.color} size={planetSize} name={orbit.name} identity={orbit.avatarSeed || orbit.id} busy={busy} />
-        <span className="orbit-widget-name" hidden={!hovered} aria-hidden="true">
-          {orbit.name}
-          {needsAttention ? (
-            <span className="orbit-attention-pip" />
-          ) : busy && <span className="working-pip" />}
-        </span>
       </button>
       {failure && <span className="widget-error">{failure}</span>}
     </div>

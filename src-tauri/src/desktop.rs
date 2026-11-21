@@ -54,16 +54,7 @@ fn widget_hit(label: &str, point: crate::desktop_pointer::PointerGeometry) -> bo
             .unwrap_or((0, false));
         crate::desktop_layout::planet_art_size(count) * 0.46 * if hovered { 1.12 } else { 1.0 }
     };
-    point.contains_widget(radius, label == "sun")
-}
-
-#[tauri::command]
-fn widget_pointer_hover(window: tauri::WebviewWindow) -> Result<bool, String> {
-    if window.label() != "sun" && !window.label().starts_with("orbit-") {
-        return Err("This window is not a desktop widget".into());
-    }
-    Ok(crate::desktop_pointer::geometry(&window)
-        .is_some_and(|point| widget_hit(window.label(), point)))
+    point.contains_widget(radius)
 }
 
 #[tauri::command]
@@ -1304,7 +1295,6 @@ pub fn run() {
                                 }
                             }
                             if pointer_hover.insert(label.clone(), inside) != Some(inside) {
-                                let _ = window.emit("solar://widget-hover", inside);
                                 let _ = window.set_cursor_icon(if inside {
                                     tauri::CursorIcon::Hand
                                 } else {
@@ -1444,7 +1434,6 @@ pub fn run() {
             crate::desktop_attention::open_attention,
             crate::desktop_attention::preview_attention,
             widget_ready,
-            widget_pointer_hover,
             get_bootstrap,
             get_orbit_cli_setup,
             open_orbit_cli_setup,

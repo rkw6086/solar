@@ -2145,8 +2145,7 @@ legend {
 }
 .sun-widget .character-button,
 .orbit-widget .character-button,
-.character-button .planet-art,
-.widget-launcher {
+.character-button .planet-art {
   cursor: pointer;
 }
 .character-button:hover .planet-art,
@@ -2161,61 +2160,6 @@ legend {
 }
 .sun-character .planet-art {
   filter: drop-shadow(0 0 15px #e5ad4b40);
-}
-.sun-widget-label,
-.orbit-widget-name {
-  font-size: 10px;
-  color: #ecd9bd;
-  background: #1b2428db;
-  border: 1px solid #8d785644;
-  border-radius: 5px;
-  padding: 4px 9px;
-  margin-top: -4px;
-  opacity: 0;
-  transform: translateY(-3px);
-  transition:
-    opacity 0.2s,
-    transform 0.2s;
-  white-space: nowrap;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.sun-widget-label {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 50%;
-  transform: translate(-50%, -3px);
-}
-.sun-widget[data-hovered="true"] .sun-widget-label:not([hidden]) {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
-.widget-launcher {
-  position: absolute;
-  bottom: 11px;
-  right: 12px;
-  border: 1px solid #97856255;
-  color: #e7cba3;
-  background: #20282ae6;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-.sun-widget:hover .widget-launcher,
-.widget-launcher:focus-visible {
-  opacity: 1;
-}
-.working-pip {
-  width: 5px;
-  height: 5px;
-  background: #e9bc76;
-  border-radius: 50%;
 }
 .widget-error {
   position: absolute;
@@ -2729,12 +2673,5 @@ legend {
 :root[data-motion="reduced"] .sun-widget .planet-art { animation: none; }
 
 .orbit-widget .character-button { position: relative; width: 100%; height: 100%; }
-.orbit-widget .orbit-widget-name { position: absolute; top: calc(50% + var(--orbit-planet-size, 88px) / 2 - 8px); left: 50%; transform: translate(-50%, -3px); }
-.sun-widget-label[hidden],
-.orbit-widget .orbit-widget-name[hidden] { display: none; }
-.orbit-widget[data-hovered="true"] .orbit-widget-name:not([hidden]) {
-  opacity: 1;
-  transform: translate(-50%, 0);
-}
 
 .popup-planet { display: grid; place-items: center; }
