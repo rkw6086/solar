@@ -1272,6 +1272,8 @@ pub fn run() {
                         let Ok(mut pointer_hover) = hover_state.lock() else {
                             return;
                         };
+                        #[cfg(target_os = "macos")]
+                        let had_widget_hover = pointer_hover.values().any(|hovered| *hovered);
                         let mut inside_companions = false;
                         let mut chat_open = false;
                         let windows = frame_app.webview_windows();
@@ -1303,8 +1305,31 @@ pub fn run() {
                             }
                             if pointer_hover.insert(label.clone(), inside) != Some(inside) {
                                 let _ = window.emit("solar://widget-hover", inside);
+                                let _ = window.set_cursor_icon(if inside {
+                                    tauri::CursorIcon::Hand
+                                } else {
+                                    tauri::CursorIcon::Default
+                                });
                                 if window.is_visible().unwrap_or(false) {
                                     let _ = window.set_ignore_cursor_events(!inside);
+                                }
+                            }
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            let widget_hover = pointer_hover.values().any(|hovered| *hovered);
+                            if widget_hover || had_widget_hover {
+                                use objc2::{class, msg_send, runtime::AnyObject};
+                                // Inactive WKWebViews do not always refresh their
+                                // CSS cursor. Set it on the UI thread without
+                                // activating Solar, and release it once on exit.
+                                unsafe {
+                                    let cursor: *mut AnyObject = if widget_hover {
+                                        msg_send![class!(NSCursor), pointingHandCursor]
+                                    } else {
+                                        msg_send![class!(NSCursor), arrowCursor]
+                                    };
+                                    let _: () = msg_send![cursor, set];
                                 }
                             }
                         }

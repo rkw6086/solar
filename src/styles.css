@@ -2143,6 +2143,12 @@ legend {
   filter: drop-shadow(0 2px 5px #0004);
   will-change: scale;
 }
+.sun-widget .character-button,
+.orbit-widget .character-button,
+.character-button .planet-art,
+.widget-launcher {
+  cursor: pointer;
+}
 .character-button:hover .planet-art,
 .character-button:focus-visible .planet-art {
   scale: 1.1;
