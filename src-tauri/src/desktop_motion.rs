@@ -20,6 +20,11 @@ pub(crate) struct CompanionDismissal {
     clicks: Option<u64>,
 }
 
+pub(crate) struct DismissalTransition {
+    pub revision: u64,
+    pub collapse: bool,
+}
+
 impl CompanionDismissal {
     pub fn focus(&mut self, label: &str, focused: bool) -> bool {
         if focused {
@@ -58,15 +63,26 @@ impl CompanionDismissal {
         pressed
     }
 
-    pub fn begin(&mut self, expected: Option<u64>) -> Option<u64> {
-        if self.closing.is_some()
+    pub fn begin(
+        &mut self,
+        expected: Option<u64>,
+        has_chats: bool,
+        collapse_requested: bool,
+    ) -> Option<DismissalTransition> {
+        if (!has_chats && !collapse_requested)
+            || self.closing.is_some()
             || expected.is_some_and(|revision| self.pending() != Some(revision))
         {
             return None;
         }
         self.revision = self.revision.wrapping_add(1);
         self.closing = Some(self.revision);
-        Some(self.revision)
+        Some(DismissalTransition {
+            revision: self.revision,
+            // A click away has one visible step: first fold open chats back
+            // into their Sprites; gather the system only if no chat is open.
+            collapse: collapse_requested && !has_chats,
+        })
     }
 
     pub fn cancel(&mut self) -> bool {
@@ -158,6 +174,7 @@ impl MotionState {
     }
     pub fn remove(&mut self, label: &str, now: Instant) {
         self.hovering.remove(label);
+        self.hovering.remove(&format!("focus:{label}"));
         self.activity(now);
     }
     /// Open chats keep the entire formation at its current phase. This leaves
@@ -200,10 +217,10 @@ mod tests {
         let old = state.pending().unwrap();
         state.focus("orbit-b", true);
         assert!(state.pending().is_none());
-        assert!(state.begin(Some(old)).is_none());
+        assert!(state.begin(Some(old), true, true).is_none());
         state.focus("orbit-b", false);
         let revision = state.pending().unwrap();
-        let closing = state.begin(Some(revision)).unwrap();
+        let closing = state.begin(Some(revision), true, true).unwrap().revision;
         assert!(state.finish(closing));
         assert!(state.pending().is_none());
     }
@@ -213,7 +230,7 @@ mod tests {
         let mut state = CompanionDismissal::default();
         // Borderless macOS companions need not become the key window.
         assert!(state.pressed(1, None));
-        let closing = state.begin(None).unwrap();
+        let closing = state.begin(None, true, true).unwrap().revision;
         assert!(!state.pressed(1, None));
         assert!(!state.pressed(0, None));
         assert!(state.pressed(1, None));
@@ -225,9 +242,67 @@ mod tests {
     fn native_blur_after_an_outside_click_does_not_cancel_dismissal() {
         let mut state = CompanionDismissal::default();
         state.focus("chat-a", true);
-        let closing = state.begin(None).unwrap();
+        let closing = state.begin(None, true, true).unwrap().revision;
         assert!(!state.focus("chat-a", false));
         assert!(state.finish(closing));
+    }
+
+    #[test]
+    fn click_away_returns_chats_before_gathering_the_formation() {
+        let mut state = CompanionDismissal::default();
+        state.focus("chat-a", true);
+        assert!(state.pressed(1, Some(1)));
+        let returning = state.begin(None, true, true).unwrap();
+        assert!(!returning.collapse);
+        // The native blur and another pointer sample during the fold cannot
+        // start a second transition that hides the returning Sprite.
+        state.focus("chat-a", false);
+        assert!(state.begin(state.pending(), false, true).is_none());
+        assert!(state.finish(returning.revision));
+        state.remove("chat-a");
+        assert!(state.pending().is_none());
+
+        // A later, distinct click away may gather an already open formation.
+        assert!(!state.pressed(0, Some(1)));
+        assert!(state.pressed(1, Some(2)));
+        let gathering = state.begin(None, false, true).unwrap();
+        assert!(gathering.collapse);
+        assert!(state.finish(gathering.revision));
+    }
+
+    #[test]
+    fn focus_loss_with_a_chat_keeps_sprites_expanded() {
+        let mut state = CompanionDismissal::default();
+        state.focus("chat-a", true);
+        state.focus("chat-a", false);
+        let returning = state.begin(state.pending(), true, true).unwrap();
+        assert!(!returning.collapse);
+        assert!(state.finish(returning.revision));
+        // Explicit sun contraction closes chats without requesting a second
+        // contraction from the dismissal controller.
+        let sun = state.begin(None, true, false).unwrap();
+        assert!(!sun.collapse);
+    }
+
+    #[test]
+    fn restored_sprite_blur_does_not_gather_or_block_the_next_pointer_click() {
+        let mut state = CompanionDismissal::default();
+        state.focus("chat-a", true);
+        state.focus("chat-a", false);
+        let returning = state.begin(state.pending(), true, false).unwrap();
+        assert!(!returning.collapse);
+        assert!(state.finish(returning.revision));
+        state.remove("chat-a");
+
+        // macOS may briefly focus the restored Sprite, then transfer to the
+        // application clicked behind it. That late blur has no chat to close.
+        state.focus("orbit-a", true);
+        state.focus("orbit-a", false);
+        assert!(state.begin(state.pending(), false, false).is_none());
+
+        // It must not create a 280 ms empty transition swallowing a real click.
+        let gathering = state.begin(None, false, true).unwrap();
+        assert!(gathering.collapse);
     }
 
     #[test]
@@ -246,12 +321,12 @@ mod tests {
         state.focus("chat-a", true);
         state.focus("chat-a", false);
         let blur = state.pending().unwrap();
-        let closing = state.begin(Some(blur)).unwrap();
+        let closing = state.begin(Some(blur), true, true).unwrap().revision;
         assert!(state.focus("chat-b", true));
         assert!(!state.finish(closing));
-        assert!(state.begin(Some(blur)).is_none());
+        assert!(state.begin(Some(blur), true, true).is_none());
         state.remove("chat-b");
-        let next = state.begin(state.pending()).unwrap();
+        let next = state.begin(state.pending(), true, true).unwrap().revision;
         assert_ne!(next, closing);
     }
     #[test]
@@ -354,6 +429,20 @@ mod tests {
         assert_eq!(state.elapsed, Duration::ZERO);
         state.hover("focus:orbit-a", false, now + Duration::from_secs(40));
         assert!(state.tick(now + Duration::from_secs(70), true, false, false));
+    }
+    #[test]
+    fn returning_chat_clears_stale_focus_and_gets_a_fresh_idle_period() {
+        let now = Instant::now();
+        let mut state = MotionState::new(now);
+        state.hover("chat-a", true, now);
+        state.hover("focus:chat-a", true, now);
+        assert!(!state.tick(now + Duration::from_secs(100), true, true, false));
+        state.remove("chat-a", now + Duration::from_secs(100));
+        assert!(!state.is_hovered("chat-a"));
+        assert!(!state.is_hovered("focus:chat-a"));
+        assert!(!state.tick(now + Duration::from_secs(129), true, false, false));
+        assert!(state.elapsed > Duration::ZERO);
+        assert!(state.tick(now + Duration::from_secs(130), true, false, false));
     }
     #[test]
     fn transitions_follow_elapsed_time_and_finish_exactly() {

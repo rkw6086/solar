@@ -2182,14 +2182,7 @@ legend {
   left: 50%;
   transform: translate(-50%, -3px);
 }
-.character-button:hover .sun-widget-label,
-.character-button:hover .orbit-widget-name,
-.character-button:focus-visible .orbit-widget-name {
-  opacity: 1;
-  transform: translateY(0);
-}
-.character-button:hover .sun-widget-label,
-.character-button:focus-visible .sun-widget-label {
+.sun-widget[data-hovered="true"] .sun-widget-label:not([hidden]) {
   opacity: 1;
   transform: translate(-50%, 0);
 }
@@ -2717,29 +2710,25 @@ legend {
 .chat-message-content { min-width: 0; }
 .sun-roll .sun-character > .planet-art { animation: sun-playful-roll 2.8s cubic-bezier(.45,0,.25,1); }
 .sun-yawn .sun-character > .planet-art { animation: sun-sleepy-stretch 2.8s ease; }
-.pixel-rocket-track { position: absolute; width: 164px; height: 164px; pointer-events: none; opacity: 0; }
-.pixel-rocket { display: block; width: 22px; height: 22px; position: absolute; top: 1px; left: 70px; font-size: 20px; }
-.sun-rocket .pixel-rocket-track { animation: sun-rocket-orbit 3.2s ease-in-out; }
 @keyframes sun-playful-roll { 0%,100% { transform: rotate(0) scale(1); } 15% { transform: rotate(-18deg) scale(.94); } 75% { transform: rotate(370deg) scale(1.05); } }
 @keyframes sun-sleepy-stretch { 0%,100% { transform: scale(1); } 35%,65% { transform: scale(1.08, .93); } }
-@keyframes sun-rocket-orbit { 0% { transform: rotate(-70deg) scale(.5); opacity: 0; } 15%,80% { opacity: 1; } 100% { transform: rotate(290deg) scale(.5); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .floating-chat-shell .floating-chat, .popup-planet { transition: none; }
   .character-button .planet-art { transition: none; }
-  .sun-widget .planet-art, .sun-widget .pixel-rocket-track { animation: none; }
+  .sun-widget .planet-art { animation: none; }
 }
 :root[data-motion="reduced"] .floating-chat-shell .floating-chat,
 :root[data-motion="reduced"] .popup-planet,
 :root[data-motion="reduced"] .character-button .planet-art { transition: none; }
-:root[data-motion="reduced"] .sun-widget .planet-art,
-:root[data-motion="reduced"] .sun-widget .pixel-rocket-track { animation: none; }
+:root[data-motion="reduced"] .sun-widget .planet-art { animation: none; }
 
 .orbit-widget .character-button { position: relative; width: 100%; height: 100%; }
 .orbit-widget .orbit-widget-name { position: absolute; top: calc(50% + var(--orbit-planet-size, 88px) / 2 - 8px); left: 50%; transform: translate(-50%, -3px); }
-.orbit-widget .character-button:hover .orbit-widget-name,
-.orbit-widget .character-button:focus-visible .orbit-widget-name { transform: translate(-50%, 0); }
-.orbit-widget[data-hovered="false"] .orbit-widget-name { opacity: 0; }
-.orbit-widget[data-hovered="true"] .orbit-widget-name,
-.orbit-widget .character-button:focus-visible .orbit-widget-name { opacity: 1; }
+.sun-widget-label[hidden],
+.orbit-widget .orbit-widget-name[hidden] { display: none; }
+.orbit-widget[data-hovered="true"] .orbit-widget-name:not([hidden]) {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
 
 .popup-planet { display: grid; place-items: center; }

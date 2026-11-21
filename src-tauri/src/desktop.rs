@@ -44,6 +44,28 @@ fn widget_ready(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+fn widget_hit(label: &str, point: crate::desktop_pointer::PointerGeometry) -> bool {
+    let radius = if label == "sun" {
+        60.0
+    } else {
+        let (count, hovered) = ORBIT_MOTION
+            .lock()
+            .map(|motion| (motion.roster.len(), motion.is_hovered(label)))
+            .unwrap_or((0, false));
+        crate::desktop_layout::planet_art_size(count) * 0.46 * if hovered { 1.12 } else { 1.0 }
+    };
+    point.contains_widget(radius, label == "sun")
+}
+
+#[tauri::command]
+fn widget_pointer_hover(window: tauri::WebviewWindow) -> Result<bool, String> {
+    if window.label() != "sun" && !window.label().starts_with("orbit-") {
+        return Err("This window is not a desktop widget".into());
+    }
+    Ok(crate::desktop_pointer::geometry(&window)
+        .is_some_and(|point| widget_hit(window.label(), point)))
+}
+
 #[tauri::command]
 fn desktop_interaction(
     window: tauri::WebviewWindow,
@@ -434,6 +456,15 @@ pub(crate) fn open_full_chat(app: tauri::AppHandle, conversation_id: String) -> 
     )
     .map_err(|e| e.to_string())
 }
+#[tauri::command]
+fn toggle_desktop_expanded(app: tauri::AppHandle, engine: AppState<'_>) -> Result<bool, String> {
+    // Decide against native state, not the webview's last asynchronous
+    // bootstrap snapshot. A missed refresh must not consume the next click.
+    let expanded = !EXPANDED.load(Ordering::SeqCst);
+    set_desktop_expanded(app, engine, expanded)?;
+    Ok(EXPANDED.load(Ordering::SeqCst))
+}
+
 #[tauri::command]
 pub(crate) fn set_desktop_expanded(
     app: tauri::AppHandle,
@@ -1009,6 +1040,11 @@ fn create_companion(
     .always_on_top(true)
     .skip_taskbar(true)
     .focused(false)
+    // `focused(false)` only applies when the window is built. Showing a hidden
+    // Tao window again asks macOS to make it key, so keep companion surfaces
+    // nonfocusable throughout their lifetime. WKWebView still receives the
+    // first mouse click below; editable popup chats use a separate builder.
+    .focusable(false)
     .accept_first_mouse(true)
     .build()
     .map_err(|e| e.to_string())?;
@@ -1225,97 +1261,64 @@ pub fn run() {
             // the transparent corners from intercepting clicks in other applications.
             tauri::async_runtime::spawn(async move {
                 let mut attention_ticks = 0u32;
-                let mut pointer_hover = std::collections::HashMap::new();
+                let pointer_hover = Arc::new(Mutex::new(std::collections::HashMap::new()));
                 loop {
-                    tokio::time::sleep(Duration::from_millis(40)).await;
-                    let mut inside_companions = false;
-                    let mut chat_open = false;
-                    let windows = app_handle.webview_windows();
-                    pointer_hover.retain(|label, _| windows.contains_key(label));
-                    for (label, window) in windows {
-                        if (label.starts_with("chat-") || label == "attention")
-                            && window.is_visible().unwrap_or(false)
-                        {
-                            chat_open |= label.starts_with("chat-");
-                            if let (Ok(cursor), Ok(position), Ok(size)) = (
-                                window.cursor_position(),
-                                window.outer_position(),
-                                window.outer_size(),
-                            ) {
-                                inside_companions |= cursor.x >= f64::from(position.x)
-                                    && cursor.y >= f64::from(position.y)
-                                    && cursor.x < f64::from(position.x) + f64::from(size.width)
-                                    && cursor.y < f64::from(position.y) + f64::from(size.height);
+                    tokio::time::sleep(crate::desktop_motion::FRAME_INTERVAL).await;
+                    let frame_app = app_handle.clone();
+                    let hover_state = pointer_hover.clone();
+                    // AppKit coordinates and cursor state are read together on
+                    // the UI thread, regardless of which application has focus.
+                    if !desktop_frame(&app_handle, move || {
+                        let Ok(mut pointer_hover) = hover_state.lock() else {
+                            return;
+                        };
+                        let mut inside_companions = false;
+                        let mut chat_open = false;
+                        let windows = frame_app.webview_windows();
+                        pointer_hover.retain(|label, _| windows.contains_key(label));
+                        for (label, window) in windows {
+                            let point = crate::desktop_pointer::geometry(&window);
+                            if (label.starts_with("chat-") || label == "attention")
+                                && window.is_visible().unwrap_or(false)
+                            {
+                                chat_open |= label.starts_with("chat-");
+                                inside_companions |=
+                                    point.is_some_and(|point| point.contains_window());
                             }
-                        }
-                        if label == "attention" {
-                            crate::desktop_attention::update_hit_region(&window);
-                            continue;
-                        }
-                        if label != "sun" && !label.starts_with("orbit-") {
-                            continue;
-                        }
-                        if !window.is_visible().unwrap_or(false) {
-                            if pointer_hover.insert(label.clone(), false) != Some(false) {
-                                let _ = window.emit("solar://widget-hover", false);
+                            if label == "attention" {
+                                crate::desktop_attention::update_hit_region(&window);
+                                continue;
                             }
-                            if let Ok(mut motion) = ORBIT_MOTION.lock() {
-                                let now = std::time::Instant::now();
-                                motion.hover(&label, false, now);
-                                motion.hover(&format!("focus:{label}"), false, now);
+                            if label != "sun" && !label.starts_with("orbit-") {
+                                continue;
                             }
-                            continue;
-                        }
-                        if let (Ok(cursor), Ok(position), Ok(size)) = (
-                            window.cursor_position(),
-                            window.outer_position(),
-                            window.outer_size(),
-                        ) {
-                            let dx = cursor.x - position.x as f64 - size.width as f64 / 2.0;
-                            let dy = cursor.y - position.y as f64 - size.height as f64 / 2.0;
-                            let scale = window.scale_factor().unwrap_or(1.0);
-                            let radius = if label == "sun" {
-                                60.0 * scale
-                            } else {
-                                let (count, hovered) = ORBIT_MOTION
-                                    .lock()
-                                    .map(|motion| (motion.roster.len(), motion.is_hovered(&label)))
-                                    .unwrap_or((0, false));
-                                // Keep the enlarged hover target clickable without
-                                // oscillating between its normal and enlarged edge.
-                                let enlargement = if hovered { 1.12 } else { 1.0 };
-                                crate::desktop_layout::planet_art_size(count)
-                                    * 0.46
-                                    * scale
-                                    * enlargement
-                            };
-                            let launcher = label == "sun"
-                                && crate::desktop_motion::launcher_hit(
-                                    cursor.x - position.x as f64,
-                                    cursor.y - position.y as f64,
-                                    size.width as f64,
-                                    size.height as f64,
-                                    scale,
-                                );
-                            let inside = dx * dx + dy * dy <= radius * radius || launcher;
+                            let inside = point.is_some_and(|point| widget_hit(&label, point));
                             inside_companions |= inside;
                             if let Ok(mut motion) = ORBIT_MOTION.lock() {
-                                // Native hit-testing remains authoritative if a
-                                // click-through webview never gets pointerleave.
-                                motion.hover(&label, inside, std::time::Instant::now());
+                                let now = std::time::Instant::now();
+                                motion.hover(&label, inside, now);
+                                if point.is_none() {
+                                    motion.hover(&format!("focus:{label}"), false, now);
+                                }
                             }
                             if pointer_hover.insert(label.clone(), inside) != Some(inside) {
                                 let _ = window.emit("solar://widget-hover", inside);
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.set_ignore_cursor_events(!inside);
+                                }
                             }
-                            let _ = window.set_ignore_cursor_events(!inside);
                         }
+                        crate::desktop_popup::pointer(
+                            &frame_app,
+                            crate::desktop_popup::pointer_state(),
+                            inside_companions,
+                            EXPANDED.load(Ordering::SeqCst) || chat_open,
+                        );
+                    })
+                    .await
+                    {
+                        return;
                     }
-                    crate::desktop_popup::pointer(
-                        &app_handle,
-                        crate::desktop_popup::pointer_state(),
-                        inside_companions,
-                        EXPANDED.load(Ordering::SeqCst) || chat_open,
-                    );
                     attention_ticks += 1;
                     if attention_ticks.is_multiple_of(10) {
                         let visibility_app = app_handle.clone();
@@ -1416,6 +1419,7 @@ pub fn run() {
             crate::desktop_attention::open_attention,
             crate::desktop_attention::preview_attention,
             widget_ready,
+            widget_pointer_hover,
             get_bootstrap,
             get_orbit_cli_setup,
             open_orbit_cli_setup,
@@ -1460,6 +1464,7 @@ pub fn run() {
             desktop_interaction,
             popup_ready,
             set_desktop_expanded,
+            toggle_desktop_expanded,
             open_orbit_chat
         ])
         .build(tauri::generate_context!())

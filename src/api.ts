@@ -471,7 +471,14 @@ async function previewCommand(
       savePreview();
       return orbit;
     }
+    case "toggle_desktop_expanded":
+      preview.desktopExpanded = !preview.desktopExpanded;
+      savePreview();
+      return preview.desktopExpanded;
     case "set_desktop_expanded":
+      preview.desktopExpanded = Boolean(args.expanded);
+      savePreview();
+      return;
     case "set_active_chat":
       return;
     case "open_orbit_chat":

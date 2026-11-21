@@ -8,13 +8,16 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 ### Added
 
 - More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
+- A larger visiting rocket, a passing comet, and a friendly flying saucer around the idle sun, with quiet, occasional animations and reduced-motion support.
 - Read-only-by-default shared folder links for selected or all current and future Sprites, plus opt-in setup discovery of home configuration and global agent folders.
 - Metadata-only home search and always-approved requests to add live links to a Sprite workspace.
 
 ### Fixed
 
 - Workspace-anchored file access and process filesystem allowlists restrict unshared host data; permission changes cancel work and invalidate cached sessions.
-- Clicking away from desktop companions closes their chats and collapses the formation; Sprite labels appear only on hover or focus.
+- Clicking away from a Sprite chat returns it to its planet without collapsing the formation; clicking away with no chats open still gathers the Sprites.
+- Desktop Sprite labels appear only while hovered, including after a chat closes or keyboard focus remains on a widget.
+- Read widget hover in native window coordinates across mixed-density Mac displays, keep companion windows from taking keyboard focus, and toggle expansion against native state on the first click.
 
 ## [0.1.6]
 

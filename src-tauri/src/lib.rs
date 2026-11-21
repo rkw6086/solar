@@ -41,6 +41,8 @@ mod desktop_logging;
 mod desktop_motion;
 #[cfg(feature = "desktop")]
 mod desktop_onboarding;
+#[cfg(any(feature = "desktop", test))]
+mod desktop_pointer;
 #[cfg(feature = "desktop")]
 mod desktop_popup;
 #[cfg(any(feature = "desktop", test))]

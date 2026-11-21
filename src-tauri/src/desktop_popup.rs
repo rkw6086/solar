@@ -1,5 +1,5 @@
-//! Dismiss the complete companion group when the user clicks away. Native
-//! choosers and saves hold this open; moving between companions never closes it.
+//! Clicking away folds chats back into their Sprites; a subsequent click away
+//! can gather the formation. Native choosers and saves hold dismissal open.
 use crate::desktop_motion::CompanionDismissal;
 use std::{
     collections::HashMap,
@@ -77,7 +77,11 @@ fn schedule_blur(app: tauri::AppHandle, revision: u64) {
         // the companion group receive focus before interpreting the blur.
         tokio::time::sleep(Duration::from_millis(160)).await;
         let on_main = app.clone();
-        let _ = app.run_on_main_thread(move || dismiss(&on_main, Some(revision), true));
+        // Losing key-window status is not a deliberate request to gather the
+        // planets. Closing a popup can itself move focus through its restored
+        // Sprite before another app takes it, producing a second blur after
+        // there are no chats left. Only pointer evidence may gather the group.
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, Some(revision), false));
     });
 }
 
@@ -88,24 +92,25 @@ fn dismiss(app: &tauri::AppHandle, expected: Option<u64>, collapse: bool) {
     let Some(registry) = app.try_state::<PopupDismissals>() else {
         return;
     };
-    let Some(revision) = registry
-        .group
-        .lock()
-        .ok()
-        .and_then(|mut group| group.begin(expected))
-    else {
-        return;
-    };
     let chats: Vec<_> = app
         .webview_windows()
         .into_iter()
         .filter(|(label, _)| label.starts_with("chat-"))
         .map(|(_, window)| window)
         .collect();
+    let Some(transition) = registry
+        .group
+        .lock()
+        .ok()
+        .and_then(|mut group| group.begin(expected, !chats.is_empty(), collapse))
+    else {
+        return;
+    };
+    let revision = transition.revision;
     for window in &chats {
         crate::desktop::dismiss_orbit_chat(window);
     }
-    if collapse {
+    if transition.collapse {
         // This also handles an expansion with no open chat. The direct click
         // evidence is authoritative even if macOS reports stale key focus.
         if let Some(engine) = app.try_state::<Arc<crate::engine::Engine>>() {
@@ -167,8 +172,15 @@ pub(crate) fn pointer(
     if pressed && inside {
         cancel(app);
     } else if pressed && active {
+        // Decide what this gesture means before it is queued on the UI
+        // thread. A blur may finish closing the chat in the meantime; that
+        // cannot turn the same click into a request to gather its Sprite.
+        let collapse = !app
+            .webview_windows()
+            .keys()
+            .any(|label| label.starts_with("chat-"));
         let on_main = app.clone();
-        let _ = app.run_on_main_thread(move || dismiss(&on_main, None, true));
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, None, collapse));
     }
 }
 
@@ -234,6 +246,20 @@ pub(crate) fn attach(window: &WebviewWindow) {
     window.on_window_event(move |event| match event {
         WindowEvent::Focused(focused) => {
             let registry = original.state::<PopupDismissals>();
+            // A native callback from a destroyed popup may arrive after its
+            // label has been reused. It must not cancel a newer transition.
+            let registered = registry
+                .windows
+                .lock()
+                .map(|windows| {
+                    windows
+                        .get(original.label())
+                        .is_some_and(|current| Arc::ptr_eq(current, &state))
+                })
+                .unwrap_or(false);
+            if !registered || state.lock().map(|state| state.destroyed).unwrap_or(true) {
+                return;
+            }
             let (cancelled, pending) = registry
                 .group
                 .lock()

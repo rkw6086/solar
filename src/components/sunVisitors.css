@@ -1,0 +1,18 @@
+/* Visitors stay inside the native 192px sun surface and never take clicks. */
+.sun-visitors { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 2; contain: layout paint; }
+.sun-visitor-orbit { position: absolute; width: 160px; height: 160px; left: calc(50% - 80px); top: calc(50% - 80px); opacity: 0; animation: sun-visitor-lap 5.2s cubic-bezier(.32,.05,.38,1) both; }
+.sun-visitor-rocket { display: block; position: absolute; width: 34px; height: 48px; left: 63px; top: -7px; transform: rotate(90deg); filter: drop-shadow(0 2px 2px #15273555); }
+.sun-rocket-flame { transform-origin: 10px 20px; animation: sun-visitor-thruster 260ms ease-in-out infinite alternate; }
+.sun-visitor-comet { position: absolute; left: 0; top: 0; width: 100px; height: 32px; opacity: 0; animation: sun-comet-pass 4.8s cubic-bezier(.3,.2,.45,1) both; }
+.sun-visitor-ufo { position: absolute; left: 0; top: 0; width: 60px; height: 70px; opacity: 0; animation: sun-ufo-hello 5.8s ease-in-out both; }
+.sun-ufo-beam { transform-origin: 30px 29px; animation: sun-ufo-beam 5.8s ease-in-out both; }
+.sun-ufo-lights { animation: sun-ufo-lights 850ms ease-in-out infinite alternate; }
+@keyframes sun-visitor-lap { 0% { transform: rotate(-45deg); opacity: 0; } 10%,88% { opacity: 1; } 100% { transform: rotate(315deg); opacity: 0; } }
+@keyframes sun-visitor-thruster { from { transform: scaleY(.72); } to { transform: scaleY(1); } }
+@keyframes sun-comet-pass { 0% { transform: translate(-110px, -14px) rotate(31deg); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translate(205px, 157px) rotate(31deg); opacity: 0; } }
+@keyframes sun-ufo-hello { 0% { transform: translate(-64px, 18px) rotate(-8deg); opacity: 0; } 20% { opacity: 1; } 38% { transform: translate(66px, 7px) rotate(0deg); } 48% { transform: translate(65px, 11px) rotate(-5deg); } 57% { transform: translate(66px, 7px) rotate(5deg); } 68% { transform: translate(66px, 10px) rotate(0deg); opacity: 1; } 100% { transform: translate(198px, 4px) rotate(8deg); opacity: 0; } }
+@keyframes sun-ufo-beam { 0%,27%,74%,100% { transform: scaleY(0); opacity: 0; } 40%,61% { transform: scaleY(1); opacity: 1; } }
+@keyframes sun-ufo-lights { from { opacity: .5; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .sun-visitors { display: none; } .sun-visitors * { animation: none !important; } }
+:root[data-motion="reduced"] .sun-visitors { display: none; }
+:root[data-motion="reduced"] .sun-visitors * { animation: none !important; }

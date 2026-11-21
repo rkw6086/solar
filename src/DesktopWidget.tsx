@@ -9,6 +9,7 @@ import { activeTask, errorText } from "./types";
 import type { Conversation } from "./types";
 import { Planet } from "./components/Planet";
 import { Chat } from "./components/Chat";
+import { SunVisitors, useSunAntics } from "./components/SunVisitors";
 
 function useCharacterDrag() {
   const start = useRef<{ x: number; y: number } | null>(null);
@@ -59,8 +60,6 @@ export function DesktopWidget({
   const toggleQueue = useRef(Promise.resolve());
   const [failure, setFailure] = useState("");
   const [hovered, setHovered] = useState(false);
-  const [sunMood, setSunMood] = useState<"smile" | "yawn" | "neutral">("neutral");
-  const [sunAntic, setSunAntic] = useState("");
   const [popupPhase, setPopupPhase] = useState("opening");
   const [popupOrigin, setPopupOrigin] = useState({ x: 206, y: 216 });
   const lastInteraction = useRef(0);
@@ -73,6 +72,7 @@ export function DesktopWidget({
   const orbit = data.orbits.find((item) => item.id === orbitId);
   const visibleCount = data.orbits.filter(item => item.enabled).length;
   const planetSize = visibleCount > 36 ? 56 : visibleCount > 18 ? 72 : 88;
+  const sunAntic = useSunAntics(type === "sun" && !expanded, Boolean(data.settings.reducedMotion));
 
   function interaction(hovered?: boolean, focused?: boolean) {
     if (!native) return;
@@ -83,29 +83,68 @@ export function DesktopWidget({
   }
 
   useEffect(() => {
-    if (!native || type !== "orbit") return;
+    if (!native || type === "chat") return;
     let disposed = false;
+    let pending = false;
+    let revision = 0;
+    let available = true;
+    let expiry: ReturnType<typeof setTimeout> | undefined;
     let unlisten: (() => void) | undefined;
-    void listen<boolean>("solar://widget-hover", ({ payload }) => setHovered(payload))
+    const accept = (value: boolean) => {
+      if (disposed) return;
+      clearTimeout(expiry);
+      const inside = value && !document.hidden;
+      setHovered(inside);
+      // An interrupted native event stream cannot leave a label pinned open.
+      if (inside) expiry = setTimeout(() => setHovered(false), 650);
+    };
+    const refresh = async () => {
+      if (pending || disposed || !available || document.hidden) return;
+      pending = true;
+      const requestedAt = revision;
+      try {
+        const inside = await api<boolean>("widget_pointer_hover");
+        if (requestedAt === revision) accept(inside);
+      } catch {
+        available = false;
+        if (requestedAt === revision) accept(false);
+      } finally {
+        pending = false;
+      }
+    };
+    void listen<boolean>("solar://widget-hover", ({ payload }) => {
+      revision += 1;
+      accept(payload);
+    })
       .then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(() => {});
-    return () => { disposed = true; unlisten?.(); };
+    const visibility = () => { revision += 1; accept(false); void refresh(); };
+    document.addEventListener("visibilitychange", visibility);
+    const timer = setInterval(() => { void refresh(); }, 200);
+    void refresh();
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+      clearTimeout(expiry);
+      document.removeEventListener("visibilitychange", visibility);
+      unlisten?.();
+    };
   }, [type]);
 
   useEffect(() => {
-    if (!data.desktopExpanded) setHovered(false);
-  }, [data.desktopExpanded]);
+    if (type === "orbit" && !data.desktopExpanded) setHovered(false);
+  }, [type, data.desktopExpanded]);
 
   useEffect(() => {
-    if (type !== "sun" || expanded || data.settings.reducedMotion) return;
-    let reset: ReturnType<typeof setTimeout>;
-    const timer = setInterval(() => {
-      const choice = Math.floor(Math.random() * 3);
-      setSunMood(choice === 1 ? "yawn" : "smile");
-      setSunAntic(choice === 0 ? "sun-roll" : choice === 1 ? "sun-yawn" : "sun-rocket");
-      reset = setTimeout(() => { setSunMood("neutral"); setSunAntic(""); }, 3200);
-    }, 18000);
-    return () => { clearInterval(timer); clearTimeout(reset); setSunAntic(""); setSunMood("neutral"); };
-  }, [type, expanded, data.settings.reducedMotion]);
+    if (type === "chat") return;
+    const clearHover = () => setHovered(false);
+    const visibility = () => { if (document.hidden) clearHover(); };
+    window.addEventListener("blur", clearHover);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("blur", clearHover);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [type]);
 
   useEffect(() => {
     if (type !== "chat" || loading) return;
@@ -193,8 +232,7 @@ export function DesktopWidget({
     // the sun while the native expansion is still animating.
     toggleQueue.current = toggleQueue.current.then(async () => {
       try {
-        await api("set_desktop_expanded", { expanded: next });
-        confirmedExpanded.current = next;
+        confirmedExpanded.current = await api<boolean>("toggle_desktop_expanded");
         setFailure("");
       } catch (reason) {
         setFailure(errorText(reason));
@@ -260,8 +298,8 @@ export function DesktopWidget({
 
   if (type === "sun")
     return (
-      <div className={`sun-widget ${sunAntic}`} onPointerEnter={() => interaction(true)} onPointerLeave={() => interaction(false)} onPointerMove={() => interaction()}>
-        <div className="pixel-rocket-track" aria-hidden="true"><svg className="pixel-rocket" viewBox="0 0 16 20" shapeRendering="crispEdges"><path fill="#d4dfdf" d="M6 1h4v2h2v9H4V3h2z"/><path fill="#7cc3d2" d="M6 5h4v4H6z"/><path fill="#d68777" d="M2 10h3v6H1v-3h1zm9 0h3v3h1v3h-4z"/><path fill="#efbb69" d="M5 13h6v3H5zm2 3h2v3H7z"/></svg></div>
+      <div className={`sun-widget ${sunAntic.className}`} data-hovered={hovered} onPointerEnter={() => { if (!native) setHovered(true); interaction(true); }} onPointerLeave={() => { setHovered(false); interaction(false); }} onPointerMove={() => interaction()}>
+        <SunVisitors kind={sunAntic.visitor} />
         <button
           className="character-button sun-character"
           aria-label={expanded ? "Gather Sprites" : "Expand Sprites"}
@@ -274,8 +312,8 @@ export function DesktopWidget({
             void api("open_launcher");
           }}
         >
-          <Planet sun color="#e8aa62" size={100} name="Solar sun" mood={sunMood} />
-          <span className="sun-widget-label">
+          <Planet sun color="#e8aa62" size={100} name="Solar sun" mood={sunAntic.mood} />
+          <span className="sun-widget-label" hidden={!hovered} aria-hidden="true">
             {expanded ? "Gather Sprites" : "Your Sprites"}
           </span>
         </button>
@@ -315,6 +353,7 @@ export function DesktopWidget({
         onFocus={() => interaction(undefined, true)}
         onBlur={() => interaction(undefined, false)}
         onClick={() => {
+          setHovered(false);
           void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
             setFailure(errorText(reason)),
           );
@@ -323,10 +362,9 @@ export function DesktopWidget({
           event.preventDefault();
           void api("open_orbit_settings", { orbitId: orbit.id }).catch((reason) => setFailure(errorText(reason)));
         }}
-        title={`${orbit.name} · right-click for settings`}
       >
         <Planet color={orbit.color} size={planetSize} name={orbit.name} identity={orbit.avatarSeed || orbit.id} busy={busy} />
-        <span className="orbit-widget-name">
+        <span className="orbit-widget-name" hidden={!hovered} aria-hidden="true">
           {orbit.name}
           {needsAttention ? (
             <span className="orbit-attention-pip" />
