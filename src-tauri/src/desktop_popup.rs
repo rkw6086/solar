@@ -1,5 +1,5 @@
-//! Clicking away folds chats back into their Sprites; a subsequent click away
-//! can gather the formation. Native choosers and saves hold dismissal open.
+//! Clicking away folds chats back into their Sprites without gathering the
+//! formation. Native choosers and saves hold dismissal open.
 use crate::desktop_motion::CompanionDismissal;
 use std::{
     collections::HashMap,
@@ -80,12 +80,12 @@ fn schedule_blur(app: tauri::AppHandle, revision: u64) {
         // Losing key-window status is not a deliberate request to gather the
         // planets. Closing a popup can itself move focus through its restored
         // Sprite before another app takes it, producing a second blur after
-        // there are no chats left. Only pointer evidence may gather the group.
-        let _ = app.run_on_main_thread(move || dismiss(&on_main, Some(revision), false));
+        // there are no chats left. Focus changes never gather the group.
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, Some(revision)));
     });
 }
 
-fn dismiss(app: &tauri::AppHandle, expected: Option<u64>, collapse: bool) {
+fn dismiss(app: &tauri::AppHandle, expected: Option<u64>) {
     if protected(app) || (expected.is_some() && native_group_focused(app)) {
         return;
     }
@@ -98,24 +98,16 @@ fn dismiss(app: &tauri::AppHandle, expected: Option<u64>, collapse: bool) {
         .filter(|(label, _)| label.starts_with("chat-"))
         .map(|(_, window)| window)
         .collect();
-    let Some(transition) = registry
+    let Some(revision) = registry
         .group
         .lock()
         .ok()
-        .and_then(|mut group| group.begin(expected, !chats.is_empty(), collapse))
+        .and_then(|mut group| group.begin(expected, !chats.is_empty()))
     else {
         return;
     };
-    let revision = transition.revision;
     for window in &chats {
         crate::desktop::dismiss_orbit_chat(window);
-    }
-    if transition.collapse {
-        // This also handles an expansion with no open chat. The direct click
-        // evidence is authoritative even if macOS reports stale key focus.
-        if let Some(engine) = app.try_state::<Arc<crate::engine::Engine>>() {
-            let _ = crate::desktop::set_desktop_expanded(app.clone(), engine, false);
-        }
     }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -147,7 +139,7 @@ fn dismiss(app: &tauri::AppHandle, expected: Option<u64>, collapse: bool) {
 
 /// A deliberate Sun contraction closes its chats as part of the same motion.
 pub(crate) fn dismiss_chats(app: &tauri::AppHandle) {
-    dismiss(app, None, false);
+    dismiss(app, None);
 }
 
 /// Called by the existing native hit-test loop. A click outside all visible
@@ -172,15 +164,8 @@ pub(crate) fn pointer(
     if pressed && inside {
         cancel(app);
     } else if pressed && active {
-        // Decide what this gesture means before it is queued on the UI
-        // thread. A blur may finish closing the chat in the meantime; that
-        // cannot turn the same click into a request to gather its Sprite.
-        let collapse = !app
-            .webview_windows()
-            .keys()
-            .any(|label| label.starts_with("chat-"));
         let on_main = app.clone();
-        let _ = app.run_on_main_thread(move || dismiss(&on_main, None, collapse));
+        let _ = app.run_on_main_thread(move || dismiss(&on_main, None));
     }
 }
 

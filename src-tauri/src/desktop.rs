@@ -122,18 +122,13 @@ fn start_orbital_clock(app: tauri::AppHandle) {
                     .any(|label| label.starts_with("chat-"));
                 let engine = tick_app.state::<Arc<Engine>>();
                 let reduced = engine.settings().map(|s| s.reduced_motion).unwrap_or(true);
-                let (collapse, moved) = ORBIT_MOTION
+                let moved = ORBIT_MOTION
                     .lock()
                     .map(|mut motion| {
-                        let previous = motion.elapsed;
-                        let collapse =
-                            motion.tick(std::time::Instant::now(), expanded, chat_open, reduced);
-                        (collapse, motion.elapsed != previous)
+                        motion.tick(std::time::Instant::now(), expanded, chat_open, reduced)
                     })
-                    .unwrap_or((false, false));
-                if collapse {
-                    let _ = set_desktop_expanded(tick_app.clone(), engine, false);
-                } else if moved {
+                    .unwrap_or(false);
+                if moved {
                     let _ = align_companions(&tick_app);
                 }
             })

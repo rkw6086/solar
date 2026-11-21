@@ -1,4 +1,4 @@
-//! Clock and inactivity rules shared by all companion windows.
+//! Orbital clock and chat-dismissal rules shared by companion windows.
 use std::{
     collections::HashSet,
     time::{Duration, Instant},
@@ -18,11 +18,6 @@ pub(crate) struct CompanionDismissal {
     closing: Option<u64>,
     buttons: u64,
     clicks: Option<u64>,
-}
-
-pub(crate) struct DismissalTransition {
-    pub revision: u64,
-    pub collapse: bool,
 }
 
 impl CompanionDismissal {
@@ -63,13 +58,8 @@ impl CompanionDismissal {
         pressed
     }
 
-    pub fn begin(
-        &mut self,
-        expected: Option<u64>,
-        has_chats: bool,
-        collapse_requested: bool,
-    ) -> Option<DismissalTransition> {
-        if (!has_chats && !collapse_requested)
+    pub fn begin(&mut self, expected: Option<u64>, has_chats: bool) -> Option<u64> {
+        if !has_chats
             || self.closing.is_some()
             || expected.is_some_and(|revision| self.pending() != Some(revision))
         {
@@ -77,12 +67,7 @@ impl CompanionDismissal {
         }
         self.revision = self.revision.wrapping_add(1);
         self.closing = Some(self.revision);
-        Some(DismissalTransition {
-            revision: self.revision,
-            // A click away has one visible step: first fold open chats back
-            // into their Sprites; gather the system only if no chat is open.
-            collapse: collapse_requested && !has_chats,
-        })
+        Some(self.revision)
     }
 
     pub fn cancel(&mut self) -> bool {
@@ -112,7 +97,6 @@ pub(crate) struct MotionState {
     pub roster: Vec<String>,
     pub elapsed: Duration,
     last_tick: Instant,
-    last_activity: Instant,
     hovering: HashSet<String>,
 }
 impl Default for MotionState {
@@ -126,7 +110,6 @@ impl MotionState {
             roster: Vec::new(),
             elapsed: Duration::ZERO,
             last_tick: now,
-            last_activity: now,
             hovering: HashSet::new(),
         }
     }
@@ -134,21 +117,18 @@ impl MotionState {
         self.roster = roster;
         self.elapsed = Duration::ZERO;
         self.last_tick = now;
-        self.last_activity = now;
         self.hovering.clear();
     }
     pub fn activity(&mut self, now: Instant) {
-        self.last_activity = now;
+        self.last_tick = now;
     }
     pub fn resume(&mut self, now: Instant) {
         // Time spent expanding belongs to the transition, not the orbital
         // clock. Start moving from the exact final frame without catching up.
         self.last_tick = now;
-        self.last_activity = now;
     }
     pub fn hover(&mut self, label: &str, hovering: bool, now: Instant) {
-        // A native hit-test also supplies hover state. Repeated misses must not
-        // count as activity, otherwise an empty desktop can never auto-collapse.
+        // Repeated misses must not reset the clock while the system is orbiting.
         let changed = if hovering {
             self.hovering.insert(label.into())
         } else {
@@ -168,6 +148,7 @@ impl MotionState {
     }
     /// Open chats keep the entire formation at its current phase. This leaves
     /// the originating planet in a predictable place when a chat folds away.
+    /// Returns whether orbital positions advanced; it never requests collapse.
     pub fn tick(
         &mut self,
         now: Instant,
@@ -182,14 +163,11 @@ impl MotionState {
         if !expanded {
             return false;
         }
-        if chat_open || !self.hovering.is_empty() {
-            self.last_activity = now;
-        } else if !reduced_motion {
-            self.elapsed += delta;
+        if chat_open || !self.hovering.is_empty() || reduced_motion {
+            return false;
         }
-        !chat_open
-            && self.hovering.is_empty()
-            && now.saturating_duration_since(self.last_activity) >= Duration::from_secs(30)
+        self.elapsed += delta;
+        delta > Duration::ZERO
     }
 }
 
@@ -206,10 +184,10 @@ mod tests {
         let old = state.pending().unwrap();
         state.focus("orbit-b", true);
         assert!(state.pending().is_none());
-        assert!(state.begin(Some(old), true, true).is_none());
+        assert!(state.begin(Some(old), true).is_none());
         state.focus("orbit-b", false);
         let revision = state.pending().unwrap();
-        let closing = state.begin(Some(revision), true, true).unwrap().revision;
+        let closing = state.begin(Some(revision), true).unwrap();
         assert!(state.finish(closing));
         assert!(state.pending().is_none());
     }
@@ -219,7 +197,7 @@ mod tests {
         let mut state = CompanionDismissal::default();
         // Borderless macOS companions need not become the key window.
         assert!(state.pressed(1, None));
-        let closing = state.begin(None, true, true).unwrap().revision;
+        let closing = state.begin(None, true).unwrap();
         assert!(!state.pressed(1, None));
         assert!(!state.pressed(0, None));
         assert!(state.pressed(1, None));
@@ -231,32 +209,29 @@ mod tests {
     fn native_blur_after_an_outside_click_does_not_cancel_dismissal() {
         let mut state = CompanionDismissal::default();
         state.focus("chat-a", true);
-        let closing = state.begin(None, true, true).unwrap().revision;
+        let closing = state.begin(None, true).unwrap();
         assert!(!state.focus("chat-a", false));
         assert!(state.finish(closing));
     }
 
     #[test]
-    fn click_away_returns_chats_before_gathering_the_formation() {
+    fn click_away_returns_chats_without_ever_gathering_the_formation() {
         let mut state = CompanionDismissal::default();
         state.focus("chat-a", true);
         assert!(state.pressed(1, Some(1)));
-        let returning = state.begin(None, true, true).unwrap();
-        assert!(!returning.collapse);
+        let returning = state.begin(None, true).unwrap();
         // The native blur and another pointer sample during the fold cannot
         // start a second transition that hides the returning Sprite.
         state.focus("chat-a", false);
-        assert!(state.begin(state.pending(), false, true).is_none());
-        assert!(state.finish(returning.revision));
+        assert!(state.begin(state.pending(), false).is_none());
+        assert!(state.finish(returning));
         state.remove("chat-a");
         assert!(state.pending().is_none());
 
-        // A later, distinct click away may gather an already open formation.
+        // Later outside clicks with no chat have no dismissal transition.
         assert!(!state.pressed(0, Some(1)));
         assert!(state.pressed(1, Some(2)));
-        let gathering = state.begin(None, false, true).unwrap();
-        assert!(gathering.collapse);
-        assert!(state.finish(gathering.revision));
+        assert!(state.begin(None, false).is_none());
     }
 
     #[test]
@@ -264,13 +239,12 @@ mod tests {
         let mut state = CompanionDismissal::default();
         state.focus("chat-a", true);
         state.focus("chat-a", false);
-        let returning = state.begin(state.pending(), true, true).unwrap();
-        assert!(!returning.collapse);
-        assert!(state.finish(returning.revision));
+        let returning = state.begin(state.pending(), true).unwrap();
+        assert!(state.finish(returning));
         // Explicit sun contraction closes chats without requesting a second
         // contraction from the dismissal controller.
-        let sun = state.begin(None, true, false).unwrap();
-        assert!(!sun.collapse);
+        let sun = state.begin(None, true).unwrap();
+        assert!(state.finish(sun));
     }
 
     #[test]
@@ -278,20 +252,21 @@ mod tests {
         let mut state = CompanionDismissal::default();
         state.focus("chat-a", true);
         state.focus("chat-a", false);
-        let returning = state.begin(state.pending(), true, false).unwrap();
-        assert!(!returning.collapse);
-        assert!(state.finish(returning.revision));
+        let returning = state.begin(state.pending(), true).unwrap();
+        assert!(state.finish(returning));
         state.remove("chat-a");
 
         // macOS may briefly focus the restored Sprite, then transfer to the
         // application clicked behind it. That late blur has no chat to close.
         state.focus("orbit-a", true);
         state.focus("orbit-a", false);
-        assert!(state.begin(state.pending(), false, false).is_none());
+        assert!(state.begin(state.pending(), false).is_none());
 
-        // It must not create a 280 ms empty transition swallowing a real click.
-        let gathering = state.begin(None, false, true).unwrap();
-        assert!(gathering.collapse);
+        // A fresh chat still opens and closes normally after ignored clicks.
+        state.focus("chat-b", true);
+        state.focus("chat-b", false);
+        let next = state.begin(state.pending(), true).unwrap();
+        assert!(state.finish(next));
     }
 
     #[test]
@@ -310,37 +285,47 @@ mod tests {
         state.focus("chat-a", true);
         state.focus("chat-a", false);
         let blur = state.pending().unwrap();
-        let closing = state.begin(Some(blur), true, true).unwrap().revision;
+        let closing = state.begin(Some(blur), true).unwrap();
         assert!(state.focus("chat-b", true));
         assert!(!state.finish(closing));
-        assert!(state.begin(Some(blur), true, true).is_none());
+        assert!(state.begin(Some(blur), true).is_none());
         state.remove("chat-b");
-        let next = state.begin(state.pending(), true, true).unwrap().revision;
+        let next = state.begin(state.pending(), true).unwrap();
         assert_ne!(next, closing);
     }
     #[test]
-    fn only_idle_expansions_collapse_and_chats_get_a_fresh_thirty_seconds() {
+    fn long_idle_expansions_keep_orbiting_until_explicitly_collapsed() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
-        assert!(!state.tick(now + Duration::from_secs(29), true, false, false));
-        assert!(!state.tick(now + Duration::from_secs(40), true, true, false));
-        assert!(!state.tick(now + Duration::from_secs(69), true, false, false));
-        assert!(state.tick(now + Duration::from_secs(70), true, false, false));
-        assert!(!state.tick(now + Duration::from_secs(100), false, false, false));
-    }
-    #[test]
-    fn hover_pauses_motion_and_interaction_restarts_the_idle_clock() {
-        let now = Instant::now();
-        let mut state = MotionState::new(now);
-        state.tick(now + Duration::from_millis(80), true, false, false);
+        for seconds in [30, 60, 3600, 86400] {
+            let elapsed = state.elapsed;
+            assert!(state.tick(now + Duration::from_secs(seconds), true, false, false));
+            assert!(state.elapsed > elapsed);
+        }
         let elapsed = state.elapsed;
-        state.hover("orbit-a", true, now + Duration::from_secs(1));
+        assert!(!state.tick(now + Duration::from_secs(86401), false, false, false));
+        assert_eq!(state.elapsed, elapsed);
+    }
+
+    #[test]
+    fn hover_pauses_motion_and_leaving_resumes_without_catching_up() {
+        let now = Instant::now();
+        let mut state = MotionState::new(now);
+        state.tick(now + FRAME_INTERVAL, true, false, false);
+        let elapsed = state.elapsed;
+        state.hover("orbit-a", true, now + FRAME_INTERVAL);
         assert!(!state.tick(now + Duration::from_secs(100), true, false, false));
         assert_eq!(state.elapsed, elapsed);
         state.remove("orbit-a", now + Duration::from_secs(101));
-        assert!(!state.tick(now + Duration::from_secs(130), true, false, false));
-        assert!(state.tick(now + Duration::from_secs(131), true, false, false));
+        assert!(state.tick(
+            now + Duration::from_secs(101) + FRAME_INTERVAL,
+            true,
+            false,
+            false
+        ));
+        assert_eq!(state.elapsed, elapsed + FRAME_INTERVAL);
     }
+
     #[test]
     fn a_new_expansion_restarts_deterministically_with_a_fresh_roster() {
         let now = Instant::now();
@@ -351,33 +336,19 @@ mod tests {
         assert_eq!(state.elapsed, Duration::ZERO);
         assert!(state.tick(now + Duration::from_secs(31), true, false, false));
     }
+
     #[test]
-    fn repeated_native_pointer_misses_do_not_keep_the_system_awake() {
+    fn repeated_native_pointer_misses_do_not_pause_orbits() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
-        for second in 1..=30 {
-            state.hover("orbit-a", false, now + Duration::from_secs(second));
+        for second in 1..=60 {
+            let time = now + Duration::from_secs(second);
+            state.hover("orbit-a", false, time);
+            assert!(state.tick(time, true, false, false));
         }
-        assert!(state.tick(now + Duration::from_secs(30), true, false, false));
+        assert!(state.elapsed > Duration::ZERO);
     }
-    #[test]
-    fn leaving_the_hover_target_resumes_without_jumping_ahead() {
-        let now = Instant::now();
-        let mut state = MotionState::new(now);
-        state.tick(now + FRAME_INTERVAL, true, false, false);
-        state.hover("orbit-a", true, now + FRAME_INTERVAL);
-        let paused = state.elapsed;
-        state.tick(now + Duration::from_secs(5), true, false, false);
-        assert_eq!(state.elapsed, paused);
-        state.hover("orbit-a", false, now + Duration::from_secs(5));
-        state.tick(
-            now + Duration::from_secs(5) + FRAME_INTERVAL,
-            true,
-            false,
-            false,
-        );
-        assert_eq!(state.elapsed, paused + FRAME_INTERVAL);
-    }
+
     #[test]
     fn keyboard_focus_survives_native_pointer_misses() {
         let now = Instant::now();
@@ -388,10 +359,16 @@ mod tests {
         assert!(!state.tick(now + Duration::from_secs(40), true, false, false));
         assert_eq!(state.elapsed, Duration::ZERO);
         state.hover("focus:orbit-a", false, now + Duration::from_secs(40));
-        assert!(state.tick(now + Duration::from_secs(70), true, false, false));
+        assert!(state.tick(
+            now + Duration::from_secs(40) + FRAME_INTERVAL,
+            true,
+            false,
+            false
+        ));
     }
+
     #[test]
-    fn returning_chat_clears_stale_focus_and_gets_a_fresh_idle_period() {
+    fn returning_chat_clears_stale_focus_and_resumes_orbits() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
         state.hover("chat-a", true, now);
@@ -400,10 +377,15 @@ mod tests {
         state.remove("chat-a", now + Duration::from_secs(100));
         assert!(!state.is_hovered("chat-a"));
         assert!(!state.is_hovered("focus:chat-a"));
-        assert!(!state.tick(now + Duration::from_secs(129), true, false, false));
-        assert!(state.elapsed > Duration::ZERO);
-        assert!(state.tick(now + Duration::from_secs(130), true, false, false));
+        assert!(state.tick(
+            now + Duration::from_secs(100) + FRAME_INTERVAL,
+            true,
+            false,
+            false
+        ));
+        assert_eq!(state.elapsed, FRAME_INTERVAL);
     }
+
     #[test]
     fn transitions_follow_elapsed_time_and_finish_exactly() {
         assert_eq!(transition_progress(Duration::ZERO, false), 0.0);
@@ -413,8 +395,9 @@ mod tests {
         let half = transition_progress(TRANSITION_DURATION / 2, false);
         assert!(half > 0.5 && half < 1.0);
     }
+
     #[test]
-    fn completing_expansion_does_not_jump_ahead_or_shorten_idle_time() {
+    fn completing_expansion_does_not_jump_ahead() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
         state.resume(now + Duration::from_secs(2));
@@ -425,14 +408,13 @@ mod tests {
             false,
         );
         assert_eq!(state.elapsed, FRAME_INTERVAL);
-        assert!(!state.tick(now + Duration::from_secs(31), true, false, false));
-        assert!(state.tick(now + Duration::from_secs(32), true, false, false));
     }
+
     #[test]
-    fn reduced_motion_stays_still_without_disabling_idle_collapse() {
+    fn reduced_motion_stays_still_even_after_long_idle_time() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
-        assert!(state.tick(now + Duration::from_secs(31), true, false, true));
+        assert!(!state.tick(now + Duration::from_secs(86400), true, false, true));
         assert_eq!(state.elapsed, Duration::ZERO);
     }
 }
