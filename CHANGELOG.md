@@ -7,6 +7,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Added
 
+- Manual clean macOS build checks with pinned Rust tooling and visible native compiler diagnostics.
 - More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
 - A larger visiting rocket, a passing comet, and a friendly flying saucer around the idle sun, with quiet, occasional animations and reduced-motion support.
 - Read-only-by-default shared folder links for selected or all current and future Sprites, plus opt-in setup discovery of home configuration and global agent folders.
@@ -14,6 +15,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Fixed
 
+- Split launcher and widget bundles so production frontend builds stay below the chunk warning limit; replace deprecated CI artifact downloads.
 - Show a hand pointer over clickable desktop companions even while Solar is unfocused.
 - Workspace-anchored file access and process filesystem allowlists restrict unshared host data; permission changes cancel work and invalidate cached sessions.
 - Clicking away from a Sprite chat returns it to its planet without collapsing the formation; clicking away with no chats open still gathers the Sprites.

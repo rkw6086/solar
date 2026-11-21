@@ -8,7 +8,7 @@ Solar is a local Rust and Tauri application with a React/TypeScript interface. E
 
 ## Develop
 
-The primary target is Apple Silicon running macOS 14.2 or later. Install Rust, Node.js 22.22.2+ or 24.15+ (LTS), and Xcode command-line tools.
+The primary target is Apple Silicon running macOS 14.2 or later. Install Rust through rustup, Node.js 22.22.2+ or 24.15+ (LTS), and Xcode command-line tools. `rust-toolchain.toml` selects Rust 1.99.1 and rustfmt, matching CI.
 
 Use [Corepack](https://github.com/nodejs/corepack) to download and cache the exact pnpm version declared in `package.json`. If Corepack is missing or outdated, install it once with `npm install -g corepack@0.36.0` (Node.js 25+ no longer bundles Corepack).
 
@@ -169,6 +169,8 @@ cargo check -p solar
 ```
 
 On Linux with Homebrew first in PATH, system GTK/WebKit discovery may need `PKG_CONFIG=/usr/bin/pkg-config`. The Rust application tests use loopback fixtures and dummy credentials.
+
+For a clean Apple Silicon compile, run **Clean macOS build** from GitHub Actions. It uses a fresh target directory, fails on compiler or bundler diagnostics, and does not sign, upload, or publish a release. Native helper warnings are included in ordinary build output.
 
 Native acceptance needs an actual Mac. Verify screen-picker cancellation/revocation, Accessibility controls, keyboard focus, transparent hit regions, expand/collapse animation, attention chimes and camera-housing placement, Spaces/fullscreen behavior, and mixed-scale displays before distributing a build. The Swift helper cannot be exercised on Linux.
 

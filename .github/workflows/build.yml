@@ -229,15 +229,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Collect verified macOS downloads
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: solar-macos
-          path: ${{ env.SOLAR_RELEASE_DIR }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-macos --dir "$SOLAR_RELEASE_DIR"
       - name: Collect release notes
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: solar-release-notes
-          path: ${{ runner.temp }}/solar-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-release-notes --dir "$RUNNER_TEMP/solar-notes"
       - name: Publish verified downloads and retire superseded releases
         env:
           GITHUB_TOKEN: ${{ github.token }}

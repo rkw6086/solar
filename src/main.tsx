@@ -1,11 +1,14 @@
-import { StrictMode, useEffect, useState } from "react";
+import { lazy, StrictMode, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import { DesktopWidget } from "./DesktopWidget";
-import { AttentionWidget } from "./AttentionWidget";
 import { installClickSounds } from "./soundEffects";
 import { installDiagnostics, reportDiagnostic } from "./diagnostics";
 import "./styles.css";
+
+// Each native window loads only its own surface, with common modules shared
+// between chunks instead of one large eagerly loaded application bundle.
+const App = lazy(() => import("./App").then(module => ({ default: module.App })));
+const DesktopWidget = lazy(() => import("./DesktopWidget").then(module => ({ default: module.DesktopWidget })));
+const AttentionWidget = lazy(() => import("./AttentionWidget").then(module => ({ default: module.AttentionWidget })));
 
 function Root() {
   useEffect(installClickSounds, []);
@@ -20,13 +23,14 @@ function Root() {
   useEffect(() => {
     document.documentElement.classList.toggle("widget-root", widget);
   }, [widget]);
-  return type === "attention" ? (
+  const surface = type === "attention" ? (
     <AttentionWidget />
   ) : widget ? (
     <DesktopWidget type={type as "sun" | "orbit" | "chat"} orbitId={id} />
   ) : (
     <App />
   );
+  return <Suspense fallback={widget ? null : <div className="startup-black" aria-busy="true" />}>{surface}</Suspense>;
 }
 
 installDiagnostics();

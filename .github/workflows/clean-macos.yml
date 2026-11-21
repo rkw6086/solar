@@ -1,0 +1,46 @@
+name: Clean macOS build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: solar-clean-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CI: 'true'
+      CARGO_BUILD_JOBS: '3'
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: never
+      PYTHONDONTWRITEBYTECODE: '1'
+      SOLAR_JOB_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      SOLAR_SOURCE_COMMIT: ${{ github.sha }}
+      SOLAR_SOURCE_MODIFIED: 'false'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.17.0'
+      - name: Set up pinned native tools
+        run: bash scripts/ci/setup-macos.sh
+      - name: Install exact frontend dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Check formatting and build from an empty target directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ ! -e "$CARGO_TARGET_DIR" ]] || { echo 'Clean build target already exists.' >&2; exit 1; }
+          cargo fmt --all -- --check
+          corepack pnpm tauri build --ci --target aarch64-apple-darwin --no-bundle --no-sign -- --locked 2>&1 | tee "$RUNNER_TEMP/solar-clean-build.log"
+          python3 scripts/ci/check-build-log.py "$RUNNER_TEMP/solar-clean-build.log"

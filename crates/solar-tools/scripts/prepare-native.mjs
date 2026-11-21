@@ -12,7 +12,9 @@ if (process.platform === 'darwin') {
   if (!['aarch64-apple-darwin', 'x86_64-apple-darwin'].includes(target)) {
     throw new Error(`Unsupported macOS helper target ${target}`);
   }
-  const output = execFileSync('cargo', ['build', '-p', 'solar-tools', '--target', target, '--message-format=json'], {
+  // Keep machine-readable build metadata on stdout, while Cargo renders every
+  // compiler warning/error to inherited stderr instead of hiding it in JSON.
+  const output = execFileSync('cargo', ['build', '-p', 'solar-tools', '--target', target, '--message-format=json-render-diagnostics'], {
     cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'],
   });
   const result = output.split('\n').filter(Boolean).map(line => JSON.parse(line)).findLast(

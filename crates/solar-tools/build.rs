@@ -14,7 +14,7 @@ fn main() {
         "x86_64"
     };
     let target = format!("{architecture}-apple-macos14.0");
-    let status = Command::new("xcrun")
+    let output = Command::new("xcrun")
         .args([
             "swiftc",
             "-parse-as-library",
@@ -31,9 +31,22 @@ fn main() {
             "-o",
         ])
         .arg(&binary)
-        .status()
+        .output()
         .expect("Xcode command-line tools are required to build the macOS native helper");
-    assert!(status.success(), "macOS native helper compilation failed");
+    assert!(
+        output.status.success(),
+        "macOS native helper compilation failed ({}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // Cargo hides successful build-script stderr. Surface Swift diagnostics
+    // explicitly so a normal, non-verbose build cannot silently discard them.
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        if !line.trim().is_empty() {
+            println!("cargo:warning={line}");
+        }
+    }
     println!(
         "cargo:rustc-env=SOLAR_NATIVE_HELPER_BUILT={}",
         binary.display()
