@@ -11,7 +11,7 @@ const base = { GITHUB_SERVER_URL:'https://github.com', GITHUB_REPOSITORY:'rkw608
   GITHUB_TOKEN:'test-token', SOLAR_JOB_ID:'123-1' };
 const beta = (commit=previous) => ({id:7,tag_name:'beta',prerelease:true,draft:false,target_commitish:commit,
   body:`<!-- solar-beta:v1 commit=${commit} -->`,assets:[{name:`Solar_beta_${commit}_aarch64.dmg`,size:123},{name:'SHA256SUMS',size:100}]});
-async function fixture(run, { env: extra={}, current=null, head=sha, dirty=false, tags='0.1.0\n0.1.3', event={}, foreignTag=null, stages=[] }={}) {
+async function fixture(run, { env: extra={}, current=null, head=sha, dirty=false, tags='0.1.0\n0.1.3', event={}, foreignTag=null, stages=[], remoteReleaseTag=sha }={}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),'solar-github-test-'));
   const env = {...base, RUNNER_TEMP:directory, GITHUB_OUTPUT:path.join(directory,'output'),GITHUB_ENV:path.join(directory,'env'),...extra};
   const calls=[];
@@ -30,7 +30,7 @@ async function fixture(run, { env: extra={}, current=null, head=sha, dirty=false
     if(url==='/branches/main')return {commit:{sha:head}};
     if(url==='/git/ref/tags/beta')return current||foreignTag?{ref:'refs/tags/beta',object:{type:'commit',sha:foreignTag??current.target_commitish}}:null;
     if(url.startsWith('/git/ref/tags/beta-stage-'))return {ref:'refs/'+decodeURIComponent(url.slice('/git/ref/'.length)),object:{type:'commit',sha}};
-    if(url==='/git/ref/tags/0.1.3')return {ref:'refs/tags/0.1.3',object:{type:'commit',sha}};
+    if(url==='/git/ref/tags/0.1.3')return {ref:'refs/tags/0.1.3',object:{type:'commit',sha:remoteReleaseTag}};
     throw new Error('Unexpected API '+url);
   };
   try { await run({env,directory,event,git,api,versions:(_dir,expected)=>{
@@ -41,9 +41,17 @@ async function fixture(run, { env: extra={}, current=null, head=sha, dirty=false
 }
 test('GitHub context is restricted to Solar and supported event refs',()=>{
   assert.equal(githubContext(base,{}),'beta');
-  for(const env of [{...base,GITHUB_REPOSITORY:'stranger/solar'},{...base,GITHUB_SERVER_URL:'https://git.ryserve.net'},
+  for(const env of [{...base,GITHUB_REPOSITORY:'stranger/solar'},{...base,GITHUB_SERVER_URL:'https://example.invalid'},
     {...base,GITHUB_API_URL:'https://evil.example'},{...base,GITHUB_REF:'refs/heads/topic'},
     {...base,GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/beta'}]) assert.throws(()=>githubContext(env,{}));
+});
+test('stable signing requires a non-deleted exact version tag push',()=>{
+  const env={...base,GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/0.1.3'};
+  assert.equal(githubContext(env,{after:sha}),'release');
+  assert.throws(()=>githubContext(env,{deleted:true,after:sha}));
+  assert.throws(()=>githubContext(env,{after:'0'.repeat(40)}));
+  assert.throws(()=>githubContext({...env,GITHUB_REF:'refs/tags/v0.1.3'},{after:sha}));
+  assert.throws(()=>githubContext({...env,GITHUB_EVENT_NAME:'workflow_dispatch'},{after:sha}));
 });
 test('manual beta creates bounded notes and exact source outputs',async()=>fixture(async(options,calls)=>{
   const result=await checkGitHubBuild(options);
@@ -76,6 +84,11 @@ test('pull requests must target the trusted default branch',()=>{
 test('stable tags bind exact version and cannot publish below a newer tag',async()=>{
   await fixture(async options=>assert.equal((await checkGitHubBuild(options)).channel,'release'),{env:{GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/0.1.3'}});
   await fixture(async options=>assert.rejects(checkGitHubBuild(options),/newer stable/),{env:{GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/0.1.3'},tags:'0.1.3\n0.1.4'});
+});
+test('a remote version tag moved away from its triggering source is rejected',async()=>{
+  await fixture(async options=>assert.rejects(checkGitHubBuild(options),/tag or source changed/),{
+    env:{GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/tags/0.1.3'},remoteReleaseTag:previous,
+  });
 });
 test('published stable is skipped only for an owned exact source',async()=>{
   const current={id:7,tag_name:'0.1.3',draft:false,prerelease:false,target_commitish:sha,body:`<!-- solar-release:v1 tag=0.1.3 commit=${sha} -->`};

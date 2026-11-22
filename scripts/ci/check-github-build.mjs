@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { root, checkVersions, compareVersions, releaseNotes } from '../release.mjs';
-import { betaNeedsBuild, betaNotes, previousBeta } from './check-beta-build.mjs';
+import { betaNeedsBuild, betaNotes, previousBeta } from './release-channels.mjs';
 
 const REPOSITORY = 'rkw6086/solar';
 const SHA = /^[0-9a-f]{40}$/;

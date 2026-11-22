@@ -1,8 +1,8 @@
 # Solar releases on GitHub Actions
 
-Source development stays on [Gitea](https://git.ryserve.net/internal/solar-chat); [repository synchronization](github-sync.md) publishes it to [GitHub](https://github.com/rkw6086/solar). All checks and builds run on GitHub. Current installers are on [GitHub Releases](https://github.com/rkw6086/solar/releases).
+Source, checks, and builds are available on [GitHub](https://github.com/rkw6086/solar). Current installers are on [GitHub Releases](https://github.com/rkw6086/solar/releases).
 
-The release target remains Apple Silicon macOS 14.2+. Native builds use GitHub's `macos-15` hosted runner. This migration does not add Windows, Linux, Intel, or universal installers.
+The release target is Apple Silicon macOS 14.2+. Native builds use GitHub's `macos-15` hosted runner. Windows, Linux, Intel, and universal installers are not currently published.
 
 ## Stable and beta channels
 
@@ -18,7 +18,7 @@ The signed DMG is `Solar_VERSION_aarch64.dmg` for stable releases and `Solar_bet
 
 ## Publish a stable version
 
-From the primary Gitea checkout:
+From a checkout of the GitHub repository:
 
 ```sh
 corepack pnpm run release:prepare patch
@@ -27,7 +27,7 @@ corepack pnpm run version:check
 corepack pnpm run release:tag VERSION --push
 ```
 
-Replace `VERSION` with the prepared version. Use `minor`, `major`, or an exact version instead of `patch` when appropriate. Do not recreate or move an existing numbered tag. Gitea sync delivers the new tag to GitHub, which triggers the signed build. A failed build can be rerun for the same unchanged tag.
+Replace `VERSION` with the prepared version. Use `minor`, `major`, or an exact version instead of `patch` when appropriate. Do not recreate or move an existing numbered tag. Pushing the tag to GitHub triggers the signed build. A failed build can be rerun for the same unchanged tag.
 
 ## Signing and notarization
 
@@ -47,7 +47,7 @@ Configure these as **GitHub Actions repository secrets** on `rkw6086/solar`:
 | `APPLE_API_ISSUER` | App Store Connect Issuer ID |
 | `APPLE_API_KEY_P8` | Base64 of the team API key's `.p8` |
 
-The configured identity and API key are shared with Galaxy, but GitHub repository secrets are separate copies. Rotate both repositories' copies together. No signing key belongs in source, issue text, logs, or build artifacts.
+No signing key belongs in source, issue text, logs, or build artifacts. Keep credentials in repository secrets and rotate them when necessary.
 
 The unsigned build runs without Apple credentials. Packaging imports the certificate into an ephemeral keychain, signs nested code and the app, notarizes and staples the app, creates and signs the DMG, and notarizes and staples the DMG. It checks hardened runtime, team identity, signatures, notarization, and Gatekeeper before upload. Cleanup restores the keychain search list and removes the temporary keychain and credential files even on failure.
 
@@ -62,5 +62,3 @@ shasum -a 256 -c SHA256SUMS
 ```
 
 Mount the image on a Mac, install Solar, and check launch, screen sharing, Accessibility permissions, popup chats, and widget motion. Signing and notarization do not replace functional testing. Confirm the beta points to the intended source, the stable release is unchanged during a beta update, superseded downloads are gone, and only the two intended channels remain.
-
-Earlier Gitea workflow definitions are kept under `.gitea/retired-workflows/` for reference; they no longer run. Previous Gitea downloads are legacy records, not the destination for new releases.

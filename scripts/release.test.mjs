@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseVersion, compareVersions, checkVersions, prepareVersion, releaseNotes, createReleaseTag } from './release.mjs';
-import { tagVersion, checkHistory } from './ci/check-release-tag.mjs';
 
 const packages = ['solar', 'solar-agent-core', 'solar-providers', 'solar-tools'];
 function fixture(t) {
@@ -47,22 +46,6 @@ test('version drift and missing release notes fail early', (t) => {
   write('src-tauri/tauri.conf.json', '{"version":"0.2.0"}');
   assert.throws(() => checkVersions(directory), /expected 0.1.0/);
   assert.throws(() => releaseNotes(directory, '0.2.0'), /CHANGELOG/);
-});
-
-test('only a non-deleted version tag push permits signing', () => {
-  assert.equal(tagVersion('push', 'refs/tags/0.1.0', 'abc123'), '0.1.0');
-  for (const args of [
-    ['workflow_dispatch', 'refs/tags/0.1.0', 'abc123'],
-    ['push', 'refs/heads/main', 'abc123'],
-    ['push', 'refs/tags/v0.1.0', 'abc123'],
-    ['push', 'refs/tags/0.1.0', '0'.repeat(40)],
-  ]) assert.throws(() => tagVersion(...args));
-});
-
-test('moved version tags are rejected; original failed runs can be retried', () => {
-  assert.doesNotThrow(() => checkHistory([{ event: 'push', path: 'macos-release.yml@refs/tags/0.1.0', head_branch: '', head_sha: 'same' }], '0.1.0', 'same'));
-  assert.throws(() => checkHistory([{ event: 'push', path: 'macos-release.yml@refs/tags/0.1.0', head_branch: '', head_sha: 'old' }], '0.1.0', 'new'), /different commit/);
-  assert.doesNotThrow(() => checkHistory([{ event: 'push', path: 'macos-release.yml@refs/heads/0.1.0', head_branch: '0.1.0', head_sha: 'old' }], '0.1.0', 'new'));
 });
 
 test('release tags require committed, published main and cannot be overwritten', (t) => {

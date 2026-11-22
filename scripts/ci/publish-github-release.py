@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Publish verified GitHub downloads, retaining one stable release and one beta.
 
-The replacement/retention state machine is shared with Solar's proven Gitea
-flow; the GitHub transport follows Galaxy's authenticated draft discovery,
-asset API downloads and lease-protected rolling tag operations.
+Publication uses authenticated draft discovery, verified asset downloads,
+and lease-protected rolling tag operations.
 """
 from __future__ import annotations
 

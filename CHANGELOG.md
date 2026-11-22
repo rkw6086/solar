@@ -5,15 +5,18 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-22
+
 ### Added
 
+- Installation, setup, everyday examples, and troubleshooting documentation for Solar users.
 - Scrollable chat sidebar with direct messages, group chats, and a New group action, replacing the Conversations tab.
 - Four-corner desktop docking: the collapsed sun sits flush against the usable screen edge, moves inward on expansion, and returns to its saved corner when gathered.
 - Manual clean macOS build checks with pinned Rust tooling and visible native compiler diagnostics.
 - More Sprite eyes, expressions, planet surfaces, and rings, with distinct regenerated appearances.
 - A larger visiting rocket, a passing comet, and a friendly flying saucer around the idle sun, with quiet, occasional animations and reduced-motion support.
 - Read-only-by-default shared folder links for selected or all current and future Sprites, plus opt-in setup discovery of home configuration and global agent folders.
-- Metadata-only home search and always-approved requests to add live links to a Sprite workspace.
+- Metadata-only home search, with explicit user approval for every request to add live links to a Sprite workspace.
 
 ### Fixed
 
@@ -39,7 +42,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Changed
 
-- Move all builds, checks, signing, and release publication to GitHub Actions, with Gitea remaining the primary source and securely synchronizing with the public `rkw6086/solar` repository.
+- Move builds, checks, signing, and release publication to GitHub Actions for the public `rkw6086/solar` repository.
 - Remote diagnostics require a runtime `RYSERVE_LOGGING_KEY`; distributed source and new binaries contain no embedded logging credential.
 - Keep one stable release and one rolling beta with verified replacement and cleanup of superseded downloads. Nightly beta checks run at 3:00 a.m. America/Chicago; About Solar identifies beta builds by source commit.
 - Give every Sprite a separate orbital path in the launcher and desktop formation, with synchronized motion that keeps neighbors apart.
@@ -97,4 +100,4 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 - User-created Orbits with individual and group conversations, configurable personalities, and model selection.
 - Local project tools, shell execution, MCP integrations, and live tool activity.
 - Desktop companions, attention notifications, and guided setup.
-- Signed and notarized DMG distribution through Gitea Releases.
+- Signed and notarized DMG distribution.
