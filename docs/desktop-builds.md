@@ -1,6 +1,6 @@
 # Windows and Linux builds
 
-The **Build Windows and Linux** GitHub Actions workflow builds native x64 packages on Windows and Ubuntu runners. It runs for pushes to `main`, pull requests targeting `main`, and manual dispatches. Use **Actions → Build Windows and Linux → Run workflow** to test both platforms without publishing a release.
+The **Build Windows and Linux** GitHub Actions workflow builds native x64 packages on Windows and Ubuntu runners. It runs for pushes to `main` and manual dispatches, and **Build Solar** calls it when validating pull requests targeting `main`. Use **Actions → Build Windows and Linux → Run workflow** to test both platforms without publishing a release.
 
 Each successful job uploads its packages, `SHA256SUMS`, and `BUILD-INFO.json` as a one-day Actions artifact:
 
