@@ -90,7 +90,8 @@ jobs:
           npm install --global --prefix "$solar_node_tools" corepack@0.36.0
           node -e "const fs = require('fs'), path = require('path'); const root = path.join(process.env.RUNNER_TEMP, 'solar-node-tools'); fs.appendFileSync(process.env.GITHUB_PATH, root + '\\n' + path.join(root, 'bin') + '\\n');"
           if [[ "$RUNNER_OS" == Windows ]]; then
-            export PATH="$(cygpath -u "$solar_node_tools"):$PATH"
+            solar_node_bin=$(cygpath -u "$solar_node_tools")
+            export PATH="$solar_node_bin:$PATH"
           else
             export PATH="$solar_node_tools/bin:$PATH"
           fi
