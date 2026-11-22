@@ -5,7 +5,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
-## [0.1.7] - 2026-11-22
+## [0.1.7]
 
 ### Added
 
