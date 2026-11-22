@@ -1,4 +1,4 @@
-use solar::{engine::Engine, model::Orbit};
+use solar_lib::{engine::Engine, model::Orbit};
 
 pub(crate) fn add_assistant(engine: &Engine) {
     engine

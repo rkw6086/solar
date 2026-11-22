@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [lib]
-name = "solar"
+name = "solar_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]

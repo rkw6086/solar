@@ -1,6 +1,6 @@
 mod common;
 
-use solar::{
+use solar_lib::{
     engine::Engine,
     model::{Memory, Orbit, Settings},
     store::Store,

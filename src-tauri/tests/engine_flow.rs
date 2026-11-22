@@ -2,7 +2,7 @@
 mod common;
 
 use serde_json::{Value, json};
-use solar::{
+use solar_lib::{
     engine::{Engine, ProviderDraft},
     model::{Memory, Project, Routine},
 };
