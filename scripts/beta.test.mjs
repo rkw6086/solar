@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { previousBeta, betaNeedsBuild, betaNotes } from './ci/release-channels.mjs';
+import { previousBeta, betaNeedsBuild, betaNotes, packageNames, PACKAGE_MARKER } from './ci/release-channels.mjs';
 
 const SHA = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
 const currentBeta = (commit = SHA) => ({
   tag_name: 'beta', prerelease: true, draft: false, target_commitish: commit,
-  body: `Notes\n\n<!-- solar-beta:v1 commit=${commit} -->`,
-  assets: [{ name: `Solar_beta_${commit}_aarch64.dmg`, size: 1234 }, { name: 'SHA256SUMS', size: 100 }],
+  body: `Notes\n\n<!-- solar-beta:v1 commit=${commit} -->\n${PACKAGE_MARKER}`,
+  assets: [...packageNames(`beta_${commit}`).map(name => ({ name, size: 1234 })), { name: 'SHA256SUMS', size: 100 }],
 });
 
 test('only a complete owned same-source scheduled beta is skipped', () => {
@@ -42,4 +42,11 @@ test('notes use the published baseline, sanitize controls and bound long histori
   assert.match(notes, /latest 200 commits/);
   assert.match(notes, new RegExp(`compare/${OLD}\.\.\.${SHA}`));
   assert.doesNotMatch(notes, /\u0001/);
+});
+
+test('legacy macOS-only beta rebuilds to add the other platforms', () => {
+  const beta = currentBeta();
+  beta.body = beta.body.replace(`\n${PACKAGE_MARKER}`, '');
+  beta.assets = [beta.assets[0], beta.assets.at(-1)];
+  assert.equal(betaNeedsBuild('schedule', beta, { commit: { sha: SHA } }, SHA), true);
 });

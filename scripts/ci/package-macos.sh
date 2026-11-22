@@ -172,5 +172,12 @@ xcrun stapler validate "$dmg"
 /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 hdiutil verify "$dmg" >/dev/null
 (cd "$SOLAR_RELEASE_DIR" && shasum -a 256 "$(basename "$dmg")" > SHA256SUMS)
+python3 - "$SOLAR_RELEASE_DIR/BUILD-INFO.json" "$version" "$SOLAR_RELEASE_SHA" "$channel" "$(basename "$dmg")" <<'IDENTITY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'version': sys.argv[2], 'source': sys.argv[3], 'channel': sys.argv[4],
+    'target': 'aarch64-apple-darwin', 'signed': True, 'packages': [sys.argv[5]],
+}, indent=2) + '\n')
+IDENTITY
 artifact_complete=true
 echo "Verified signed and notarized DMG: $(basename "$dmg")"

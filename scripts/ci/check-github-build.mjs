@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { root, checkVersions, compareVersions, releaseNotes } from '../release.mjs';
-import { betaNeedsBuild, betaNotes, previousBeta } from './release-channels.mjs';
+import { betaNeedsBuild, betaNotes, completePackageInventory, previousBeta } from './release-channels.mjs';
 
 const REPOSITORY = 'rkw6086/solar';
 const SHA = /^[0-9a-f]{40}$/;
@@ -110,9 +110,7 @@ export async function checkGitHubBuild({ env = process.env, directory = root, ev
               || (release.body ?? '').split('<!-- solar-beta:').length !== 2
               || !(release.body ?? '').includes(`<!-- solar-beta:v1 commit=${stage[1]} -->`)
               || ![stage[1], transition[1]].includes(tag)) return false;
-          const names = new Set([`Solar_beta_${stage[1]}_aarch64.dmg`, 'SHA256SUMS']);
-          return release.assets?.length === 2 && release.assets.every(asset => names.delete(asset.name)
-            && Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 512 * 1024 * 1024) && names.size === 0;
+          return completePackageInventory(release, `beta_${stage[1]}`, { allowLegacy: true });
         }).sort((left, right) => right.id - left.id);
         if (!candidates.length) throw new Error('An unowned beta ref exists without a release.');
         if (await tagCommit(candidates[0].tag_name) !== candidates[0].target_commitish) {

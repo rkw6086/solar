@@ -2,7 +2,7 @@
 
 Source, checks, and builds are available on [GitHub](https://github.com/rkw6086/solar). Current installers are on [GitHub Releases](https://github.com/rkw6086/solar/releases).
 
-The release target is Apple Silicon macOS 14.2+. Native builds use GitHub's `macos-15` hosted runner. Windows, Linux, Intel, and universal installers are not currently published.
+The signed Mac release target is Apple Silicon macOS 14.2+. Native builds use GitHub's `macos-15` hosted runner. The same pipeline also builds unsigned Windows x64 installers and Linux x64 packages; see [Windows and Linux builds](desktop-builds.md) for their current limitations. Intel Mac and universal installers are not currently published.
 
 ## Stable and beta channels
 
@@ -14,7 +14,7 @@ The release target is Apple Silicon macOS 14.2+. Native builds use GitHub's `mac
 
 Stable and beta publication share one queue. Each build pins its source commit before signing. A staged replacement is downloaded and verified before the previous release is removed. Exactly one owned stable release and one rolling `beta` release are retained; numbered source tags remain immutable. Missing or unrecognized release data fails closed rather than deleting it.
 
-The signed DMG is `Solar_VERSION_aarch64.dmg` for stable releases and `Solar_beta_FULL_COMMIT_aarch64.dmg` for beta. Every release includes `SHA256SUMS`. About Solar shows the packaged version; beta also shows its source commit. Both channels use the same app identifier and `~/.solar` data.
+The signed DMG is `Solar_VERSION_aarch64.dmg` for stable releases and `Solar_beta_FULL_COMMIT_aarch64.dmg` for beta. Windows uses `x64-setup.exe`; Linux uses `amd64.deb` and `x86_64.AppImage`. Every release includes a combined `SHA256SUMS` for all four packages. The publisher checks platform build metadata and each package checksum before replacing the prior release. About Solar shows the packaged version; beta also shows its source commit. Both channels use the same app identifier and `~/.solar` data.
 
 ## Publish a stable version
 
@@ -58,7 +58,7 @@ Unsigned compiler entries and public dependency downloads are cached separately 
 Wait for the entire **Build Solar** run to pass. Download the DMG and `SHA256SUMS` from the matching GitHub release and verify:
 
 ```sh
-shasum -a 256 -c SHA256SUMS
+grep 'aarch64.dmg$' SHA256SUMS | shasum -a 256 -c
 ```
 
 Mount the image on a Mac, install Solar, and check launch, screen sharing, Accessibility permissions, popup chats, and widget motion. Signing and notarization do not replace functional testing. Confirm the beta points to the intended source, the stable release is unchanged during a beta update, superseded downloads are gone, and only the two intended channels remain.

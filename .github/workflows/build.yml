@@ -181,6 +181,7 @@ jobs:
           path: |
             ${{ env.SOLAR_RELEASE_DIR }}/*.dmg
             ${{ env.SOLAR_RELEASE_DIR }}/SHA256SUMS
+            ${{ env.SOLAR_RELEASE_DIR }}/BUILD-INFO.json
           if-no-files-found: error
           retention-days: 1
           overwrite: true
@@ -199,10 +200,20 @@ jobs:
             rm -rf -- "$CARGO_TARGET_DIR"
           fi
 
+  desktop:
+    needs: prepare
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.build == 'true' }}
+    uses: ./.github/workflows/desktop-builds.yml
+    with:
+      source-sha: ${{ needs.prepare.outputs.sha }}
+      version: ${{ needs.prepare.outputs.version }}
+      channel: ${{ needs.prepare.outputs.channel }}
+      beta-id: ${{ needs.prepare.outputs.beta_id }}
+
   publish:
-    needs: [prepare, macos]
+    needs: [prepare, macos, desktop]
     if: >-
-      ${{ !cancelled() && needs.prepare.result == 'success' && needs.macos.result == 'success' &&
+      ${{ !cancelled() && needs.prepare.result == 'success' && needs.macos.result == 'success' && needs.desktop.result == 'success' &&
           github.repository == 'rkw6086/solar' && github.event_name != 'pull_request' &&
           needs.prepare.outputs.build == 'true' && needs.prepare.outputs.channel != 'ci' }}
     runs-on: ubuntu-24.04
@@ -228,12 +239,16 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Collect verified macOS downloads
+      - name: Collect verified platform downloads
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-macos --dir "$SOLAR_RELEASE_DIR"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-macos --dir "$SOLAR_RELEASE_DIR/macos"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-windows --dir "$SOLAR_RELEASE_DIR/windows"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name solar-linux --dir "$SOLAR_RELEASE_DIR/linux"
+      - name: Verify and combine platform packages
+        run: python3 scripts/ci/collect-release-packages.py
       - name: Collect release notes
         env:
           GH_TOKEN: ${{ github.token }}

@@ -5,6 +5,11 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+### Added
+
+- Native Windows x64 and Linux x64 build pipelines, with an unsigned Windows installer, Debian package, and AppImage alongside the signed Mac DMG in stable and beta releases.
+- Combined platform checksums and source metadata verification before release publication; each channel retains only its latest complete download set.
+
 ## [0.1.7]
 
 ### Added

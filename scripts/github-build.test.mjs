@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { packageNames, PACKAGE_MARKER } from './ci/release-channels.mjs';
 import { checkGitHubBuild, githubContext } from './ci/check-github-build.mjs';
 const sha = 'a'.repeat(40);
 const previous = 'b'.repeat(40);
@@ -10,7 +11,7 @@ const base = { GITHUB_SERVER_URL:'https://github.com', GITHUB_REPOSITORY:'rkw608
   GITHUB_EVENT_NAME:'workflow_dispatch', GITHUB_REF:'refs/heads/main', GITHUB_SHA:sha,
   GITHUB_TOKEN:'test-token', SOLAR_JOB_ID:'123-1' };
 const beta = (commit=previous) => ({id:7,tag_name:'beta',prerelease:true,draft:false,target_commitish:commit,
-  body:`<!-- solar-beta:v1 commit=${commit} -->`,assets:[{name:`Solar_beta_${commit}_aarch64.dmg`,size:123},{name:'SHA256SUMS',size:100}]});
+  body:`<!-- solar-beta:v1 commit=${commit} -->\n${PACKAGE_MARKER}`,assets:[...packageNames(`beta_${commit}`).map(name=>({name,size:123})),{name:'SHA256SUMS',size:100}]});
 async function fixture(run, { env: extra={}, current=null, head=sha, dirty=false, tags='0.1.0\n0.1.3', event={}, foreignTag=null, stages=[], remoteReleaseTag=sha }={}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),'solar-github-test-'));
   const env = {...base, RUNNER_TEMP:directory, GITHUB_OUTPUT:path.join(directory,'output'),GITHUB_ENV:path.join(directory,'env'),...extra};
@@ -68,6 +69,12 @@ test('missing beta attachment repairs an unchanged scheduled source',async()=>{
   const current=beta(sha);current.assets.pop();
   await fixture(async options=>assert.equal((await checkGitHubBuild(options)).build,true),{current,env:{GITHUB_EVENT_NAME:'schedule'}});
 });
+test('same-source legacy macOS beta is rebuilt with all platform packages',async()=>{
+  const current=beta(sha);
+  current.body=current.body.replace(`\n${PACKAGE_MARKER}`, '');
+  current.assets=[current.assets[0],current.assets.at(-1)];
+  await fixture(async options=>assert.equal((await checkGitHubBuild(options)).build,true),{current,env:{GITHUB_EVENT_NAME:'schedule'}});
+});
 test('dirty, stale and foreign beta states are rejected',async()=>{
   await fixture(async options=>assert.rejects(checkGitHubBuild(options),/clean/),{dirty:true});
   await fixture(async options=>assert.rejects(checkGitHubBuild(options),/current GitHub main/),{head:previous});
@@ -101,5 +108,14 @@ test('owned staged beta recovers its orphan alias after interrupted cutover',asy
   const stage={...beta(sha), id:10,tag_name:`beta-stage-${sha}-0123456789abcdef`,body:`<!-- solar-beta:v1 commit=${sha} -->\n<!-- solar-beta-transition:v1 previous=${previous} release=7 -->`};
   await fixture(async options=>{const result=await checkGitHubBuild(options);assert.equal(result.previous,previous);assert.equal(result.previousId,'10');},{foreignTag:previous,stages:[stage]});
   stage.body=`<!-- solar-beta:v1 commit=${sha} -->`;
+  await fixture(async options=>assert.rejects(checkGitHubBuild(options),/unowned beta/),{foreignTag:previous,stages:[stage]});
+});
+
+test('legacy orphan stage is recognized but incomplete current-platform stage is rejected',async()=>{
+  const stage={...beta(sha),id:10,tag_name:`beta-stage-${sha}-0123456789abcdef`,
+    body:`<!-- solar-beta:v1 commit=${sha} -->\n<!-- solar-beta-transition:v1 previous=${previous} release=7 -->`};
+  stage.assets=[stage.assets[0],stage.assets.at(-1)];
+  await fixture(async options=>assert.equal((await checkGitHubBuild(options)).previous,previous),{foreignTag:previous,stages:[stage]});
+  stage.body+=`\n${PACKAGE_MARKER}`;
   await fixture(async options=>assert.rejects(checkGitHubBuild(options),/unowned beta/),{foreignTag:previous,stages:[stage]});
 });

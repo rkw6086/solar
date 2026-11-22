@@ -17,7 +17,7 @@ runs:
       id: paths
       shell: bash
       env:
-        SOLAR_CACHE_INPUTS: ${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', 'rust-toolchain.toml', '.github/workflows/build.yml', '.github/actions/build-cache/action.yml', 'scripts/ci/setup-*', 'scripts/ci/build-*', 'scripts/ci/cache-paths.mjs') }}
+        SOLAR_CACHE_INPUTS: ${{ hashFiles('Cargo.lock', '**/Cargo.toml', '.cargo/**', 'rust-toolchain.toml', '.github/workflows/build.yml', '.github/workflows/desktop-builds.yml', '.github/actions/build-cache/action.yml', 'scripts/ci/setup-*', 'scripts/ci/build-*', 'scripts/ci/desktop-build.mjs', 'scripts/ci/cache-paths.mjs', 'src-tauri/tauri*.conf.json') }}
       run: node scripts/ci/cache-paths.mjs prepare
     - name: Restore unsigned compiler, dependency and tool entries
       id: restore

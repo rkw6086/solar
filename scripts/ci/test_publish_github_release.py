@@ -77,7 +77,7 @@ class FakeGitHub:
         config = replace(self.config, tag=tag, commit=commit, channel=channel)
         release = {'id': self.next_release, 'tag_name': tag, 'target_commitish': commit,
                    'draft': draft, 'prerelease': channel == 'beta',
-                   'body': MODULE.release_body(config, '- Test release.')}
+                   'body': MODULE.release_body(config, '- Test release.').replace('\n' + MODULE.PACKAGE_MARKER, '')}
         self.next_release += 1
         self.releases[release['id']] = release
         self.tags[tag] = commit
@@ -207,10 +207,12 @@ class PublishTests(unittest.TestCase):
 
     def make_files(self, config, data=b'signed-and-notarized-test-image'):
         identity = 'beta_' + config.commit if config.channel == 'beta' else config.version
-        self.dmg = self.directory / f'Solar_{identity}_aarch64.dmg'
-        self.dmg.write_bytes(data)
+        self.packages = [self.directory / name for name in MODULE.package_names(identity)]
+        self.dmg = self.packages[0]
+        for index, path in enumerate(self.packages):
+            path.write_bytes(data + bytes([index]))
         self.sums = self.directory / 'SHA256SUMS'
-        self.sums.write_text(hashlib.sha256(data).hexdigest() + '  ' + self.dmg.name + '\n')
+        self.sums.write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n' for path in self.packages))
 
     def beta(self, previous='b' * 40):
         self.config = replace(self.config, tag='beta', channel='beta', previous_beta=previous)
@@ -230,16 +232,61 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(url, 'https://github.com/rkw6086/solar/releases/tag/0.1.3')
         self.assertFalse(self.client.release['draft'])
         self.assertIn('- Signed macOS release.', self.client.release['body'])
-        self.assertEqual([a['name'] for a in self.client.stored], [self.dmg.name, 'SHA256SUMS'])
-        self.assertEqual([call[0] for call in self.mutations()], ['POST', 'POST', 'POST', 'PATCH'])
+        self.assertEqual([a['name'] for a in self.client.stored], [path.name for path in self.packages] + ['SHA256SUMS'])
+        self.assertEqual([call[0] for call in self.mutations()], ['POST'] * 6 + ['PATCH'])
         publication = self.client.events.index(('PATCH', '/releases/10'))
-        self.assertEqual(sum(kind == 'download' for kind, _ in self.client.events[:publication]), 2)
+        self.assertEqual(sum(kind == 'download' for kind, _ in self.client.events[:publication]), 5)
 
     def test_bad_local_checksum_never_calls_server(self):
         self.sums.write_text('0' * 64 + '  ' + self.dmg.name + '\n')
         with self.assertRaisesRegex(MODULE.PublishError, 'SHA256SUMS'):
             self.publish()
         self.assertEqual(self.client.calls, [])
+
+    def test_missing_platform_package_never_calls_server(self):
+        self.packages[1].unlink()
+        with self.assertRaises(MODULE.PublishError):
+            self.publish()
+        self.assertEqual(self.client.calls, [])
+
+    def test_corrupt_linux_package_never_calls_server(self):
+        self.packages[-1].write_bytes(b'corrupt AppImage')
+        with self.assertRaisesRegex(MODULE.PublishError, 'SHA256SUMS'):
+            self.publish()
+        self.assertEqual(self.client.calls, [])
+
+    def test_legacy_mac_only_release_is_recognized_for_retention(self):
+        old = self.client.add_release('0.1.2', 'b' * 40)
+        self.assertEqual(len(MODULE.remote_healthy(self.client, old)), 2)
+        old['body'] += '\n' + MODULE.PACKAGE_MARKER
+        with self.assertRaisesRegex(MODULE.PublishError, 'inventory'):
+            MODULE.remote_healthy(self.client, old)
+
+    def test_beta_stage_identity_changes_for_non_macos_package(self):
+        original = MODULE.stage_fingerprint(MODULE.release_files(self.config))
+        self.packages[1].write_bytes(b'new Windows installer')
+        self.sums.write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n' for path in self.packages))
+        self.assertNotEqual(original, MODULE.stage_fingerprint(MODULE.release_files(self.config)))
+
+    def test_current_candidate_cannot_downgrade_to_legacy_during_cleanup(self):
+        old = self.client.add_release('0.1.2', 'b' * 40)
+        def remove_packages(method, path, body):
+            if method == 'GET' and path == f'/releases/{old["id"]}':
+                self.client.before_request = None
+                current = self.client.release
+                # Simulate a manual replacement with a valid legacy pair, even
+                # removing the current inventory marker. This must not permit
+                # deleting the known-good previous release.
+                current['body'] = current['body'].replace('\n' + MODULE.PACKAGE_MARKER, '')
+                self.client.asset_lists[current['id']] = []
+                self.client.store(self.dmg, release_id=current['id'])
+                self.client.store_bytes(current['id'], 'SHA256SUMS',
+                    (hashlib.sha256(self.dmg.read_bytes()).hexdigest() + '  ' + self.dmg.name + '\n').encode())
+        self.client.before_request = remove_packages
+        with self.assertRaisesRegex(MODULE.PublishError, 'inventory'):
+            self.publish()
+        self.assertIn(old['id'], self.client.releases)
+        self.assertFalse(any(method == 'DELETE' for method, _ in self.client.calls))
 
     def test_empty_release_notes_never_call_server(self):
         with self.assertRaisesRegex(MODULE.PublishError, 'notes'):
@@ -258,18 +305,18 @@ class PublishTests(unittest.TestCase):
         self.client.release = self.client.generated_release()
         self.client.store(self.dmg)
         self.publish()
-        self.assertEqual(len(self.client.stored), 2)
-        self.assertEqual(sum('/assets?' in path for _, path in self.mutations()), 1)
+        self.assertEqual(len(self.client.stored), 5)
+        self.assertEqual(sum('/assets?' in path for _, path in self.mutations()), 4)
 
     def test_lost_upload_response_resumes_existing_bytes(self):
         self.client.fail_upload_after_save = self.sums.name
         with self.assertRaises(MODULE.PublishError):
             self.publish()
         self.assertTrue(self.client.release['draft'])
-        self.assertEqual(len(self.client.stored), 2)
+        self.assertEqual(len(self.client.stored), 5)
         self.publish()
         self.assertFalse(self.client.release['draft'])
-        self.assertEqual(len(self.client.stored), 2)
+        self.assertEqual(len(self.client.stored), 5)
 
     def test_foreign_draft_remains_untouched(self):
         self.client.release = self.client.generated_release()
@@ -295,8 +342,8 @@ class PublishTests(unittest.TestCase):
 
     def test_completed_matching_release_is_idempotent(self):
         self.client.release = self.client.generated_release(draft=False)
-        self.client.store(self.dmg)
-        self.client.store(self.sums)
+        for path in [*self.packages, self.sums]:
+            self.client.store(path)
         self.publish()
         self.assertEqual(self.mutations(), [])
 
@@ -533,6 +580,16 @@ class PublishTests(unittest.TestCase):
         self.client.runs[5]['path']='unrelated.yml'
         self.publish()
         self.assertEqual(set(self.client.artifacts),{3,4,5})
+
+    def test_windows_and_linux_transfer_archives_are_removed_after_publication(self):
+        self.beta(None)
+        for identifier, name in enumerate(['solar-windows', 'solar-linux'], 1):
+            self.client.artifacts[identifier] = {'id': identifier, 'name': name, 'expired': False,
+                                               'workflow_run': {'id': identifier}}
+            self.client.runs[identifier] = {'status': 'completed', 'event': 'workflow_dispatch',
+                                            'path': '.github/workflows/build.yml'}
+        self.publish()
+        self.assertEqual(self.client.artifacts, {})
 
     def test_beta_same_source_changed_record_rejects_stale_candidate(self):
         old=self.beta()

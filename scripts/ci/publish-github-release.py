@@ -22,11 +22,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from release_packages import PackageError, package_names, parse_checksums, regular_file
+
 VERSION = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 MAX_ASSET_BYTES = 512 * 1024 * 1024
 COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 STAGE = re.compile(r"beta-stage-([0-9a-f]{40}|[0-9a-f]{64})-[0-9a-f]{16}\Z")
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_MARKER = "<!-- solar-packages:v1 platforms=macos,windows,linux -->"
 
 
 class PublishError(Exception):
@@ -307,21 +310,25 @@ def file_digest(path):
 
 def release_files(config):
     identity = "beta_" + config.commit if config.channel == "beta" else config.version
-    dmg = config.directory / f"Solar_{identity}_aarch64.dmg"
-    checksum = config.directory / "SHA256SUMS"
-    for path in (dmg, checksum):
-        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_ASSET_BYTES:
-            raise PublishError("Expected nonempty regular DMG and checksum files within the upload limit.")
-    if checksum.stat().st_size > 4096:
-        raise PublishError("SHA256SUMS is unexpectedly large.")
+    names = package_names(identity)
+    paths = [config.directory / name for name in (*names, "SHA256SUMS")]
     try:
-        lines = checksum.read_text(encoding="ascii").splitlines()
-    except UnicodeError:
-        raise PublishError("SHA256SUMS is not valid ASCII.") from None
-    expected = file_digest(dmg)
-    if len(lines) != 1 or not re.fullmatch(re.escape(expected) + r" [ *]" + re.escape(dmg.name), lines[0]):
-        raise PublishError("The DMG does not match SHA256SUMS.")
-    return {path.name: (path, file_digest(path)) for path in (dmg, checksum)}
+        for path in paths:
+            regular_file(path, 4096 if path.name == "SHA256SUMS" else MAX_ASSET_BYTES)
+        hashes = parse_checksums(paths[-1].read_bytes(), names)
+    except PackageError as error:
+        raise PublishError(str(error)) from None
+    files = {path.name: (path, file_digest(path)) for path in paths}
+    if any(not hmac.compare_digest(files[name][1], hashes[name]) for name in names):
+        raise PublishError("A release package does not match SHA256SUMS.")
+    return files
+
+
+def stage_fingerprint(files):
+    # Include every package, so a rebuilt installer cannot collide with a prior
+    # candidate merely because the signed macOS DMG happened to be unchanged.
+    manifest = "".join(f"{name} {files[name][1]}\n" for name in sorted(files))
+    return hashlib.sha256(manifest.encode("ascii")).hexdigest()[:16]
 
 
 def notes_from_changelog(version, path):
@@ -432,41 +439,51 @@ def local_assets(client, release, files, complete=False):
     return found
 
 
-def remote_healthy(client, release):
+def remote_healthy(client, release, allow_legacy=True):
     identity = owned_identity(release)
     if identity is None or release.get("draft"):
         raise PublishError("Retention requires a published Solar-owned replacement.")
     channel, commit = identity
     tag = release["tag_name"]
     check_tag(client, tag, commit)
-    name = f"Solar_beta_{commit}_aarch64.dmg" if channel == "beta" else f"Solar_{tag}_aarch64.dmg"
+    names = package_names("beta_" + commit if channel == "beta" else tag)
     assets = release_assets(client, release)
-    if set(assets) != {name, "SHA256SUMS"}:
-        raise PublishError("Published replacement does not have its exact DMG and checksum pair.")
-    dmg, checksum = assets[name], assets["SHA256SUMS"]
-    if not isinstance(dmg.get("size"), int) or not 0 < dmg["size"] <= MAX_ASSET_BYTES:
-        raise PublishError("Replacement DMG size is invalid.")
+    # Historical macOS-only releases remain valid retention targets. New
+    # publication must always prove the complete four-platform-package set.
+    markers = release.get("body", "").count(PACKAGE_MARKER)
+    if markers > 1:
+        raise PublishError("Published package inventory marker is ambiguous.")
+    expected = set(names)
+    if allow_legacy and markers == 0 and set(assets) == {names[0], "SHA256SUMS"}:
+        expected = {names[0]}
+    if set(assets) != expected | {"SHA256SUMS"}:
+        raise PublishError("Published replacement does not have its exact package inventory.")
+    checksum = assets["SHA256SUMS"]
     if not isinstance(checksum.get("size"), int) or not 0 < checksum["size"] <= 4096:
         raise PublishError("Replacement checksum size is invalid.")
     data = client.download_bytes(checksum.get("browser_download_url", ""), 4096)
     try:
-        lines = data.decode("ascii").splitlines()
-    except UnicodeError:
-        raise PublishError("Replacement checksum is not ASCII.") from None
-    match = re.fullmatch(r"([0-9a-f]{64}) [ *]" + re.escape(name), lines[0]) if len(lines) == 1 else None
-    if not match or len(data) != checksum["size"]:
-        raise PublishError("Replacement checksum does not name its exact DMG.")
-    digest = asset_digest(client, dmg)
-    if not hmac.compare_digest(digest, match[1]):
-        raise PublishError("Replacement remote DMG failed checksum verification.")
+        hashes = parse_checksums(data, expected)
+    except PackageError as error:
+        raise PublishError("Replacement " + str(error)) from None
+    if len(data) != checksum["size"]:
+        raise PublishError("Replacement checksum size changed.")
+    for name in expected:
+        asset = assets[name]
+        if not isinstance(asset.get("size"), int) or not 0 < asset["size"] <= MAX_ASSET_BYTES:
+            raise PublishError("Replacement package size is invalid.")
+        if not hmac.compare_digest(asset_digest(client, asset), hashes[name]):
+            raise PublishError("Replacement remote package failed checksum verification.")
     return assets
 
 
 def release_body(config, notes):
     marker = (f"<!-- solar-beta:v1 commit={config.commit} -->" if config.channel == "beta"
               else f"<!-- solar-release:v1 tag={config.tag} commit={config.commit} -->")
-    return (notes.strip() + "\n\nDownload the DMG below. Its SHA-256 checksum is supplied in SHA256SUMS.\n\n"
-            + f"Source commit: `{config.commit}`\n\n{marker}")
+    return (notes.strip() + "\n\nDownload the installer for your platform below. The macOS DMG is signed and notarized. "
+            "Windows and Linux are previews with [platform limitations](https://github.com/rkw6086/solar/blob/main/docs/desktop-builds.md); "
+            "the Windows installer is unsigned. Verify your download with SHA256SUMS.\n\n"
+            + f"Source commit: `{config.commit}`\n\n{marker}\n{PACKAGE_MARKER}")
 
 
 def draft_with_files(config, client, tag, body, files):
@@ -501,8 +518,7 @@ def delete_owned_release(client, release, before_delete=None):
             or current.get("draft") != release.get("draft")):
         raise PublishError("Release changed before retention; left unchanged.")
     channel, commit = identity
-    allowed = {"SHA256SUMS", f"Solar_beta_{commit}_aarch64.dmg" if channel == "beta"
-               else f"Solar_{release['tag_name']}_aarch64.dmg"}
+    allowed = {"SHA256SUMS", *package_names("beta_" + commit if channel == "beta" else release["tag_name"])}
     if not set(release_assets(client, current)) <= allowed:
         raise PublishError("Release has unrecognized attachments; retention stopped.")
     before_tag = client.request("GET", tag_path(release["tag_name"]), missing_ok=True)
@@ -562,7 +578,7 @@ def confirm_artifact_deleted(client, artifact):
 def prune_artifacts(client, before_delete=None):
     # Never touch PR outputs or artifacts from another workflow. The one-day
     # upload retention is the fallback if publication or cleanup is interrupted.
-    known = {"solar-macos", "solar-release-notes"}
+    known = {"solar-macos", "solar-windows", "solar-linux", "solar-release-notes"}
     for artifact in list_all(client, "/actions/artifacts", "artifacts"):
         if artifact.get("name") not in known or artifact.get("expired"):
             continue
@@ -587,16 +603,16 @@ def prune_artifacts(client, before_delete=None):
         confirm_artifact_deleted(client, current)
 
 
-def retain_latest(client):
+def retain_latest(client, current_full_id=None):
     releases = list_all(client, "/releases")
     stable = [release for release in releases if owned_identity(release)
               and owned_identity(release)[0] == "release" and not release.get("draft")]
     latest = max(stable, key=lambda release: version_key(release["tag_name"])) if stable else None
     if latest is not None:
-        remote_healthy(client, latest)
+        remote_healthy(client, latest, allow_legacy=latest["id"] != current_full_id)
     beta = client.request("GET", release_path("beta"), missing_ok=True)
     if beta is not None:
-        remote_healthy(client, beta)
+        remote_healthy(client, beta, allow_legacy=beta["id"] != current_full_id)
     def check_replacements():
         # A manual edit/deletion outside the serialized native workflow must
         # stop pruning rather than leave the user without verified downloads.
@@ -604,12 +620,12 @@ def retain_latest(client):
             current = client.request("GET", f"/releases/{latest['id']}", missing_ok=True)
             if current is None or current.get("tag_name") != latest["tag_name"] or owned_identity(current) != owned_identity(latest):
                 raise PublishError("Retained stable release changed before cleanup; retention stopped.")
-            remote_healthy(client, current)
+            remote_healthy(client, current, allow_legacy=current["id"] != current_full_id)
         if beta is not None:
             current_beta = client.request("GET", release_path("beta"), missing_ok=True)
             if current_beta is None or current_beta.get("id") != beta["id"] or owned_identity(current_beta) != owned_identity(beta):
                 raise PublishError("Retained beta release changed before cleanup; retention stopped.")
-            remote_healthy(client, current_beta)
+            remote_healthy(client, current_beta, allow_legacy=current_beta["id"] != current_full_id)
 
     for release in releases:
         identity = owned_identity(release)
@@ -680,9 +696,9 @@ def publish_stable(config, client, files, notes):
         release = client.request("PATCH", f"/releases/{release['id']}", body={"draft": False})
     require_owned(release, "release", config.commit, config.tag)
     local_assets(client, release, files, complete=True)
-    remote_healthy(client, release)
+    remote_healthy(client, release, allow_legacy=False)
     check_latest()
-    retain_latest(client)
+    retain_latest(client, current_full_id=release["id"])
 
 
 def beta_baseline(config, client):
@@ -710,12 +726,11 @@ def publish_beta(config, client, files, notes):
             if config.previous_beta != config.commit:
                 raise PublishError("A different beta for this source is already published; stale retry stopped.") from None
         else:
-            remote_healthy(client, existing)
-            retain_latest(client)
+            remote_healthy(client, existing, allow_legacy=False)
+            retain_latest(client, current_full_id=existing["id"])
             return
     baseline = beta_baseline(config, client)
-    dmg = next((value for name, value in files.items() if name.endswith(".dmg")))
-    stage_tag = f"beta-stage-{config.commit}-{dmg[1][:16]}"
+    stage_tag = f"beta-stage-{config.commit}-{stage_fingerprint(files)}"
     body = release_body(config, notes)
     # Bind the prior alias to this verified candidate so a later workflow can
     # recognize an interrupted cutover without treating an orphan ref as owned.
@@ -726,7 +741,7 @@ def publish_beta(config, client, files, notes):
         stage = client.request("PATCH", f"/releases/{stage['id']}", body={"draft": False})
     require_owned(stage, "beta", config.commit, stage_tag)
     local_assets(client, stage, files, complete=True)
-    remote_healthy(client, stage)
+    remote_healthy(client, stage, allow_legacy=False)
     # The new public staged download is healthy before removing any old beta
     # assets. The beta URL can briefly be
     # absent during this verified cutover; numeric version tags never move.
@@ -751,9 +766,9 @@ def publish_beta(config, client, files, notes):
     })
     require_owned(release, "beta", config.commit, "beta")
     local_assets(client, release, files, complete=True)
-    remote_healthy(client, release)
+    remote_healthy(client, release, allow_legacy=False)
     cleanup_stage_tag(client, stage_tag, config.commit)
-    retain_latest(client)
+    retain_latest(client, current_full_id=release["id"])
 
 
 def publish(config, client=None):

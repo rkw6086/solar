@@ -6,6 +6,8 @@ Your personal team of Sprites, at home on your desktop.
 
 Solar is a local Rust and Tauri application with a React/TypeScript interface. Each Sprite has a role, personality, model connection, private memory, workspace, and approval preferences. A pixel-art sun gathers your Sprites and brings them onto the desktop.
 
+Windows x64 and Linux x64 packages are built by GitHub Actions alongside the signed Apple Silicon Mac release. See [Windows and Linux builds](docs/desktop-builds.md) for downloads, local builds, and current platform limitations. Windows installers are currently unsigned; native screen/computer controls and notification audio remain macOS-only.
+
 ## Develop
 
 The primary target is Apple Silicon running macOS 14.2 or later. Install Rust through rustup, Node.js 22.22.2+ or 24.15+ (LTS), and Xcode command-line tools. `rust-toolchain.toml` selects Rust 1.99.1 and rustfmt, matching CI.

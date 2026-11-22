@@ -20,11 +20,13 @@ Solar runs on your computer and stores its data in `~/.solar`. The model you cho
 
 ### Requirements
 
-The packaged desktop release is for an **Apple Silicon Mac** running **macOS 14.2 or later**. You can check both in Apple menu → **About This Mac**. A chip named Apple M1, M2, M3, or another Apple M-series chip is Apple Silicon.
+The main desktop target is an **Apple Silicon Mac** running **macOS 14.2 or later**. You can check both in Apple menu → **About This Mac**. A chip named Apple M1, M2, M3, or another Apple M-series chip is Apple Silicon.
 
-You do not need Rust, Node.js, or Xcode to use the downloaded app. Those tools are only needed to build Solar from source. Intel Mac and Linux installers are not currently provided by the release workflow.
+You do not need Rust, Node.js, or Xcode to use the downloaded app. Those tools are only needed to build Solar from source. Intel Mac installers are not currently provided.
 
-### Install the app
+Windows x64 and Linux x64 packages are also available as previews in new multi-platform builds. Older releases may contain only the Mac download. Windows installers are unsigned; workspace file tools and isolated shell, browser, and local MCP processes are not available on Windows yet. Linux process tools require Bubblewrap. Native screen/computer tools and notification audio currently require macOS. See [Windows and Linux builds](https://github.com/rkw6086/solar/blob/main/docs/desktop-builds.md) for the current limitations.
+
+### Install on a Mac
 
 1. Open [Solar Releases](https://github.com/rkw6086/solar/releases).
 2. Choose the latest numbered release for the stable version. **Solar Beta** contains newer changes and may be less predictable.
@@ -34,13 +36,19 @@ You do not need Rust, Node.js, or Xcode to use the downloaded app. Those tools a
 
 The official release process signs, notarizes, and staples the Mac installer. If macOS unexpectedly says a download is damaged or cannot be verified, see [App will not open](#app-will-not-open) before changing security settings.
 
+### Windows and Linux previews
+
+On Windows 10 or 11 x64, download the `x64-setup.exe` file and run the installer. It installs for the current user and can install the WebView2 runtime if needed. Windows may warn because this installer is unsigned.
+
+On compatible Debian/Ubuntu x64 systems, download the `amd64.deb` file and install it using `sudo apt install ./Solar_VERSION_amd64.deb`. For the AppImage, install your distribution's `bubblewrap` package, mark the downloaded AppImage executable, and run it. Linux builds use Ubuntu 22.04 as their library baseline; their behavior also depends on the desktop environment and its sandbox policies.
+
 ### Optional: verify the download
 
 Download `SHA256SUMS` from the same release and place it beside the DMG. In Terminal, change to that folder and run:
 
 ```sh
 cd ~/Downloads
-shasum -a 256 -c SHA256SUMS
+grep 'aarch64.dmg$' SHA256SUMS | shasum -a 256 -c
 ```
 
 The DMG should report **OK**. If it does not, download both files again from the same release.

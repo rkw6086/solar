@@ -10,14 +10,28 @@ export function previousBeta(current) {
   return matches[0][1];
 }
 
-export function betaNeedsBuild(eventName, current, tag, sha) {
-  const previous = previousBeta(current);
-  const names = new Set([`Solar_beta_${sha}_aarch64.dmg`, 'SHA256SUMS']);
-  const complete = current?.assets?.length === 2 && current.assets.every((asset) =>
+export const PACKAGE_MARKER = '<!-- solar-packages:v1 platforms=macos,windows,linux -->';
+
+export function packageNames(identity) {
+  return [`Solar_${identity}_aarch64.dmg`, `Solar_${identity}_x64-setup.exe`,
+    `Solar_${identity}_amd64.deb`, `Solar_${identity}_x86_64.AppImage`];
+}
+
+export function completePackageInventory(current, identity, { allowLegacy = false } = {}) {
+  const packages = packageNames(identity);
+  const markerCount = (current?.body ?? '').split(PACKAGE_MARKER).length - 1;
+  if (markerCount > 1) return false;
+  const legacy = allowLegacy && markerCount === 0 && current?.assets?.length === 2;
+  const names = new Set([...(legacy ? packages.slice(0, 1) : packages), 'SHA256SUMS']);
+  return current?.assets?.length === names.size && current.assets.every((asset) =>
     names.delete(asset.name) && Number.isSafeInteger(asset.size) && asset.size > 0
     && asset.size <= (asset.name === 'SHA256SUMS' ? 4096 : 512 * 1024 * 1024))
     && names.size === 0;
-  return !(eventName === 'schedule' && previous === sha && complete
+}
+
+export function betaNeedsBuild(eventName, current, tag, sha) {
+  const previous = previousBeta(current);
+  return !(eventName === 'schedule' && previous === sha && completePackageInventory(current, `beta_${sha}`)
     && tag?.commit?.sha === sha && current.target_commitish === sha);
 }
 

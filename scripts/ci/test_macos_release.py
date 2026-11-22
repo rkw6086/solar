@@ -193,6 +193,10 @@ class ReleaseTest(unittest.TestCase):
         staples = [call[-1] for call in calls if call[:3] == ['xcrun', 'stapler', 'staple']]
         self.assertEqual([Path(path).suffix for path in staples], ['.app', '.dmg'])
         self.assertTrue((self.root / 'artifacts/SHA256SUMS').is_file())
+        identity = json.loads((self.root / 'artifacts/BUILD-INFO.json').read_text())
+        self.assertEqual(identity, {'version': '0.1.0', 'source': 'a' * 40,
+                                   'channel': 'release', 'target': 'aarch64-apple-darwin',
+                                   'signed': True, 'packages': ['Solar_0.1.0_aarch64.dmg']})
         for secret in ('dummy-p12-password', self.env['APPLE_CERTIFICATE'], self.env['APPLE_API_KEY_P8']):
             self.assertNotIn(secret, result.stdout + result.stderr)
 
