@@ -9,7 +9,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Added
 
-- Installation, setup, everyday examples, and troubleshooting documentation for Solar users.
+- A [Solar user guide](https://github.com/rkw6086/solar/wiki) covering installation, setup, everyday examples, and troubleshooting.
 - Scrollable chat sidebar with direct messages, group chats, and a New group action, replacing the Conversations tab.
 - Four-corner desktop docking: the collapsed sun sits flush against the usable screen edge, moves inward on expansion, and returns to its saved corner when gathered.
 - Manual clean macOS build checks with pinned Rust tooling and visible native compiler diagnostics.
