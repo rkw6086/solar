@@ -101,7 +101,7 @@ async fn execute_with_session(
     }
 }
 
-pub(crate) struct ProcessGroup(pub Option<u32>);
+pub(crate) struct ProcessGroup(#[cfg_attr(not(unix), allow(dead_code))] pub Option<u32>);
 
 impl ProcessGroup {
     pub fn terminate(&mut self) {

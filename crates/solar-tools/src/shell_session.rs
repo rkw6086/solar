@@ -816,6 +816,8 @@ fn ssh_config_path(path: &Path) -> Result<String, String> {
 }
 
 fn write_private_file_if_missing(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
+    #[cfg(not(unix))]
+    let _ = mode;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]

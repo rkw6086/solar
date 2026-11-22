@@ -10,9 +10,12 @@ use std::{
 
 #[derive(Debug)]
 struct Scope {
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     working_directory: PathBuf,
     reads: Vec<PathBuf>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     writes: Vec<PathBuf>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
     readonly: Vec<PathBuf>,
     denied: Vec<PathBuf>,
 }
