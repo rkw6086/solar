@@ -86,7 +86,14 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --target '${{ steps.prepare.outputs.target }}'
-          npm install --global corepack@0.36.0
+          solar_node_tools=$(node -p "require('path').join(process.env.RUNNER_TEMP, 'solar-node-tools')")
+          npm install --global --prefix "$solar_node_tools" corepack@0.36.0
+          node -e "const fs = require('fs'), path = require('path'); const root = path.join(process.env.RUNNER_TEMP, 'solar-node-tools'); fs.appendFileSync(process.env.GITHUB_PATH, root + '\\n' + path.join(root, 'bin') + '\\n');"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            export PATH="$(cygpath -u "$solar_node_tools"):$PATH"
+          else
+            export PATH="$solar_node_tools/bin:$PATH"
+          fi
           corepack pnpm install --frozen-lockfile
       - name: Build unsigned desktop packages
         env:
