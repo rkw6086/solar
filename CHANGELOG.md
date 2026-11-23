@@ -5,6 +5,10 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ## [Unreleased]
 
+## [1.0.0]
+
+Solar's first major release brings together personalized Sprites, individual and group chats, shared projects, memories, routines, and animated desktop companions. Start with the [user guide](https://github.com/rkw6086/solar/wiki) for installation, setup, and everyday examples.
+
 ### Added
 
 - Native Windows x64 and Linux x64 build pipelines, with an unsigned Windows installer, Debian package, and AppImage alongside the signed Mac DMG in stable and beta releases.
@@ -14,6 +18,12 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 - Start desktop Sprite orbits on their first expansion by using native window focus instead of a newly loaded webview's button focus to pause motion.
 - Restore a styled Mac installer with Retina artwork, a drag-to-Applications arrow, and fixed icon positions; verify the saved Finder layout before publishing a DMG.
+
+### Compatibility
+
+- The Mac installer supports Apple Silicon on macOS 14.2 or later and is signed, notarized, and stapled. Intel Mac installers are not included.
+- Windows and Linux packages remain previews. Windows installers are unsigned; workspace file tools and Sprite shell, browser, and local MCP processes are unavailable on Windows until process isolation is supported. Linux requires Bubblewrap. Native screen/computer controls and notification audio remain macOS-only.
+- Existing settings and Sprite data in `~/.solar` are retained when upgrading. About Solar now shows version `1.0.0`.
 
 ## [0.1.7]
 

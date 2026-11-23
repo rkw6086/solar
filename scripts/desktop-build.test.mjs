@@ -8,6 +8,7 @@ import { root } from './release.mjs';
 import { collectPackages, platforms, validateSource } from './ci/desktop-build.mjs';
 
 const sha = 'a'.repeat(40);
+const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 const env = { GITHUB_ACTIONS: 'true', GITHUB_SERVER_URL: 'https://github.com',
   GITHUB_REPOSITORY: 'rkw6086/solar', GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main',
   GITHUB_SHA: sha, SOLAR_RELEASE_SHA: sha, SOLAR_JOB_ID: '12-1', RUNNER_TEMP: os.tmpdir() };
@@ -19,17 +20,17 @@ test('preview packaging binds native platform to the clean triggering source', (
   assert.equal(source().target, 'x86_64-unknown-linux-gnu');
   assert.throws(() => source({ GITHUB_SHA: 'b'.repeat(40) }), /triggering source/);
   assert.throws(() => source({}, ' M Cargo.toml'), /triggering source/);
-  assert.throws(() => source({ GITHUB_REF: 'refs/tags/0.1.7' }), /main push/);
+  assert.throws(() => source({ GITHUB_REF: `refs/tags/${version}` }), /main push/);
   assert.throws(() => source({ GITHUB_REPOSITORY: 'another/repository' }), /Solar GitHub/);
   assert.throws(() => source({ RUNNER_TEMP: 'relative' }), /job-owned/);
   assert.equal(source({ GITHUB_EVENT_NAME: 'pull_request', GITHUB_BASE_REF: 'main', GITHUB_REF: 'refs/pull/1/merge' }).name, 'linux');
 });
 
 test('release and beta builds require their validated source identities', () => {
-  assert.equal(source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: '0.1.7', GITHUB_REF: 'refs/tags/0.1.7' }).channel, 'release');
-  assert.throws(() => source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: '0.1.7' }), /exact version tag/);
-  assert.throws(() => source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: '0.1.6', GITHUB_REF: 'refs/tags/0.1.7' }), /differs/);
-  assert.equal(source({ SOLAR_BUILD_CHANNEL: 'beta', SOLAR_RELEASE_VERSION: '0.1.7', GITHUB_EVENT_NAME: 'schedule', SOLAR_BETA_ID: sha }).channel, 'beta');
+  assert.equal(source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: version, GITHUB_REF: `refs/tags/${version}` }).channel, 'release');
+  assert.throws(() => source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: version }), /exact version tag/);
+  assert.throws(() => source({ SOLAR_BUILD_CHANNEL: 'release', SOLAR_RELEASE_VERSION: `${version}-mismatch`, GITHUB_REF: `refs/tags/${version}` }), /differs/);
+  assert.equal(source({ SOLAR_BUILD_CHANNEL: 'beta', SOLAR_RELEASE_VERSION: version, GITHUB_EVENT_NAME: 'schedule', SOLAR_BETA_ID: sha }).channel, 'beta');
   assert.throws(() => source({ SOLAR_BUILD_CHANNEL: 'beta', GITHUB_EVENT_NAME: 'schedule' }), /validated main/);
 });
 
@@ -37,7 +38,7 @@ function fixture(t, platform = 'linux') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'solar-desktop-package-test-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const config = { ...platforms[platform], targetDir: path.join(directory, 'target'),
-    artifactsDir: path.join(directory, 'artifacts'), version: '0.1.7', sha };
+    artifactsDir: path.join(directory, 'artifacts'), version, sha };
   const files = config.packages.map(([folder, extension]) => {
     const dir = path.join(config.targetDir, config.target, 'release', 'bundle', folder);
     fs.mkdirSync(dir, { recursive: true });

@@ -4238,7 +4238,7 @@ dependencies = [
 
 [[package]]
 name = "solar"
-version = "0.1.7"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -4270,7 +4270,7 @@ dependencies = [
 
 [[package]]
 name = "solar-agent-core"
-version = "0.1.7"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "solar-providers"
-version = "0.1.7"
+version = "1.0.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -4307,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "solar-tools"
-version = "0.1.7"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "cap-std",
