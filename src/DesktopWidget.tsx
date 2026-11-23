@@ -72,12 +72,12 @@ export function DesktopWidget({
   const planetSize = visibleCount > 36 ? 56 : visibleCount > 18 ? 72 : 88;
   const sunAntic = useSunAntics(type === "sun" && !expanded, Boolean(data.settings.reducedMotion));
 
-  function interaction(hovered?: boolean, focused?: boolean) {
+  function interaction(hovered?: boolean) {
     if (!native) return;
     const now = Date.now();
-    if (hovered === undefined && focused === undefined && now - lastInteraction.current < 1000) return;
+    if (hovered === undefined && now - lastInteraction.current < 1000) return;
     lastInteraction.current = now;
-    void api("desktop_interaction", { hovered, focused }).catch(() => {});
+    void api("desktop_interaction", { hovered }).catch(() => {});
   }
 
   useEffect(() => {
@@ -273,8 +273,6 @@ export function DesktopWidget({
       <button
         className="character-button"
         aria-label={`Chat with ${orbit.name}${needsAttention ? ", needs your attention" : ""}`}
-        onFocus={() => interaction(undefined, true)}
-        onBlur={() => interaction(undefined, false)}
         onClick={() => {
           void api("open_orbit_chat", { orbitId: orbit.id }).catch((reason) =>
             setFailure(errorText(reason)),

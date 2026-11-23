@@ -138,6 +138,11 @@ impl MotionState {
             self.activity(now);
         }
     }
+    /// Native window focus is authoritative. A newly shown webview can retain
+    /// DOM focus even while its companion window is deliberately nonfocusable.
+    pub fn focus(&mut self, label: &str, focused: bool, now: Instant) {
+        self.hover(&format!("focus:{label}"), focused, now);
+    }
     fn pauses_orbits(label: &str) -> bool {
         label
             .strip_prefix("focus:")
@@ -377,18 +382,56 @@ mod tests {
     fn keyboard_focus_survives_native_pointer_misses() {
         let now = Instant::now();
         let mut state = MotionState::new(now);
-        state.hover("focus:orbit-a", true, now);
+        state.focus("orbit-a", true, now);
         state.hover("orbit-a", false, now + Duration::from_secs(1));
         assert!(state.is_hovered("focus:orbit-a"));
         assert!(!state.tick(now + Duration::from_secs(40), true, false, false));
         assert_eq!(state.elapsed, Duration::ZERO);
-        state.hover("focus:orbit-a", false, now + Duration::from_secs(40));
+        state.focus("orbit-a", false, now + Duration::from_secs(40));
         assert!(state.tick(
             now + Duration::from_secs(40) + FRAME_INTERVAL,
             true,
             false,
             false
         ));
+    }
+
+    #[test]
+    fn first_expansion_moves_after_stale_webview_focus_is_reconciled() {
+        let now = Instant::now();
+        let mut state = MotionState::new(now);
+        state.reset(vec!["a".into()], now);
+        // Fresh WKWebViews can report DOM focus while loading. This must not
+        // require a second expansion to clear a focus token and start motion.
+        state.hover("focus:orbit-a", true, now);
+        let shown = now + TRANSITION_DURATION;
+        state.resume(shown);
+        state.focus("orbit-a", false, shown);
+        assert!(!state.is_hovered("focus:orbit-a"));
+        for frame in 1..=120 {
+            let time = shown + FRAME_INTERVAL * frame;
+            state.hover("orbit-a", false, time);
+            state.focus("orbit-a", false, time);
+            assert!(state.tick(time, true, false, false));
+        }
+        assert_eq!(state.roster, vec!["a"]);
+        assert_eq!(state.elapsed, FRAME_INTERVAL * 120);
+    }
+
+    #[test]
+    fn unfocused_native_window_still_pauses_when_pointer_is_over_sprite() {
+        let now = Instant::now();
+        let mut state = MotionState::new(now);
+        state.reset(vec!["a".into()], now);
+        state.hover("orbit-a", true, now);
+        state.focus("orbit-a", false, now);
+        assert!(!state.tick(now + FRAME_INTERVAL, true, false, false));
+        assert!(state.is_hovered("orbit-a"));
+        let leaving = now + FRAME_INTERVAL;
+        state.hover("orbit-a", false, leaving);
+        state.focus("orbit-a", false, leaving);
+        assert!(state.tick(leaving + FRAME_INTERVAL, true, false, false));
+        assert_eq!(state.elapsed, FRAME_INTERVAL);
     }
 
     #[test]

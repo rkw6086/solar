@@ -71,11 +71,7 @@ fn widget_hit(label: &str, point: crate::desktop_pointer::PointerGeometry) -> bo
 }
 
 #[tauri::command]
-fn desktop_interaction(
-    window: tauri::WebviewWindow,
-    hovered: Option<bool>,
-    focused: Option<bool>,
-) -> Result<(), String> {
+fn desktop_interaction(window: tauri::WebviewWindow, hovered: Option<bool>) -> Result<(), String> {
     let label = window.label();
     if label != "sun" && !label.starts_with("orbit-") && !label.starts_with("chat-") {
         return Err("This window is not a desktop companion".into());
@@ -87,10 +83,7 @@ fn desktop_interaction(
     if let Some(hovered) = hovered {
         motion.hover(label, hovered, now);
     }
-    if let Some(focused) = focused {
-        motion.hover(&format!("focus:{label}"), focused, now);
-    }
-    if hovered.is_none() && focused.is_none() {
+    if hovered.is_none() {
         motion.activity(now);
     }
     Ok(())
@@ -1447,13 +1440,16 @@ pub fn run() {
                                 continue;
                             }
                             let inside = point.is_some_and(|point| widget_hit(&label, point));
+                            // A new WKWebView can focus its DOM button even when its
+                            // passive desktop window is not key. Only native focus
+                            // may pause the formation, and every sample clears any
+                            // stale state without requiring another Sun expansion.
+                            let focused = point.is_some() && window.is_focused().unwrap_or(false);
                             inside_companions |= inside;
                             if let Ok(mut motion) = ORBIT_MOTION.lock() {
                                 let now = std::time::Instant::now();
                                 motion.hover(&label, inside, now);
-                                if point.is_none() {
-                                    motion.hover(&format!("focus:{label}"), false, now);
-                                }
+                                motion.focus(&label, focused, now);
                             }
                             if pointer_hover.insert(label.clone(), inside) != Some(inside) {
                                 let _ = window.set_cursor_icon(if inside {

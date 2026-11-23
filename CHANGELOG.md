@@ -12,6 +12,7 @@ Numbered Git tags are immutable. Downloads retain one stable release and one rol
 
 ### Fixed
 
+- Start desktop Sprite orbits on their first expansion by using native window focus instead of a newly loaded webview's button focus to pause motion.
 - Restore a styled Mac installer with Retina artwork, a drag-to-Applications arrow, and fixed icon positions; verify the saved Finder layout before publishing a DMG.
 
 ## [0.1.7]
