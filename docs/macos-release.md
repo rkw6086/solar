@@ -51,6 +51,8 @@ No signing key belongs in source, issue text, logs, or build artifacts. Keep cre
 
 The unsigned build runs without Apple credentials. Packaging imports the certificate into an ephemeral keychain, signs nested code and the app, notarizes and staples the app, creates and signs the DMG, and notarizes and staples the DMG. It checks hardened runtime, team identity, signatures, notarization, and Gatekeeper before upload. Cleanup restores the keychain search list and removes the temporary keychain and credential files even on failure.
 
+The DMG opens a 700 × 500 Finder window with Retina Solar artwork, the app on the left, and an Applications shortcut on the right. Its arrow and instructions explain how to install. Hash-pinned tools write the Finder layout directly without opening Finder or requiring automation permission. They are installed before signing and run without signing secrets in their environment. Before publication, a read-only mount verifies the copied app, background, icon positions, and window settings. See [installer artwork](../scripts/ci/dmg/README.md) for editable assets.
+
 Unsigned compiler entries and public dependency downloads are cached separately from artifacts and signing material. Only trusted `main` scheduled/manual builds save caches. Each transfer artifact expires after one day and is removed after successful publication. Final apps, signed packages, private configuration, and credentials are never part of the compiler cache.
 
 ## Verify a release

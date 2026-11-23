@@ -34,6 +34,7 @@ done
 [[ $APPLE_API_KEY =~ ^[A-Za-z0-9]+$ ]] || fail 'Invalid notarization Key ID.'
 [[ $APPLE_API_ISSUER =~ ^[a-fA-F0-9-]{36}$ ]] || fail 'Invalid notarization Issuer ID.'
 [[ -e "$SOLAR_RELEASE_DIR" || -L "$SOLAR_RELEASE_DIR" ]] && fail 'Artifact path already exists; use a fresh job-owned path.'
+[[ ${SOLAR_DMG_PYTHON:-} == /* && -x $SOLAR_DMG_PYTHON ]] || fail 'Prepare the pinned DMG layout tools before signing.'
 
 app="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/bundle/macos/Solar.app"
 [[ -x "$app/Contents/MacOS/solar" && -x "$app/Contents/MacOS/solar-native-helper" ]] || fail 'Build the complete app first.'
@@ -117,7 +118,7 @@ grep -F -- "$APPLE_SIGNING_IDENTITY" "$work/identities.txt" >/dev/null || fail '
 /usr/bin/security verify-cert -p codeSign -L -c "$work/signing-cert.pem" || fail 'The Developer ID certificate chain is not trusted by this Mac.'
 rm -f "$work/certificate.p12"
 
-# Only Apple tooling below needs credentials. No npm/cargo/build hooks run here.
+# Only Apple tooling below receives credentials. No package installation or build hooks run here.
 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_P8
 notary_args=(--key "$work/notary.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER")
 notarize() {
@@ -158,12 +159,11 @@ xcrun stapler staple "$app"
 xcrun stapler validate "$app"
 /usr/sbin/spctl --assess --type execute --verbose=2 "$app"
 
-stage="$work/dmg-root"
-mkdir "$stage"
-ditto "$app" "$stage/Solar.app"
-ln -s /Applications "$stage/Applications"
 dmg="$SOLAR_RELEASE_DIR/Solar_${artifact_version}_aarch64.dmg"
-hdiutil create -volname "$volume_name" -srcfolder "$stage" -format UDZO -ov "$dmg" >/dev/null
+# The layout helper gets a clean environment, with no signing secrets or key paths.
+# Python isolated mode also ignores user packages and PYTHONPATH overrides.
+/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+  "$SOLAR_DMG_PYTHON" -I scripts/ci/create-dmg.py --app "$app" --output "$dmg" --volume-name "$volume_name" --verify-signature
 /usr/bin/codesign --force --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" --identifier net.solar.orbits.dmg "$dmg"
 /usr/bin/codesign --verify --strict --verbose=2 "$dmg"
 notarize "$dmg" dmg
@@ -171,6 +171,8 @@ xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 hdiutil verify "$dmg" >/dev/null
+/usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$HOME" TMPDIR="${TMPDIR:-/tmp}" \
+  "$SOLAR_DMG_PYTHON" -I scripts/ci/create-dmg.py --app "$app" --output "$dmg" --volume-name "$volume_name" --verify-signature --verify-only
 (cd "$SOLAR_RELEASE_DIR" && shasum -a 256 "$(basename "$dmg")" > SHA256SUMS)
 python3 - "$SOLAR_RELEASE_DIR/BUILD-INFO.json" "$version" "$SOLAR_RELEASE_SHA" "$channel" "$(basename "$dmg")" <<'IDENTITY'
 import json, pathlib, sys

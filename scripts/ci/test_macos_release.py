@@ -5,6 +5,7 @@ import os
 import plistlib
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -112,12 +113,41 @@ class ReleaseTest(unittest.TestCase):
                      'PlistBuddy', 'ditto', 'hdiutil', 'xcrun', 'corepack', 'cargo', 'lipo', 'xcode-select', 'spctl'):
             (self.bin / name).symlink_to(mock)
         self.calls = self.root / 'calls.jsonl'
+        self.dmg_failure = self.root / 'dmg-failure'
+        dmg_python = self.bin / 'dmg-python'
+        # The real helper runs with env -i. Embed fixture paths so this mock
+        # cannot accidentally depend on (or permit) inherited build secrets.
+        dmg_python.write_text(f'''#!{sys.executable}
+import json, os, pathlib, sys
+args = sys.argv[1:]
+assert args[:2] == ['-I', 'scripts/ci/create-dmg.py']
+args = args[2:]
+with pathlib.Path({str(self.calls)!r}).open('a') as log:
+    log.write(json.dumps(['create-dmg.py', *args]) + '\\n')
+assert set(os.environ) <= {{'PATH', 'HOME', 'TMPDIR', 'LC_CTYPE'}}, 'Build environment leaked to layout helper'
+assert not any(name.startswith('APPLE_') for name in os.environ)
+assert os.environ['PATH'] == '/usr/bin:/bin:/usr/sbin:/sbin'
+assert '--verify-signature' in args
+assert pathlib.Path(args[args.index('--app') + 1]).is_dir()
+output = pathlib.Path(args[args.index('--output') + 1])
+phase = 'verify' if '--verify-only' in args else 'create'
+if phase == 'create':
+    assert not output.exists()
+    output.write_bytes(b'dummy-dmg')
+else:
+    assert output.read_bytes() == b'dummy-dmg'
+failure = pathlib.Path({str(self.dmg_failure)!r})
+if failure.exists() and failure.read_text() == phase:
+    raise SystemExit('Simulated DMG ' + phase + ' failure')
+''')
+        dmg_python.chmod(0o755)
         home = self.root / 'home'
         (home / 'Library/Keychains').mkdir(parents=True)
         self.env = {
             'HOME': str(home),
             'PATH': f'{self.bin}:{os.environ["PATH"]}',
             'RUNNER_TEMP': str(self.root), 'CARGO_TARGET_DIR': str(self.root / 'target'),
+            'SOLAR_DMG_PYTHON': str(dmg_python),
             'SOLAR_RELEASE_DIR': str(self.root / 'artifacts'), 'MOCK_CALLS': str(self.calls),
             'MOCK_EFFECTIVE_LIST': str(self.root / 'effective-list.json'),
             'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/tags/0.1.0',
@@ -192,6 +222,24 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual([Path(path).suffix for path in notarized], ['.zip', '.dmg'])
         staples = [call[-1] for call in calls if call[:3] == ['xcrun', 'stapler', 'staple']]
         self.assertEqual([Path(path).suffix for path in staples], ['.app', '.dmg'])
+        layout_calls = [(i, call) for i, call in enumerate(calls) if call[0] == 'create-dmg.py']
+        self.assertEqual(len(layout_calls), 2)
+        creation, verification = layout_calls
+        self.assertNotIn('--verify-only', creation[1])
+        self.assertIn('--verify-only', verification[1])
+        self.assertEqual(creation[1][creation[1].index('--volume-name') + 1], 'Solar')
+        app_staple = next(i for i, call in enumerate(calls)
+                          if call[:3] == ['xcrun', 'stapler', 'staple'] and call[-1].endswith('.app'))
+        dmg_signature = next(i for i, call in enumerate(calls)
+                             if call[0] == 'codesign' and '--sign' in call and call[-1].endswith('.dmg'))
+        dmg_staple = next(i for i, call in enumerate(calls)
+                         if call[:3] == ['xcrun', 'stapler', 'staple'] and call[-1].endswith('.dmg'))
+        dmg_integrity = next(i for i, call in enumerate(calls) if call[:2] == ['hdiutil', 'verify'])
+        self.assertLess(app_staple, creation[0])
+        self.assertLess(creation[0], dmg_signature)
+        self.assertLess(dmg_staple, verification[0])
+        self.assertLess(dmg_integrity, verification[0])
+        self.assertFalse(any(call[:2] == ['hdiutil', 'create'] for call in calls))
         self.assertTrue((self.root / 'artifacts/SHA256SUMS').is_file())
         identity = json.loads((self.root / 'artifacts/BUILD-INFO.json').read_text())
         self.assertEqual(identity, {'version': '0.1.0', 'source': 'a' * 40,
@@ -279,6 +327,41 @@ class ReleaseTest(unittest.TestCase):
         result = self.run_script('package-macos.sh')
         self.assertNotEqual(result.returncode, 0)
         self.assert_cleaned()
+
+    def test_dmg_creation_failure_cleans_credentials_and_partial_image(self):
+        self.prepare_app()
+        self.dmg_failure.write_text('create')
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Simulated DMG create failure', result.stderr)
+        self.assertFalse((self.root / 'artifacts').exists())
+        self.assert_cleaned()
+        calls = self.recorded()
+        self.assertTrue(any(call[:2] == ['security', 'delete-keychain'] for call in calls))
+        self.assertFalse(any(call[0] == 'codesign' and '--sign' in call and call[-1].endswith('.dmg')
+                             for call in calls))
+
+    def test_final_dmg_layout_failure_prevents_publication(self):
+        self.prepare_app()
+        self.dmg_failure.write_text('verify')
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Simulated DMG verify failure', result.stderr)
+        self.assertNotIn('Verified signed and notarized DMG:', result.stdout)
+        self.assertFalse((self.root / 'artifacts').exists())
+        self.assert_cleaned()
+        calls = self.recorded()
+        self.assertTrue(any(call[:2] == ['security', 'delete-keychain'] for call in calls))
+        self.assertTrue(any(call[:3] == ['xcrun', 'stapler', 'staple'] and call[-1].endswith('.dmg')
+                            for call in calls))
+
+    def test_missing_dmg_interpreter_stops_before_importing_keys(self):
+        self.prepare_app()
+        self.env.pop('SOLAR_DMG_PYTHON')
+        result = self.run_script('package-macos.sh')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Prepare the pinned DMG layout tools before signing', result.stderr)
+        self.assertFalse(any(call[0] == 'security' for call in self.recorded()))
 
     def test_intermediate_import_failure_cleans_credentials_before_signing(self):
         self.prepare_app()

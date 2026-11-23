@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="500" viewBox="0 0 700 500">
+  <defs>
+    <linearGradient id="sky" x2="1" y2="1"><stop stop-color="#10182b"/><stop offset="1" stop-color="#242038"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#edb057" stop-opacity=".14"/><stop offset="1" stop-color="#edb057" stop-opacity="0"/></radialGradient>
+    <linearGradient id="arrow"><stop stop-color="#ffce79"/><stop offset="1" stop-color="#f5af74"/></linearGradient>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h700v500H0z"/>
+  <ellipse cx="350" cy="230" rx="400" ry="310" fill="url(#glow)"/>
+  <g fill="none" stroke="#c9c3ec" stroke-opacity=".065">
+    <ellipse cx="350" cy="280" rx="420" ry="170" transform="rotate(-22 350 280)"/>
+    <ellipse cx="350" cy="280" rx="470" ry="210" transform="rotate(-22 350 280)"/>
+  </g>
+  <g fill="#f5e4c9">
+    <circle cx="66" cy="70" r="1.2" opacity=".55"/><circle cx="634" cy="96" r="1" opacity=".4"/>
+    <circle cx="595" cy="150" r=".8" opacity=".4"/><circle cx="92" cy="406" r="1" opacity=".45"/>
+    <circle cx="613" cy="406" r="1.1" opacity=".5"/><circle cx="542" cy="458" r=".8" opacity=".4"/>
+  </g>
+  <!-- Reuse Solar's app icon. The two large icons below are supplied by Finder. -->
+  <image href="../../../src-tauri/icons/icon.png" x="259" y="42" width="58" height="58"/>
+  <text x="326" y="83" fill="#fff4df" font-family="DejaVu Sans, sans-serif" font-size="33" font-weight="600" letter-spacing="-.8">Solar</text>
+  <text x="350" y="132" text-anchor="middle" fill="#c4c2d6" font-family="DejaVu Sans, sans-serif" font-size="15">A little universe for your desktop.</text>
+  <g fill="#fff" fill-opacity=".03" stroke="#dbd5ef" stroke-opacity=".18">
+    <rect x="88" y="169" width="164" height="183" rx="30"/>
+    <rect x="448" y="169" width="164" height="183" rx="30"/>
+  </g>
+  <!-- Finder controls filename colors; light strips keep dark captions legible. -->
+  <g fill="#e8e5ed">
+    <rect x="106" y="310" width="128" height="30" rx="10"/>
+    <rect x="466" y="310" width="128" height="30" rx="10"/>
+  </g>
+  <g fill="none" stroke="url(#arrow)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M304 250h92m-16-16 16 16-16 16"/>
+  </g>
+  <text x="350" y="402" text-anchor="middle" fill="#fff0d5" font-family="DejaVu Sans, sans-serif" font-size="17" font-weight="600">Drag Solar into Applications</text>
+  <text x="350" y="430" text-anchor="middle" fill="#a7a5bf" font-family="DejaVu Sans, sans-serif" font-size="13">Then open Solar from your Applications folder.</text>
+</svg>
