@@ -124,8 +124,10 @@ assert args[:2] == ['-I', 'scripts/ci/create-dmg.py']
 args = args[2:]
 with pathlib.Path({str(self.calls)!r}).open('a') as log:
     log.write(json.dumps(['create-dmg.py', *args]) + '\\n')
-assert set(os.environ) <= {{'PATH', 'HOME', 'TMPDIR', 'LC_CTYPE'}}, 'Build environment leaked to layout helper'
-assert not any(name.startswith('APPLE_') for name in os.environ)
+# macOS's interpreter/loader can add platform metadata after env -i.
+# Assert the actual boundary: no credentials or caller-owned build settings.
+assert not any(name.startswith(('APPLE_', 'SOLAR_', 'CARGO_', 'GITHUB_', 'MOCK_')) for name in os.environ)
+assert 'LAYOUT_TEST_PRIVATE_VALUE' not in os.environ
 assert os.environ['PATH'] == '/usr/bin:/bin:/usr/sbin:/sbin'
 assert '--verify-signature' in args
 assert pathlib.Path(args[args.index('--app') + 1]).is_dir()
@@ -148,6 +150,7 @@ if failure.exists() and failure.read_text() == phase:
             'PATH': f'{self.bin}:{os.environ["PATH"]}',
             'RUNNER_TEMP': str(self.root), 'CARGO_TARGET_DIR': str(self.root / 'target'),
             'SOLAR_DMG_PYTHON': str(dmg_python),
+            'LAYOUT_TEST_PRIVATE_VALUE': 'must-not-reach-layout-helper',
             'SOLAR_RELEASE_DIR': str(self.root / 'artifacts'), 'MOCK_CALLS': str(self.calls),
             'MOCK_EFFECTIVE_LIST': str(self.root / 'effective-list.json'),
             'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF': 'refs/tags/0.1.0',
