@@ -1,0 +1,35 @@
+name: Check Mac installer layout
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dmg-layout.yml'
+      - 'scripts/ci/create-dmg.py'
+      - 'scripts/ci/smoke-dmg.py'
+      - 'scripts/ci/dmg/**'
+  pull_request:
+    paths:
+      - '.github/workflows/dmg-layout.yml'
+      - 'scripts/ci/create-dmg.py'
+      - 'scripts/ci/smoke-dmg.py'
+      - 'scripts/ci/dmg/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned image tools without signing credentials
+        run: |
+          python3 -m venv "$RUNNER_TEMP/solar-dmg-tools"
+          "$RUNNER_TEMP/solar-dmg-tools/bin/python3" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r scripts/ci/dmg/requirements.txt
+      - name: Verify stable and beta layouts with real macOS image tools
+        run: '"$RUNNER_TEMP/solar-dmg-tools/bin/python3" -I scripts/ci/smoke-dmg.py'

@@ -160,13 +160,17 @@ class LayoutTests(unittest.TestCase):
 
 
 class MountTests(unittest.TestCase):
-    def invoke(self, fail_verify=False, invalid_attach=False, retry_detach=False):
+    def invoke(self, fail_verify=False, invalid_attach=False, retry_detach=False, canonical_attach=False):
         calls = []
 
         def run(args, **_kwargs):
             calls.append(args)
             if "attach" in args:
                 mount = args[args.index("-mountpoint") + 1]
+                if canonical_attach:
+                    alias = Path(mount).parent / "canonical-volume"
+                    alias.symlink_to(mount, target_is_directory=True)
+                    mount = str(alias)
                 payload = b"broken" if invalid_attach else plistlib.dumps({
                     "system-entities": [{"mount-point": mount, "dev-entry": "/dev/test"}]})
                 return subprocess.CompletedProcess(args, 0, payload, b"")
@@ -198,6 +202,10 @@ class MountTests(unittest.TestCase):
     def test_invalid_attach_that_mounted_is_still_detached(self):
         with patch.object(dmg.os.path, "ismount", return_value=True):
             calls = self.invoke(invalid_attach=True)
+        self.assertEqual(calls[-1][1], "detach")
+
+    def test_canonical_mount_path_alias_is_accepted(self):
+        calls = self.invoke(canonical_attach=True)
         self.assertEqual(calls[-1][1], "detach")
 
 

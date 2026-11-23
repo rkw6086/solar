@@ -53,6 +53,8 @@ The unsigned build runs without Apple credentials. Packaging imports the certifi
 
 The DMG opens a 700 × 500 Finder window with Retina Solar artwork, the app on the left, and an Applications shortcut on the right. Its arrow and instructions explain how to install. Hash-pinned tools write the Finder layout directly without opening Finder or requiring automation permission. They are installed before signing and run without signing secrets in their environment. Before publication, a read-only mount verifies the copied app, background, icon positions, and window settings. See [installer artwork](../scripts/ci/dmg/README.md) for editable assets.
 
+**Check Mac installer layout** exercises the real macOS image tools with a small unsigned fixture whenever the installer changes. The release workflow runs the same check before compiling Solar, then verifies the actual signed app inside the final image.
+
 Unsigned compiler entries and public dependency downloads are cached separately from artifacts and signing material. Only trusted `main` scheduled/manual builds save caches. Each transfer artifact expires after one day and is removed after successful publication. Final apps, signed packages, private configuration, and credentials are never part of the compiler cache.
 
 ## Verify a release

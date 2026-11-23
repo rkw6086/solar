@@ -143,6 +143,8 @@ jobs:
         uses: ./.github/actions/build-cache
       - name: Set up pinned native tools
         run: bash scripts/ci/setup-macos.sh
+      - name: Verify installer layout before compiling
+        run: '"$SOLAR_DMG_PYTHON" -I scripts/ci/smoke-dmg.py'
       - name: Build and check Solar without signing credentials
         run: |
           "$SOLAR_DMG_PYTHON" -I -m unittest discover -s scripts/ci -p 'test_*.py'

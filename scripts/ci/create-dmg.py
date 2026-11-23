@@ -124,7 +124,7 @@ def verify_layout(root, volume_name):
 def verify_dmg(output, expected, volume_name, verify_signature=False, run=None):
     """Mount only our image read-only and detach even when verification fails."""
     run = run or subprocess.run
-    temporary = Path(tempfile.mkdtemp(prefix="solar-dmg-check-"))
+    temporary = Path(tempfile.mkdtemp(prefix="solar-dmg-check-")).resolve()
     mount = temporary / "volume"
     mount.mkdir()
     attached = False
@@ -137,12 +137,20 @@ def verify_dmg(output, expected, volume_name, verify_signature=False, run=None):
             entities = plistlib.loads(result.stdout).get("system-entities", [])
         except Exception:
             entities = []
-        reported_mount = any(isinstance(entity, dict) and entity.get("mount-point") == str(mount)
+        # macOS reports /private/var for paths created through /var (including
+        # the standard TMPDIR). Compare filesystem identities, not spellings.
+        reported_mount = any(isinstance(entity, dict) and isinstance(entity.get("mount-point"), str)
+                             and Path(entity["mount-point"]).resolve() == mount.resolve()
                              for entity in entities)
         # An interrupted attach can mount a volume without returning valid plist.
         attached = reported_mount or os.path.ismount(mount)
         if result.returncode or not reported_mount:
-            raise RuntimeError("Could not mount the installer read-only for verification")
+            detail = result.stderr.decode("utf-8", errors="replace").strip()[:1000]
+            mount_paths = [entity.get("mount-point") for entity in entities
+                           if isinstance(entity, dict) and "mount-point" in entity][:8]
+            raise RuntimeError("Could not mount the installer read-only for verification "
+                               f"(exit={result.returncode!r}, reported={repr(mount_paths)[:1000]}, "
+                               f"expected={str(mount)!r}, stderr={detail!r})")
         verify_copy(mount, expected, verify_signature)
         verify_layout(mount, volume_name)
     except BaseException as error:
